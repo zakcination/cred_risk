@@ -1,0 +1,29 @@
+# -----------------------------------------------------------------------------
+# Confidential source documents MUST NOT be committed.
+# Bank credit-risk documents (Top-20 registers, audit reports, regulator
+# letters) contain confidential and personal data. Keep them under data/ only.
+# -----------------------------------------------------------------------------
+data/*
+!data/README.md
+!data/.gitkeep
+
+# Classifier outputs
+results*.json
+*.out
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Claude Code session-local settings
+.claude/settings.local.json
