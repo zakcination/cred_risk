@@ -1,0 +1,8 @@
+# Core (required)
+PyYAML>=6.0
+
+# PDF extraction (optional but recommended; DOCX/XLSX need no extra deps)
+pymupdf>=1.23
+
+# Tests (dev)
+pytest>=7.0
