@@ -1,0 +1,268 @@
+# =============================================================================
+# Credit-Risk Topic Taxonomy
+# =============================================================================
+# Taxonomy of subject areas ("topics") used to classify credit-risk / prudential
+# supervision documents of a second-tier bank in Kazakhstan (AO "Eurasian Bank").
+#
+# The taxonomy was bootstrapped by scanning the initial document set:
+#   - Supervisory Stress-Testing Report of banks (НСТ) 2025
+#   - Recommendatory Measure of Supervisory Response (RMNR) / SREP-2025
+#   - Written Prescription (Письменное предписание) re Rules No.188
+#   - Top-20 credit exposures register (xlsx)
+#   - Internal Audit Report No.7 on credit-risk management
+#
+# Each topic carries weighted signal terms. Matching is case-insensitive and
+# Unicode-aware (Russian/Kazakh/English). Terms are matched on word boundaries;
+# multi-word phrases are matched as substrings after whitespace normalisation.
+#
+# weight semantics (per matched term):
+#   strong : 3.0  -> highly specific to the topic (near-unique)
+#   medium : 1.5  -> characteristic but shared with neighbouring topics
+#   weak   : 0.5  -> supportive context, generic on its own
+#
+# Add new topics or terms as new documents arrive; keep ids stable.
+# =============================================================================
+
+version: 1
+language: [ru, kk, en]
+
+topics:
+
+  - id: aqr
+    name_ru: "Оценка качества активов (AQR)"
+    name_en: "Asset Quality Review (AQR)"
+    description: >
+      Independent point-in-time review of asset quality, provisioning adequacy
+      and risk-metric starting points that feeds the stress-testing perimeter.
+    strong: ["AQR", "оценка качества активов", "asset quality review", "периметр AQR", "по результатам AQR"]
+    medium: ["коэффициент покрытия провизиями", "стартовая точка", "покрытие провизиями"]
+    weak: ["провизии", "коэффициент покрытия"]
+
+  - id: supervisory_stress_testing
+    name_ru: "Надзорное стресс-тестирование (НСТ)"
+    name_en: "Supervisory Stress Testing (SST/НСТ)"
+    description: >
+      Agency's annual macro stress test of the capital adequacy of the largest
+      banks under baseline and stress scenarios over a 12-quarter horizon.
+    strong: ["надзорное стресс-тестирование", "НСТ", "стрессовый сценарий", "базовый сценарий", "стресс-тест"]
+    medium: ["сценарии НСТ", "горизонт НСТ", "12 кварталов", "реверсивный стресс-тест", "обратное стресс-тестирование", "макросценарий"]
+    weak: ["сценарий", "стресс", "прогнозный горизонт"]
+
+  - id: srep
+    name_ru: "Ежегодная надзорная оценка (SREP)"
+    name_en: "Supervisory Review and Evaluation Process (SREP)"
+    description: >
+      Annual risk-based supervisory assessment of the bank; source of the
+      supervisory findings, ratings (СОР) and follow-up measures.
+    strong: ["SREP", "Supervisory Review and Evaluation Process", "ежегодная надзорная оценка", "надзорный процесс", "риск-ориентированный подход"]
+    medium: ["надзорная оценка", "итоговый рейтинг СОР", "заключение по результатам SREP"]
+    weak: ["Агентство", "надзор"]
+
+  - id: supervisory_response_recommendatory
+    name_ru: "Рекомендательная мера надзорного реагирования (РМНР)"
+    name_en: "Recommendatory Measure of Supervisory Response (RMNR)"
+    description: >
+      Soft supervisory measure listing deficiencies/risks that do not materially
+      threaten financial stability; recommends remediation (Art. 79).
+    strong: ["рекомендательная мера надзорного реагирования", "РМНР", "RMNR", "статья 79", "статьей 79"]
+    medium: ["рекомендательные меры", "рекомендует Банку", "устранение выявленных недостатков", "мотивированное суждение"]
+    weak: ["рекомендация", "недостатки", "рекомендует"]
+
+  - id: supervisory_response_prescription
+    name_ru: "Письменное предписание"
+    name_en: "Written Prescription (enforcement)"
+    description: >
+      Binding supervisory enforcement act ordering the bank to remedy specific
+      rule violations by a deadline, under Rules No.272.
+    strong: ["письменное предписание", "предписывает Банку", "меры надзорного реагирования", "Правила №272", "Правилами №272"]
+    medium: ["нарушения норм", "устранение вышеуказанных нарушений", "план мероприятий", "санкции"]
+    weak: ["нарушение", "предписание", "срок"]
+
+  - id: risk_appetite
+    name_ru: "Риск-аппетит"
+    name_en: "Risk Appetite"
+    description: >
+      Statement and quantitative/qualitative levels of risk the bank is willing
+      to accept; calibration, monitoring and integration into planning.
+    strong: ["риск-аппетит", "заявление риск-аппетита", "уровни риск-аппетита", "risk appetite", "риск-аппетита"]
+    medium: ["корректирующих мер", "калибровка", "допустимый уровень", "заявление качественного характера"]
+    weak: ["аппетит", "уровень риска"]
+
+  - id: icaap_ilaap
+    name_ru: "ВПОДК / ВПОДЛ (ICAAP/ILAAP)"
+    name_en: "ICAAP / ILAAP"
+    description: >
+      Internal Capital Adequacy Assessment Process (ВПОДК) and Internal
+      Liquidity Adequacy Assessment Process (ВПОДЛ) and reporting on compliance.
+    strong: ["ВПОДК", "ВПОДЛ", "ICAAP", "ILAAP", "соблюдению ВПОДК"]
+    medium: ["отчет о соблюдении", "оценка достаточности капитала", "оценка достаточности ликвидности"]
+    weak: ["достаточность капитала", "достаточность ликвидности"]
+
+  - id: top20_large_exposures
+    name_ru: "ТОП-20 крупных заемщиков / концентрация"
+    name_en: "Top-20 Large Exposures / Concentration"
+    description: >
+      Register and monitoring of the 20 largest borrower groups and the
+      concentration of credit exposure relative to own capital.
+    strong: ["ТОП-20", "ТОР-20", "ТОР 20", "топ 20 кредитных обязательств", "top-20", "группа связанности", "крупных заемщиков"]
+    medium: ["задолженность по основному долгу", "условные обязательства", "заклад денег", "доля ТОР 20 к СК", "концентрация"]
+    weak: ["заемщик", "задолженность", "клиент"]
+
+  - id: credit_limits
+    name_ru: "Лимиты и предлимиты по кредитному риску"
+    name_en: "Credit-Risk Limits and Pre-limits"
+    description: >
+      Establishment, revision and monitoring of credit-risk limits and
+      pre-limits, including breaches and deviations from approved limits.
+    strong: ["предлимит", "предлимиты", "лимит по ТОР 20", "утвержденный лимит", "установления и пересмотра лимитов", "лимиты по кредитным рискам"]
+    medium: ["отклонение факта от плана", "превышение лимита", "пересмотр лимитов", "лимитная политика", "нарушение лимита"]
+    weak: ["лимит", "лимиты", "ковенант", "ковенанты"]
+
+  - id: capital_adequacy
+    name_ru: "Достаточность капитала (k1) и собственный капитал"
+    name_en: "Capital Adequacy (k1) and Own Capital"
+    description: >
+      Own funds (собственный капитал), core/Tier-1 capital and the k1 adequacy
+      ratio; capital buffers derived from stress testing.
+    strong: ["собственный капитал", "достаточность капитала", "основной капитал", "коэффициент достаточности", "k1", "буфер капитала", "капитализация"]
+    medium: ["уставный капитал", "нераспределенная прибыль", "субординированный", "СК", "взвешенных по степени риска", "RWA"]
+    weak: ["капитал", "буфер"]
+
+  - id: credit_risk
+    name_ru: "Кредитный риск"
+    name_en: "Credit Risk"
+    description: >
+      Management of credit risk across the loan portfolio: PD/LGD/EAD/ECL,
+      staging, coverage and portfolio segments.
+    strong: ["кредитный риск", "кредитного риска", "ссудный портфель", "кредитный портфель", "стадии кредитного обесценения", "credit risk"]
+    medium: ["EAD", "PD12m", "PDLT", "LGD", "стадия 3", "переход в стадию", "INDLOANS", "RETCON", "RETCAR", "CORCOR", "RETSML", "RETEST", "FINFIN"]
+    weak: ["займы", "дефолт", "портфель"]
+
+  - id: market_risk
+    name_ru: "Рыночный риск"
+    name_en: "Market Risk"
+    description: >
+      Revaluation risk of instruments sensitive to market rates, quotes and FX;
+      bond portfolio, equities, derivatives, real estate.
+    strong: ["рыночный риск", "рыночного риска", "переоценка", "market risk", "рыночных ставок"]
+    medium: ["облигации", "ПФИ", "справедливой стоимости", "портфель облигаций", "процентный риск"]
+    weak: ["котировки", "инвестиции", "недвижимость"]
+
+  - id: currency_risk
+    name_ru: "Валютный риск"
+    name_en: "Currency (FX) Risk"
+    description: >
+      Risk from FX-rate movements and currency structure of assets/liabilities.
+    strong: ["валютный риск", "валютного риска", "валютный сценарий", "обменный курс", "валютная переоценка"]
+    medium: ["хеджирование", "USD/KZT", "валютная структура", "конвертируемости валюты"]
+    weak: ["курс", "валюта"]
+
+  - id: liquidity_risk
+    name_ru: "Риск ликвидности и фондирование"
+    name_en: "Liquidity Risk and Funding"
+    description: >
+      Liquidity adequacy, funding plan, and constraints between market-liquidity
+      squeeze and funding.
+    strong: ["риск ликвидности", "ликвидность", "план финансирования", "фондирование", "сжатие рыночной ликвидности"]
+    medium: ["ликвидные активы", "ставки фондирования", "ограничения фондирования", "сокращение ликвидности"]
+    weak: ["вклады", "депозиты"]
+
+  - id: operational_risk
+    name_ru: "Операционный риск"
+    name_en: "Operational Risk"
+    description: >
+      Losses from processes, people and systems; loss database, scenarios and
+      reverse stress testing of operational risk.
+    strong: ["операционный риск", "операционного риска", "базы данных об убытках", "operational risk", "операционным рискам"]
+    medium: ["сбор данных об убытках", "расчётные сбои", "человеческий фактор", "события операционного риска"]
+    weak: ["убытки", "сбои"]
+
+  - id: model_risk_validation
+    name_ru: "Модельный риск и валидация моделей"
+    name_en: "Model Risk and Model Validation"
+    description: >
+      Model governance, independent validation, monitoring and registry of
+      risk models (credit, scoring, risk-metrics).
+    strong: ["модельный риск", "валидация моделей", "независимая валидация", "реестр моделей", "модельным риском", "валидации моделей"]
+    medium: ["скоринговые модели", "модели оценки кредитного риска", "мониторинг моделей", "риск-метрик", "риск-метрики", "калибровка моделей"]
+    weak: ["модель", "модели"]
+
+  - id: provisions_ecl
+    name_ru: "Провизии / ECL (МСФО 9)"
+    name_en: "Provisions / ECL (IFRS 9)"
+    description: >
+      Expected credit loss provisioning under IFRS 9, provision-coverage and
+      methodology agreed with the regulator.
+    strong: ["ECL", "провизии", "МСФО 9", "ожидаемый кредитный убыток", "методики по расчету провизий", "резервы"]
+    medium: ["коэффициент покрытия провизиями", "провизий", "обесценение", "резервирование"]
+    weak: ["покрытие", "убыток"]
+
+  - id: internal_audit
+    name_ru: "Внутренний аудит (СВА)"
+    name_en: "Internal Audit"
+    description: >
+      Independent internal audit activity, findings and audit ratings on
+      risk-management processes.
+    strong: ["внутренний аудит", "служба внутреннего аудита", "СВА", "аудиторский отчет", "аудиторская проверка", "внутреннего аудита"]
+    medium: ["обнаружения", "наблюдения", "аудиторская оценка", "масштаб проверки", "остаточность мер"]
+    weak: ["аудит", "проверка"]
+
+  - id: management_reporting
+    name_ru: "Управленческая отчетность"
+    name_en: "Management Reporting"
+    description: >
+      Timeliness, completeness and correctness of management reporting to the
+      authorised bodies (УО/УКО) and the Board.
+    strong: ["управленческая отчетность", "управленческой отчетности", "управленческую отчетность", "уполномоченный орган", "вынесение на УО"]
+    medium: ["своевременность", "полнота", "достоверность", "заседание Совета директоров", "УКО", "УО Банка"]
+    weak: ["отчетность", "отчет"]
+
+  - id: corporate_governance
+    name_ru: "Корпоративное управление"
+    name_en: "Corporate Governance"
+    description: >
+      Board of Directors, independent directors, committees, remuneration and
+      strategic oversight.
+    strong: ["корпоративное управление", "Совет директоров", "независимый директор", "независимых директоров", "Правление", "Комитет"]
+    medium: ["очных заседаний", "премирование", "индивидуальных планов развития", "CRO", "стратегия", "распределение функций"]
+    weak: ["директор", "заседание"]
+
+  - id: dividend_policy
+    name_ru: "Дивидендная политика"
+    name_en: "Dividend Policy"
+    description: >
+      Policy and decisions on dividend payments and their interaction with
+      capital planning.
+    strong: ["дивидендная политика", "политики выплаты дивидендов", "выплата дивидендов", "дивиденды"]
+    medium: ["дивидендные доходы", "распределение прибыли"]
+    weak: ["дивиденд"]
+
+  - id: ai_initiatives
+    name_ru: "ИИ-инициативы и автоматизация"
+    name_en: "AI Initiatives and Automation"
+    description: >
+      Automation, machine learning and AI-driven initiatives in risk management
+      and reporting (incl. reduction of manual/human-factor errors).
+    strong: ["искусственный интеллект", "машинное обучение", "artificial intelligence", "machine learning", "AI-инициатив", "ИИ-инициатив", "нейросет"]
+    medium: ["автоматизация", "автоматизации", "автоматизированной системы", "цифровизация", "робот", "макросов"]
+    weak: ["алгоритм", "данные", "модель"]
+
+  - id: hr_risk
+    name_ru: "Управление человеческими ресурсами"
+    name_en: "Human Resources / People Risk"
+    description: >
+      Risk of managing human resources: competencies, staffing of control
+      functions, incentives.
+    strong: ["управления человеческими ресурсами", "человеческими ресурсами", "HR", "кадровый"]
+    medium: ["компетенции", "премирование", "нагрузку на работников"]
+    weak: ["работники", "персонал"]
+
+  - id: budgeting_planning
+    name_ru: "Бюджетирование и планирование"
+    name_en: "Budgeting and Planning"
+    description: >
+      Budget process, strategic/financial planning and integration of
+      risk-appetite and stress-test results into planning.
+    strong: ["бюджетирование", "исполнении бюджета", "бюджетного планирования", "стратегическое планирование", "бюджет"]
+    medium: ["план мероприятий", "финансовое планирование", "корректировку риск-аппетита"]
+    weak: ["план", "планирование"]
