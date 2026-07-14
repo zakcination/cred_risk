@@ -4,5 +4,9 @@ PyYAML>=6.0
 # PDF extraction (optional but recommended; DOCX/XLSX need no extra deps)
 pymupdf>=1.23
 
+# Outlook .msg email extraction (optional)
+olefile>=0.46          # read the OLE2 compound file / MAPI property streams
+compressed-rtf>=1.0    # decompress the RTF-HTML body when no plain-text body exists
+
 # Tests (dev)
 pytest>=7.0
