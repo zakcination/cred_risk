@@ -43,10 +43,20 @@ def _compile(term: str) -> re.Pattern:
     Word boundaries use lookarounds over letters/digits so that, e.g., ``AQR``
     does not match inside ``AQRX`` while hyphenated terms like ``ТОП-20`` and
     ``риск-аппетит`` still match.
+
+    A trailing ``*`` marks a **stem (prefix) match**: the term may be followed by
+    any word characters. This handles Russian morphology — e.g.
+    ``стресс-тестировани*`` matches ``стресс-тестирование``, ``…ния``, ``…нию`` —
+    without listing every inflected form. Use it only where the stem is
+    unambiguous, to avoid over-matching.
     """
+    stem = term.endswith("*")
+    if stem:
+        term = term[:-1]
     parts = [re.escape(tok) for tok in term.split()]
     body = r"\s+".join(parts)
-    return re.compile(rf"(?<![^\W_]){body}(?![^\W_])", re.IGNORECASE | re.UNICODE)
+    tail = r"[^\W_]*" if stem else r"(?![^\W_])"
+    return re.compile(rf"(?<![^\W_]){body}{tail}", re.IGNORECASE | re.UNICODE)
 
 
 @dataclass
