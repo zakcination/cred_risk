@@ -83,6 +83,37 @@ def test_capital_snippet(clf):
     assert result.primary.topic_id == "capital_adequacy"
 
 
+def test_stem_matching_handles_russian_morphology(clf):
+    # 'стресс-тестировани*' must match inflected forms the exact term would miss
+    for form in ("стресс-тестирование", "стресс-тестирования", "стресс-тестированию"):
+        result = clf.classify(f"Чек-лист вопросы {form} кредитного риска и сценарии")
+        assert "supervisory_stress_testing" in result.labels(), form
+
+
+def test_stem_star_compiles_as_prefix():
+    pat = _compile(normalise("бэк-тестировани*"))
+    assert pat.search("проведено бэк-тестирование моделей")
+    assert pat.search("результаты бэк-тестирования")
+    # non-star term stays exact
+    exact = _compile(normalise("НСТ"))
+    assert exact.search("отчет нст 2025")
+    assert not exact.search("нстх")
+
+
+def test_back_testing_snippet(clf):
+    text = (
+        "Бэк-тестирование моделей PD, LGD, EAD. Независимая валидация моделей "
+        "оценки кредитного риска. Реестр моделей и мониторинг моделей. Gini."
+    )
+    result = clf.classify(text)
+    assert result.primary.topic_id == "model_risk_validation"
+
+
+def test_msg_extension_supported():
+    from topic_classifier.extract import SUPPORTED_EXTENSIONS
+    assert ".msg" in SUPPORTED_EXTENSIONS
+
+
 def test_empty_document_has_no_matches(clf):
     result = clf.classify("Погода сегодня хорошая, солнечно и тепло.")
     assert result.assigned == []
