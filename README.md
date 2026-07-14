@@ -28,7 +28,7 @@ in [`topics/taxonomy.yaml`](topics/taxonomy.yaml) is the shared vocabulary;
 topics/taxonomy.yaml         # the topic taxonomy (24 topics) — the core asset
 topic_classifier/
   taxonomy.py                # load & validate the taxonomy
-  extract.py                 # text extraction: PDF (pymupdf), DOCX/XLSX (stdlib), TXT/MD
+  extract.py                 # text extraction: PDF (pymupdf), DOCX/XLSX (stdlib), MSG (olefile), TXT/MD
   classifier.py              # weighted, frequency-dampened, multi-label scoring
   cli.py                     # command-line interface
 docs/
@@ -92,6 +92,11 @@ when it clears `--min-score` and is within the top-`k`. Matching is
 case-insensitive, Unicode-aware (RU/KK/EN), folds `ё→е`, and respects
 word/hyphen boundaries (so `AQR` ≠ `AQRX`, but `ТОП-20` and `риск-аппетит`
 match).
+
+**Russian morphology:** a trailing `*` on a taxonomy term is a **stem match** —
+`стресс-тестировани*` matches `стресс-тестирование`, `…ния`, `…нию`, so
+inflected forms don't need to be listed individually. Use it only where the stem
+is unambiguous.
 
 Validated against the initial document set — each document lands on the correct
 primary topic (see [`docs/analysis/`](docs/analysis)).

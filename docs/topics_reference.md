@@ -54,10 +54,13 @@ concentration relative to own capital. *Sources: TOP‑20.*
 
 ## 9. Credit-Risk Limits and Pre-limits (`credit_limits`)
 Establishment, revision and monitoring of credit-risk limits and **pre-limits**
-(предлимиты), including breaches. In TOP‑20 the actual Top-20 share reached
-**100.30% of own capital vs the approved 95% limit** — a **+5.30 pp breach**.
-*Sources: TOP‑20; "Rules for establishing and revising credit-risk limits,
-28.09.2020".*
+(предлимиты), including breaches, portfolio **concentration/diversification**,
+collateral-type limits and the approved **limit schedule (лимитная ведомость)**.
+In TOP‑20 the actual Top-20 share reached **100.30% of own capital vs the
+approved 95% limit** — a **+5.30 pp breach**. Working papers also flag auto-loan
+concentration and missing collateral limits for Private Banking (Resolution
+№188 п.42). *Sources: TOP‑20; audit working papers; "FW: результаты НСТ";
+"Rules for establishing and revising credit-risk limits, 28.09.2020".*
 
 ## 10. Capital Adequacy (k1) and Own Capital (`capital_adequacy`)
 Own funds, core/Tier-1 capital and the k1 adequacy ratio; buffers derived from
@@ -86,9 +89,12 @@ Loss database, scenario and reverse stress testing of operational risk.
 *Sources: RMNR, Предписание.*
 
 ## 16. Model Risk and Model Validation (`model_risk_validation`)
-Model governance, independent validation, monitoring and the model registry.
-The single most material credit-risk audit finding: no comprehensive model-risk
-framework, no independent validation of credit-risk models. *Sources: Аудит КР, RMNR, Предписание.*
+Model governance, independent validation, back-testing, monitoring and the model
+registry/catalog; model-development and life-cycle methodology; discrimination
+metrics (Gini). The single most material credit-risk audit finding: no
+comprehensive model-risk framework, no independent validation of credit-risk
+models. *Sources: Аудит КР, RMNR, Предписание, audit working-paper checklists,
+"FW: результаты НСТ".*
 
 ## 17. Provisions / ECL — IFRS 9 (`provisions_ecl`)
 Expected credit loss provisioning, provision coverage and the provisioning
