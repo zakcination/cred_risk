@@ -13,9 +13,12 @@ RNN) are marked **PII** and were not extracted.
 
 > **See also** [`credit_risk_knowledge_base.md`](credit_risk_knowledge_base.md)
 > for the end-to-end architecture (the `CL_PORTFOLIO` source-branch staging layer
-> that feeds this mart, the `la_source` branch map, the NBK chart-of-accounts
-> grounding, and the consolidated correctness review). This document is the
-> detailed **mart-schema** reference.
+> that feeds this mart, the **full ~19-table inventory** with criticality tiers
+> and IFRS 9 roles, the `la_source` branch map, the NBK chart-of-accounts
+> grounding, and the consolidated correctness review). This document catalogues
+> at **column level only the 5 tables** the draft SQL touches (`loans`,
+> `borrower`, `loan_account`, `pledges`, `interest_rates`) — the detailed
+> **mart-schema** reference for those.
 
 **Source artifacts**
 
