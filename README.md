@@ -34,8 +34,8 @@ topic_classifier/
 docs/
   topics_reference.md        # reference for every topic (+ note: own capital / собственный капитал)
   analysis/                  # document-set classification summaries + data-model reference
-                             #   credit_risk_knowledge_base.md  — end-to-end loan data architecture (branches→mart→reports)
-                             #   risk_analytics_data_model.md   — Dictionaries.risk_analytics mart (loans/provisioning) schema
+                             #   credit_risk_knowledge_base.md  — end-to-end loan data architecture (branches→mart→reports, ~19-table inventory, IFRS 9 map)
+                             #   risk_analytics_data_model.md   — column-level schema of the 5 draft-SQL tables
 tests/                       # pytest suite (synthetic snippets, no confidential data)
 data/                        # local document store — git-ignored (confidential)
 examples/                    # non-confidential example artifacts
