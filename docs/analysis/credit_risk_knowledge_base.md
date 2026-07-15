@@ -62,7 +62,7 @@ flowchart TD
         W4["Way4 / OpenWay<br/>(cards)"]
         SC["Smart Card<br/>(legacy cards)"]
         FX["Fenix<br/>(collections / NPL)"]
-        OBsys["Off-balance &amp;<br/>write-off registers"]
+        OBsys["Off-balance and<br/>write-off registers"]
     end
 
     subgraph L1["Layer 1 — Staging: [CL_PORTFOLIO].[dbo] (one PORTFOLIO_* table per branch)"]
@@ -74,7 +74,7 @@ flowchart TD
     end
 
     subgraph L3["Layer 3 — Report extracts (draft SQL)"]
-        R["join_pre_final / join_CL (S03) · join_RS (S01)<br/>→ provisioning &amp; regulatory outputs"]
+        R["join_pre_final / join_CL (S03) · join_RS (S01)<br/>→ provisioning and regulatory outputs"]
     end
 
     CLsys --> P
