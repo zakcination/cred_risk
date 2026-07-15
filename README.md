@@ -33,7 +33,9 @@ topic_classifier/
   cli.py                     # command-line interface
 docs/
   topics_reference.md        # reference for every topic (+ note: own capital / собственный капитал)
-  analysis/                  # classification summaries of received document sets
+  analysis/                  # document-set classification summaries + data-model reference
+                             #   credit_risk_knowledge_base.md  — end-to-end loan data architecture (branches→mart→reports)
+                             #   risk_analytics_data_model.md   — Dictionaries.risk_analytics mart (loans/provisioning) schema
 tests/                       # pytest suite (synthetic snippets, no confidential data)
 data/                        # local document store — git-ignored (confidential)
 examples/                    # non-confidential example artifacts
