@@ -11,6 +11,12 @@ Only schema, query logic and **aggregate** portfolio figures are reproduced
 here — no borrower-level rows. Fields that carry personal data (name, IIN/BIN,
 RNN) are marked **PII** and were not extracted.
 
+> **See also** [`credit_risk_knowledge_base.md`](credit_risk_knowledge_base.md)
+> for the end-to-end architecture (the `CL_PORTFOLIO` source-branch staging layer
+> that feeds this mart, the `la_source` branch map, the NBK chart-of-accounts
+> grounding, and the consolidated correctness review). This document is the
+> detailed **mart-schema** reference.
+
 **Source artifacts**
 
 | Artifact | What it is | Source system (`la_source`) | Snapshot (`la_reporting_date`) |
@@ -340,10 +346,11 @@ single contract for drill-down testing, `l_loan_number = '…'`).
 
 ## 10. The reconciliation workbook (`Сравнение_2026-04-01`)
 
-One sheet compares the Credilogic **`Cl_portfolio`** (source of record) against
-**`Dictionaries`** (the `S03` mart slice) at `2026-04-01`. Columns:
-`Cl_portfolio | Dictionaries | Разница (diff) | Σ contracts in CL missing from
-Dictionaries | Σ contracts in Dictionaries missing from CL`.
+One sheet compares the **`Cl_portfolio`** staging side (the `CL_PORTFOLIO`
+source-branch database — see the knowledge base) against **`Dictionaries`** (the
+mart) at `2026-04-01`. Columns: `Cl_portfolio | Dictionaries | Разница (diff) |
+Σ contracts in CL missing from Dictionaries | Σ contracts in Dictionaries missing
+from CL`.
 
 | Metric | Cl_portfolio | Dictionaries | Difference |
 |---|---:|---:|---:|
