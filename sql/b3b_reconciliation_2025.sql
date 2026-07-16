@@ -43,8 +43,13 @@ DECLARE @AuditYearEnd   date = '20260101';   -- first day of the NEXT year (excl
 -------------------------------------------------------------------------------
 -- 1. Main reconciliation extract (READ-ONLY).
 --    Latest snapshot per contract + audited-year presence, joined to the base.
+--
+--    NOTE: the leading ';' before WITH is required. A CTE must be the first
+--    statement in the batch or the previous statement must be terminated; the
+--    ';' guarantees that. Without it SQL Server can misparse the CTE and try to
+--    EXECUTE the next table name — the cause of "Msg 2809 ... is a table object".
 -------------------------------------------------------------------------------
-WITH p AS (
+;WITH p AS (
     SELECT
         t.contract_number,
         t.[date],
