@@ -36,8 +36,11 @@
    COLUMN MAPPING: the source tables do NOT share a schema, so each branch of
    the UNION maps its own columns to the canonical output names below. Only
    CL_PORTFOLIO_2 and the card tables use the canonical names; Fenix/RS differ
-   and lack tag_1/status. Every value is CAST to a common type so the UNION ALL
-   lines up. Verified against the SSMS column lists of all six tables.
+   and lack tag_1/status. Every value is TRY_CAST to a common type so the UNION
+   ALL lines up AND dirty source values do not abort the run — a bad/oversized
+   value (e.g. a garbage dpd beyond int range, or an unparseable date) becomes
+   NULL instead of raising "Msg 8115 arithmetic overflow" / "Msg 241 conversion
+   failed". Verified against the SSMS column lists of all six tables.
 
      canonical              CL_PORTFOLIO_2         Fenix / RS                 Cards (WAY4/SMART/MIGR)
      ---------------------  ---------------------  -------------------------  -----------------------
@@ -85,90 +88,90 @@ DECLARE @AuditYearEnd   date = '20260101';   -- first day of the NEXT year (excl
     -- Credilogic (CL) — canonical schema
     SELECT 'Credilogic' AS source_system,
            contract_number,
-           CAST([date] AS date)                           AS [date],
-           CAST([od] AS decimal(38,2))                    AS [od],
-           CAST([balance] AS decimal(38,2))               AS [balance],
-           CAST([dpd] AS int)                             AS [dpd],
-           CAST([category] AS nvarchar(255))              AS [category],
-           CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
-           CAST([status] AS nvarchar(255))                AS [status],
-           CAST([balance_with_discount] AS decimal(38,2)) AS [balance_with_discount],
-           CAST([provisions_total] AS decimal(38,2))      AS [provisions_total]
+           TRY_CAST([date] AS date)                           AS [date],
+           TRY_CAST([od] AS decimal(38,2))                    AS [od],
+           TRY_CAST([balance] AS decimal(38,2))               AS [balance],
+           TRY_CAST([dpd] AS int)                             AS [dpd],
+           TRY_CAST([category] AS nvarchar(255))              AS [category],
+           TRY_CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
+           TRY_CAST([status] AS nvarchar(255))                AS [status],
+           TRY_CAST([balance_with_discount] AS decimal(38,2)) AS [balance_with_discount],
+           TRY_CAST([provisions_total] AS decimal(38,2))      AS [provisions_total]
     FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]
 
     UNION ALL
     -- Fenix (EBCL) — different names; no tag_1/status/provisions_total
     SELECT 'Fenix' AS source_system,
            contractnumber                                 AS contract_number,
-           CAST(actual_date AS date)                      AS [date],
-           CAST(outstanding AS decimal(38,2))             AS [od],
-           CAST(Total_outstanding AS decimal(38,2))       AS [balance],
-           CAST(overdue_days_principal AS int)            AS [dpd],
-           CAST(Basket AS nvarchar(255))                  AS [category],
-           CAST(NULL AS nvarchar(255))                    AS [tag_1],
-           CAST(NULL AS nvarchar(255))                    AS [status],
-           CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
-           CAST(NULL AS decimal(38,2))                    AS [provisions_total]
+           TRY_CAST(actual_date AS date)                      AS [date],
+           TRY_CAST(outstanding AS decimal(38,2))             AS [od],
+           TRY_CAST(Total_outstanding AS decimal(38,2))       AS [balance],
+           TRY_CAST(overdue_days_principal AS int)            AS [dpd],
+           TRY_CAST(Basket AS nvarchar(255))                  AS [category],
+           TRY_CAST(NULL AS nvarchar(255))                    AS [tag_1],
+           TRY_CAST(NULL AS nvarchar(255))                    AS [status],
+           TRY_CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
+           TRY_CAST(NULL AS decimal(38,2))                    AS [provisions_total]
     FROM [CL_PORTFOLIO].[dbo].[PORTFOLIO_Fenix]
 
     UNION ALL
     -- RS — different names; has its own dpd; no tag_1/status/provisions_total
     SELECT 'RS' AS source_system,
            contractnumber                                 AS contract_number,
-           CAST(actual_date AS date)                      AS [date],
-           CAST(outstanding AS decimal(38,2))             AS [od],
-           CAST(Total_outstanding AS decimal(38,2))       AS [balance],
-           CAST([dpd] AS int)                             AS [dpd],
-           CAST(Basket AS nvarchar(255))                  AS [category],
-           CAST(NULL AS nvarchar(255))                    AS [tag_1],
-           CAST(NULL AS nvarchar(255))                    AS [status],
-           CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
-           CAST(NULL AS decimal(38,2))                    AS [provisions_total]
+           TRY_CAST(actual_date AS date)                      AS [date],
+           TRY_CAST(outstanding AS decimal(38,2))             AS [od],
+           TRY_CAST(Total_outstanding AS decimal(38,2))       AS [balance],
+           TRY_CAST([dpd] AS int)                             AS [dpd],
+           TRY_CAST(Basket AS nvarchar(255))                  AS [category],
+           TRY_CAST(NULL AS nvarchar(255))                    AS [tag_1],
+           TRY_CAST(NULL AS nvarchar(255))                    AS [status],
+           TRY_CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
+           TRY_CAST(NULL AS decimal(38,2))                    AS [provisions_total]
     FROM [CL_PORTFOLIO].[dbo].[PORTFOLIO_RS]
 
     UNION ALL
     -- Cards — MIGR_WAY4 (canonical names; provisions_calculated; no balance_with_discount)
     SELECT 'CREDITCARDS_MIGR_WAY4' AS source_system,
            contract_number,
-           CAST([date] AS date)                           AS [date],
-           CAST([od] AS decimal(38,2))                    AS [od],
-           CAST([balance] AS decimal(38,2))               AS [balance],
-           CAST([dpd] AS int)                             AS [dpd],
-           CAST([category] AS nvarchar(255))              AS [category],
-           CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
-           CAST([status] AS nvarchar(255))                AS [status],
-           CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
-           CAST(provisions_calculated AS decimal(38,2))   AS [provisions_total]
+           TRY_CAST([date] AS date)                           AS [date],
+           TRY_CAST([od] AS decimal(38,2))                    AS [od],
+           TRY_CAST([balance] AS decimal(38,2))               AS [balance],
+           TRY_CAST([dpd] AS int)                             AS [dpd],
+           TRY_CAST([category] AS nvarchar(255))              AS [category],
+           TRY_CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
+           TRY_CAST([status] AS nvarchar(255))                AS [status],
+           TRY_CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
+           TRY_CAST(provisions_calculated AS decimal(38,2))   AS [provisions_total]
     FROM [CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_MIGR_WAY4]
 
     UNION ALL
     -- Cards — SMART_CARD
     SELECT 'SMART_CARD' AS source_system,
            contract_number,
-           CAST([date] AS date)                           AS [date],
-           CAST([od] AS decimal(38,2))                    AS [od],
-           CAST([balance] AS decimal(38,2))               AS [balance],
-           CAST([dpd] AS int)                             AS [dpd],
-           CAST([category] AS nvarchar(255))              AS [category],
-           CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
-           CAST([status] AS nvarchar(255))                AS [status],
-           CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
-           CAST(provisions_calculated AS decimal(38,2))   AS [provisions_total]
+           TRY_CAST([date] AS date)                           AS [date],
+           TRY_CAST([od] AS decimal(38,2))                    AS [od],
+           TRY_CAST([balance] AS decimal(38,2))               AS [balance],
+           TRY_CAST([dpd] AS int)                             AS [dpd],
+           TRY_CAST([category] AS nvarchar(255))              AS [category],
+           TRY_CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
+           TRY_CAST([status] AS nvarchar(255))                AS [status],
+           TRY_CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
+           TRY_CAST(provisions_calculated AS decimal(38,2))   AS [provisions_total]
     FROM [CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_SMART_CARD]
 
     UNION ALL
     -- Cards — WAY4
     SELECT 'CREDITCARDS_WAY4' AS source_system,
            contract_number,
-           CAST([date] AS date)                           AS [date],
-           CAST([od] AS decimal(38,2))                    AS [od],
-           CAST([balance] AS decimal(38,2))               AS [balance],
-           CAST([dpd] AS int)                             AS [dpd],
-           CAST([category] AS nvarchar(255))              AS [category],
-           CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
-           CAST([status] AS nvarchar(255))                AS [status],
-           CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
-           CAST(provisions_calculated AS decimal(38,2))   AS [provisions_total]
+           TRY_CAST([date] AS date)                           AS [date],
+           TRY_CAST([od] AS decimal(38,2))                    AS [od],
+           TRY_CAST([balance] AS decimal(38,2))               AS [balance],
+           TRY_CAST([dpd] AS int)                             AS [dpd],
+           TRY_CAST([category] AS nvarchar(255))              AS [category],
+           TRY_CAST([tag_1] AS nvarchar(255))                 AS [tag_1],
+           TRY_CAST([status] AS nvarchar(255))                AS [status],
+           TRY_CAST(NULL AS decimal(38,2))                    AS [balance_with_discount],
+           TRY_CAST(provisions_calculated AS decimal(38,2))   AS [provisions_total]
     FROM [CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_WAY4]
 ),
 p AS (
