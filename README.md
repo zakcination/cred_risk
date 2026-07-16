@@ -36,10 +36,16 @@ docs/
   analysis/                  # document-set classification summaries + data-model reference
                              #   credit_risk_knowledge_base.md  — end-to-end loan data architecture (branches→mart→reports, ~19-table inventory, IFRS 9 map)
                              #   risk_analytics_data_model.md   — column-level schema of the 5 draft-SQL tables
+sql/                         # AQR data-check scripts (T-SQL), e.g. the B3B closed-before-2025 reconciliation
 tests/                       # pytest suite (synthetic snippets, no confidential data)
 data/                        # local document store — git-ignored (confidential)
 examples/                    # non-confidential example artifacts
 ```
+
+Beyond the classifier, the repo also holds **AQR data checks** under `sql/` —
+starting with `b3b_reconciliation_2025.sql`, which reconciles the B3B scope
+against the portfolio time-series to flag contracts that look closed before the
+audited year (see `sql/README.md`).
 
 ## Install
 
