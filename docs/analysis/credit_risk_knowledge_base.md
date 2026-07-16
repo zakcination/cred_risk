@@ -2,210 +2,182 @@
 
 Holistic reference for the loan/provisioning data pipeline: the **source
 portfolio branches**, the **`CL_PORTFOLIO` staging layer**, the full
-**`Dictionaries.risk_analytics` mart** (its ~19 tables, criticality tiers and
-IFRS 9 roles), the **account-computation conventions** distilled from the team's
-draft SQL, and a **correctness review** — grounded in the National Bank of
-Kazakhstan (NBK) Standard Chart of Accounts.
+**`Dictionaries.risk_analytics` mart**, the **account-computation conventions**,
+and a **correctness + reconciliation** view — grounded in the NBK Standard Chart
+of Accounts and in the БРМ reconciliation project's data-proven findings.
 
-> **Status of inputs.** The SQL files (`join_CL.sql`, `join_pre_final.sql`,
-> `join_RS.sql`) are **working drafts**, not production DDL. They are treated
-> here as an *idea warehouse* — they encode how colleagues join the tables,
-> which columns they use, and how they compute the GL accounts. They touch only
-> 5 of the mart's tables; the **full table inventory** (§4) and the **IFRS 9
-> mapping** (§5) come from the team's confirmed table list. Column-level detail
-> for the 5 draft tables is in
-> [`risk_analytics_data_model.md`](risk_analytics_data_model.md); columns for the
-> remaining tables are open items (§10).
+> **Two tiers of evidence.**
+> 1. **Ground truth (data-proven).** The БРМ reconciliation project's
+>    [`risk_dwh_reconciliation/FINDINGS.md`](risk_dwh_reconciliation/FINDINGS.md)
+>    (CONFIRMED / OPEN / DISPROVEN on live queries, snapshot 01.07.2026) and its
+>    charter [`risk_dwh_reconciliation/CLAUDE.md`](risk_dwh_reconciliation/CLAUDE.md).
+>    **These override any inference below.**
+> 2. **Draft-derived.** The SQL files (`join_CL.sql`, `join_pre_final.sql`,
+>    `join_RS.sql`) are working drafts / *idea warehouse* — they show how
+>    colleagues join tables and compute accounts. Column detail for the 5 tables
+>    they touch is in
+>    [`risk_analytics_data_model.md`](risk_analytics_data_model.md).
 
 ## Краткое содержание (RU)
 
-- **Два слоя данных.** Источник — база `CL_PORTFOLIO` (по одной таблице
-  `PORTFOLIO_*` на каждую систему-источник / «ветку»). Витрина — схема
-  `Dictionaries.risk_analytics`, где «ветку» различает поле `la_source`.
-- **Витрина = ~19 таблиц**, а не 5. Полный реестр с уровнями критичности
-  (P0/P1/P2) и ролью в МСФО 9 — в §4; карта жизненного цикла и параметров
-  PD/LGD/EAD/EIR/SICR — в §5.
-- **P0 (фундамент):** `borrower`, `loans`, `loan_account` (и `brm_all_data`,
-  если это финальная витрина). **P1 (драйверы резервов/МСФО 9):**
-  `repayment_schedule`, `payments`/`payments_wiring`, `pledges`,
-  `restructuring_v2`, `ratings`, `writeoff`, `collections`, `bankrupt`,
-  `interest_rates`. **P2 (полнота EAD/CCF):** `offbalance`, `guarantees`,
-  `credit_lines`, `refinance`.
-- **Счета** — из Типового плана счетов НБРК (V1100006793): 1400 — требования к
-  клиентам (ОД), 1424 — просроченный ОД, 1740/1741 — вознаграждение, 1428 —
-  провизии, 7-й класс (7130) — меморандум (списание в убыток).
-- **Что проверить (главное):** база расчёта `provisions_calculated` не совпадает
-  с базой `EAD` по знакам счетов 1773/1435 и по набору дисконтов
-  (1774/1775/1784) — см. §8. Плюс: неопределённый алиас `b`, дубликат в CASE,
-  разное применение `-1` к дням просрочки, риск размножения строк по
-  залогам/ставкам, риск двойного счёта при объединении веток.
+- **Два слоя.** OLD `CL_PORTFOLIO.dbo.*` (по таблице `PORTFOLIO_*` на источник) →
+  NEW `Dictionaries.risk_analytics.*` (март), ветку различает `la_source`.
+- **`la_source` = 4 кода (CONFIRMED):** `S01`=RS, `S02`=Cards (UNION Way4 /
+  MIGR_WAY4 / SMART_CARD), `S03`=CrediLogic, `S17`=Fenix. OFF_BALANCE / RS_7130 /
+  spis_v_ubytok — это **resolution/меморандум** таблицы, а не значения `la_source`.
+- **Глобальный ключ — `l_gid` / `la_gid`, НЕ номер договора** (номер не глобален:
+  9659 коллизий между источниками). Ключ old↔new — **свой на каждый источник**
+  (§3).
+- **Витрина = ~19 таблиц** с уровнями критичности P0/P1/P2 (§4) и картой МСФО 9
+  (§5).
+- **Сквозной итог сверки:** **баланс сходится везде; провизии (1428/18771) и DPD
+  расходятся везде** — два системных вопроса к автору марта, не разовый дефект
+  (§9).
+- **Проверить/решено:** 18770/1877 **корректно НЕ входят** в `provisions_total`
+  (identity ломается — RESOLVED). Осталось: валентность 1428 (+28 млрд → модель),
+  семантика DPD/NULL, S02 (не тронут, самый рисковый).
 
 ## 1. Scope and regulatory basis
 
-This pipeline produces the per-contract loan book, its IFRS provisions and the
-regulatory extracts for the credit-risk workstream. The GL account columns
-(`la_account_XXXX`) are the bank's ledger accounts as defined by:
+The pipeline produces the per-contract loan book, its IFRS 9 provisions and the
+regulatory extracts. GL account columns (`la_account_XXXX`) follow:
 
 - **[V1100006793](https://adilet.zan.kz/rus/docs/V1100006793)** — *Standard
-  Chart of Accounts for second-tier banks, mortgage organisations, JSC
-  "Development Bank of Kazakhstan" and branches of non-resident banks* (NBK Board
-  Resolution №3 of 31.01.2011, MoJ reg. №6793). Defines the account classes and
-  numbers used throughout §6.
+  Chart of Accounts for second-tier banks…* (NBK Board Resolution №3 of
+  31.01.2011, MoJ reg. №6793). Defines the account classes/numbers in §6.
 - **[NBK accounting-rules amendments](https://nationalbank.kz/file/download/62676)**
-  — resolutions amending bank bookkeeping / financial-reporting rules (assets,
-  liabilities, equity, income, expenses; consolidated reporting).
+  — bank bookkeeping / financial-reporting rules.
 
-Provisioning follows **IFRS 9** (expected credit loss, staging, SICR) — the model
-that the table inventory in §4–§5 is built to feed. Only schema, query logic and
-**aggregate** figures appear here; PII fields (`b_borrower_name`, `b_iin_bin`,
-`b_rnn`) are marked and not reproduced.
+Provisioning follows **IFRS 9** (ECL, staging, SICR). The reconciliation project
+is **read-only** (SELECT / `#temp` only), parameterises source/date/tolerance,
+and outputs **aggregates only** — no PII (ИИН/ФИО/contract numbers/IBAN). Only
+schema, logic and aggregate figures appear here.
 
 ## 2. Architecture — the four layers
 
 ```mermaid
 flowchart TD
-    subgraph L0["Layer 0 — Systems of record (origination / servicing)"]
-        CLsys["Credilogic<br/>(POS / consumer)"]
-        RSsys["RS core-banking<br/>(+ RS_7130 sub-ledger)"]
-        W4["Way4 / OpenWay<br/>(cards)"]
-        SC["Smart Card<br/>(legacy cards)"]
-        FX["Fenix<br/>(collections / NPL)"]
-        OBsys["Off-balance and<br/>write-off registers"]
+    subgraph L0["Layer 0 — Systems of record"]
+        RSsys["RS retail core → S01"]
+        Cards["Way4 / MIGR_WAY4 / Smart Card → S02"]
+        CLsys["CrediLogic (main origination) → S03"]
+        FX["Fenix → S17"]
+        OBsys["Off-balance / write-off / 7130<br/>(resolution, not a la_source)"]
     end
 
-    subgraph L1["Layer 1 — Staging: [CL_PORTFOLIO].[dbo] (one PORTFOLIO_* table per branch)"]
-        P["CL_PORTFOLIO_2, PORTFOLIO_RS, PORTFOLIO_Fenix,<br/>PORTFOLIO_CREDITCARDS_*, PORTFOLIO_RS_7130,<br/>PORTFOLIO_OFF_BALANCE, spis_v_ubytok_CL/RS"]
+    subgraph L1["Layer 1 — OLD staging: [CL_PORTFOLIO].[dbo] (one PORTFOLIO_* per source)"]
+        P["PORTFOLIO_RS · CL_PORTFOLIO_2 · PORTFOLIO_Fenix<br/>PORTFOLIO_CREDITCARDS_WAY4/_MIGR_WAY4/_SMART_CARD<br/>PORTFOLIO_OFF_BALANCE · PORTFOLIO_RS_7130 · spis_v_ubytok_CL/RS"]
     end
 
-    subgraph L2["Layer 2 — Mart: [Dictionaries].[risk_analytics] (~19 tables)"]
-        M["borrower · loans · loan_account · repayment_schedule · payments(_wiring)<br/>pledges · ratings · restructuring_v2 · refinance · collections · writeoff<br/>bankrupt · interest_rates · offbalance · guarantees · credit_lines<br/>loans_active · brm_all_data — branch discriminated by la_source"]
+    subgraph L2["Layer 2 — NEW mart: [Dictionaries].[risk_analytics] (~19 tables)"]
+        M["borrower · loans · loan_account · repayment_schedule · payments(_wiring)<br/>pledges · ratings · restructuring_v2 · refinance · collections · writeoff<br/>bankrupt · interest_rates · offbalance · guarantees · credit_lines<br/>loans_active · brm_all_data — branch = la_source (S01/S02/S03/S17)"]
     end
 
     subgraph L3["Layer 3 — Report extracts (draft SQL)"]
-        R["join_pre_final / join_CL (S03) · join_RS (S01)<br/>→ provisioning and regulatory outputs"]
+        R["join_pre_final / join_CL (S03) · join_RS (S01)"]
     end
 
-    CLsys --> P
     RSsys --> P
-    W4 --> P
-    SC --> P
+    Cards --> P
+    CLsys --> P
     FX --> P
     OBsys --> P
     P -->|ETL load| M
     M --> R
-    P -. reconciliation<br/>Сравнение_2026-04-01 .-> M
+    P -. reconciliation (FINDINGS, per-source) .-> M
 ```
 
-- **Layer 0 — systems of record.** The operational platforms that originate and
-  service loans (each a "branch" of the book).
-- **Layer 1 — `CL_PORTFOLIO` staging.** One `PORTFOLIO_*` table per branch,
-  harmonising each source into a portfolio row set. The database is named for its
-  first tenant (Credilogic) but now hosts **all** branches. This is the
-  **`Cl_portfolio`** side of the reconciliation workbook.
-- **Layer 2 — `Dictionaries.risk_analytics` mart.** The consolidated model — the
-  full ~19-table inventory in §4. `la_source` records which branch each snapshot
-  row came from. This is the **`Dictionaries`** side of the reconciliation.
-- **Layer 3 — report extracts.** The draft `join_*.sql` scripts read the mart and
-  compute exposures/provisions per contract (touching only 5 of its tables).
+- **Layer 0/1 — OLD `CL_PORTFOLIO`.** One `PORTFOLIO_*` table per source system;
+  the `Cl_portfolio` side of every reconciliation.
+- **Layer 2 — NEW `Dictionaries.risk_analytics` mart.** The consolidated model
+  (~19 tables, §4); `la_source` marks the source branch.
+- **Layer 3 — report extracts.** Draft `join_*.sql` read the mart per contract.
 
-## 3. The branches (source portfolios)
+The whole project's purpose: **reverse-engineer and verify the NEW mart against
+the OLD branch** (mart author unavailable, no spec → everything proven on data)
+so all business processes can migrate to the new DWH.
 
-Each `[CL_PORTFOLIO].[dbo]` table is one source stream. `la_source` in the mart's
-`loan_account` is the corresponding discriminator; only two codes are proven by
-the drafts (`S01`=RS, `S03`=Credilogic) — the rest are **inferred** and must be
-confirmed against the actual `la_source` reference table.
+## 3. The branches and the `la_source` map (CONFIRMED)
 
-| Staging table | Branch label | Source system | Nature | `la_source` |
-|---|---|---|---|---|
-| `CL_PORTFOLIO_2` | Credilogic | Credilogic | POS / consumer lending | **`S03`** (confirmed) |
-| `PORTFOLIO_RS` | RS | RS core-banking | Main loan book | **`S01`** (confirmed) |
-| `PORTFOLIO_Fenix` | Fenix | Fenix | Collections / recovery (NPL) | ? |
-| `PORTFOLIO_CREDITCARDS_WAY4` | CREDITCARDS_WAY4 | Way4 (OpenWay) | Credit cards (current processor) | ? |
-| `PORTFOLIO_CREDITCARDS_MIGR_WAY4` | CREDITCARDS_MIGR_WAY4 | Way4 | Cards migrated into Way4 | ? |
-| `PORTFOLIO_CREDITCARDS_SMART_CARD` | SMART_CARD | Smart Card | Credit cards (legacy processor) | ? |
-| `PORTFOLIO_RS_7130` | RS_7130 | RS (account 7130) | Memorandum / off-balance sub-book | ? |
-| `PORTFOLIO_OFF_BALANCE` | OFF_BALANCE | — | Off-balance exposures (Class VI contingents) | ? |
-| `spis_v_ubytok_CL` | spis_v_ubytok_CL | Credilogic | Debts written off to loss (списание в убыток) | ? |
-| `spis_v_ubytok_RS` | spis_v_ubytok_RS | RS | Debts written off to loss | ? |
+`la_source` has **four** values — one dictionary, confirmed on data. The
+contract number is **not** a global key (9,659 cross-source collisions); the
+global key is `l_gid` (§4).
 
-**Branch groupings that matter for risk:**
+| `la_source` | System | OLD staging table(s) | OLD↔NEW key (proven by coverage) |
+|---|---|---|---|
+| **`S01`** | RS (retail core) | `PORTFOLIO_RS` | `contract_id → l_loan_id` (loan_id **works** here) |
+| **`S02`** | Cards {Way4, SMARTCARD, Installment, kpk, Payda} | `PORTFOLIO_CREDITCARDS_WAY4` + `_MIGR_WAY4` + `_SMART_CARD` (UNION) | `contract_number (varchar20) → l_loan_number` |
+| **`S03`** | CrediLogic (main origination) | `CL_PORTFOLIO_2` | `contract_number → l_loan_number` (raw string; `l_loan_id` = **0** matches — different id space) |
+| **`S17`** | Fenix | `PORTFOLIO_Fenix` | `contractnumber → la_dog_num` + `source=S17` + date (`contract_id` non-unique: up to 33 contracts/id) |
 
-- **On-balance performing/NPL book:** Credilogic, RS, Fenix, the three card
-  branches — the exposures that carry `1400`-series principal and `1428`
-  provisions.
-- **Card branches ×3.** Way4, Smart Card and *migrated* Way4 coexist because a
-  card migration is in flight. A single card can plausibly appear in
-  `MIGR_WAY4` **and** `WAY4` around cut-over — a concrete de-dup hazard (§8).
-- **Off-balance & write-off branches.** `OFF_BALANCE` holds Class VI contingents
-  (guarantees, undrawn limits — the mart's `offbalance`/`guarantees`/`credit_lines`
-  tables). `RS_7130` and `spis_v_ubytok_*` hold Class VII memorandum balances for
-  debts **written off to loss** (the mart's `writeoff` table; loan status `I` =
-  *Списанный за баланс*). These must **not** be summed into live exposure: they
-  are memorandum, not balance-sheet, amounts.
+> **Why keys differ per source.** Different source systems populate `la_loan_id`
+> differently — S01's loan_id key matches, S03's returns 0. This is a *property of
+> the data*, not inconsistency: **always test the key by coverage per source, not
+> by column name** (`la_loan_id` matched 0 for S03 despite the name).
+
+**Resolution / memorandum tables (not `la_source` branches).** `OFF_BALANCE`,
+`RS_7130` and `spis_v_ubytok_CL/RS` are the OLD-side registers for off-balance
+contingents (Class VI) and debts written off to loss (Class VII memorandum, acct
+`7130`, loan status `I`). They feed the mart's **`offbalance` / `writeoff` /
+`collections`** tables (the step-9 *resolution pipeline*), and must **not** be
+summed into live balance-sheet exposure.
 
 ## 4. The mart tables — full inventory
 
-The mart is ~19 tables, not the 5 the drafts touch. Criticality tiers reflect how
-much a wrong/missing table distorts the provisioning number:
+~19 tables. Criticality tiers: **P0** foundation · **P1** ECL drivers · **P2**
+exposure completeness · **View** derived. Types: **Dim** master · **Snap**
+periodic snapshot · **Event** transactional log · **View**.
 
-- **P0 — foundation.** Portfolio cannot be built without them.
-- **P1 — ECL drivers.** Directly set IFRS 9 staging and PD/LGD/EAD/EIR.
-- **P2 — exposure completeness.** Off-balance / contingent EAD and condition
-  changes.
-- **View — derived.** Convenience filters and the consumption mart.
-
-Table types: **Dim** = master/reference entity; **Snap** = periodic snapshot
-keyed by a reporting date; **Event** = timestamped transactional log;
-**View** = derived.
-
-| Table | Tier | Type | Answers (semantic) | Likely grain / key | Primary risk role |
+| Table | Tier | Type | Answers (semantic) | Grain / key | Primary risk role |
 |---|---|---|---|---|---|
-| `borrower` | **P0** | Dim | кто клиент — who the client is | 1 / borrower · `b_borrower_id` | Counterparty, borrower-level PD, connected parties |
-| `loans` | **P0** | Dim | какой кредит — the contract & its terms | 1 / contract · `l_loan_number` | Product, term, currency, purpose, rate |
-| `loan_account` | **P0** | Snap | сколько должен по счетам — GL balances & DPD | contract × `la_reporting_date` × `la_source` | Exposure, overdue, provisions base |
-| `repayment_schedule` | **P1** | Snap/plan | сколько должен платить по графику — contractual cash flows | contract × installment (date/no.) | DPD, cash-flow, EIR, IFRS 9 SPPI/discounting |
-| `payments` | **P1** | Event | сколько реально заплатил — actual repayments | 1 / payment (contract, date, amount) | Cure, DPD, behavioural PD |
-| `payments_wiring` | **P1** | Event | как платёж разложился — allocation to principal/interest/commission | 1 / payment component | Reconciles payments to `loan_account` buckets |
-| `pledges` | **P1** | Dim | какой залог — collateral | collateral item / contract | LGD, recovery, coverage |
-| `ratings` | **P1** | Dim (versioned) | какой рейтинг/риск — internal rating | borrower/contract × date | PD, internal rating grade |
-| `restructuring_v2` | **P1** | Event | меняли ли условия — modification / forbearance | 1 / restructuring event | SICR → Stage 2/3, forbearance flag |
-| `writeoff` | **P1** | Event | списали ли долг — write-off | 1 / write-off per contract | NPL bridge, recovery; ties to `spis_v_ubytok`/7130 |
-| `collections` | **P1** | Event/status | передали ли во взыскание — in collections | contract/borrower × case | Problem assets → Stage 3 |
-| `bankrupt` | **P1** | Event/flag | есть ли банкротство — bankruptcy | 1 / borrower (or contract) | Hard default indicator → Stage 3 |
-| `interest_rates` | **P1** | Dim | какие ставки — contract rates | contract · `dlcr_dog_num` | EIR, discounting, interest EAD |
-| `offbalance` | **P2** | Snap | внебалансовые обязательства — contingents | contract × date | EAD/CCF, Class VI |
-| `guarantees` | **P2** | Dim/Event | есть ли гарантии — guarantees | guarantee / contract/borrower | Credit-risk mitigation (CRM), LGD |
-| `credit_lines` | **P2** | Dim/Snap | лимиты и неиспользованная часть — limits & undrawn | line / contract | Undrawn × CCF → EAD |
-| `refinance` | **P2** | Event | новый кредит вместо старого — refinancing link | old → new contract link | Condition change, roll-over / evergreening risk |
-| `loans_active` | **View** | View | только действующие — active loans only | filtered `loans` | Convenience filter for live book |
-| `brm_all_data` | **P0/P1** | View | общая витрина БРМ — the BRM consumption mart | wide, contract × date | Final витрина — **P0 if reports read it directly** |
+| `borrower` | **P0** | Dim | кто клиент | 1 / borrower · `b_borrower_id` | Counterparty, borrower-level PD |
+| `loans` | **P0** | Dim | какой кредит | **1 / `l_gid`** (`l_report_date` = state marker, not snapshot key) | Product, term, currency, purpose |
+| `loan_account` | **P0** | Snap | сколько должен по счетам | **`la_gid` × `la_reporting_date` × `la_source`** (control `la_dog_num`) | Exposure, overdue, provisions base; **defines population** |
+| `repayment_schedule` | **P1** | Snap/plan | сколько должен платить по графику | contract × installment | DPD, cash flow, EIR |
+| `payments` | **P1** | Event | сколько реально заплатил | 1 / payment | Cure, DPD, behavioural PD |
+| `payments_wiring` | **P1** | Event | как платёж разложился | 1 / payment component | Allocation → `loan_account` buckets |
+| `pledges` | **P1** | Dim | какой залог | collateral / contract | LGD, recovery, coverage |
+| `ratings` | **P1** | Dim (versioned) | какой рейтинг/риск | borrower/contract × date | PD, internal grade |
+| `restructuring_v2` | **P1** | Event | меняли ли условия | restructuring event | SICR → Stage 2/3, forbearance |
+| `writeoff` | **P1** | Event | списали ли долг | write-off / contract | NPL bridge, recovery (→ 7130/spis_v_ubytok) |
+| `collections` | **P1** | Event | передали ли во взыскание | contract/borrower × case | Problem assets → Stage 3 |
+| `bankrupt` | **P1** | Event/flag | есть ли банкротство | 1 / borrower | Hard default → Stage 3 |
+| `interest_rates` | **P1** | Dim | какие ставки | contract · `dlcr_dog_num` | EIR, discounting |
+| `offbalance` | **P2** | Snap | внебалансовые обязательства | contract × date | EAD/CCF, Class VI |
+| `guarantees` | **P2** | Dim/Event | есть ли гарантии | guarantee / contract | CRM, LGD |
+| `credit_lines` | **P2** | Dim/Snap | лимиты / неиспользованная часть | line / contract | Undrawn × CCF → EAD |
+| `refinance` | **P2** | Event | новый кредит вместо старого | old → new link | Condition change, roll-over risk |
+| `loans_active` | **View** | View | только действующие | filtered `loans` | Live-book filter |
+| `brm_all_data` | **P0/P1** | View | общая витрина БРМ | wide, contract × date | Final consumption mart (P0 if reports read it) |
 
-**Join model.** The **contract number is the hub** (`loans.l_loan_number`), and
-contract-level tables attach to it; borrower-level tables (`borrower`, likely
-`bankrupt`, `ratings`, some `guarantees`) attach via `b_borrower_id`. As already
-seen in the mart, the key **column names are heterogeneous** across tables
-(`la_dog_num`, `c_contract_number`, `dlcr_dog_num` all = `l_loan_number`), so
-expect more `*_dog_num` / `*_contract_number` variants. Special cases:
-`payments_wiring` → `payments` (payment id); `refinance` links two contracts
-(old/new); `repayment_schedule` is contract × installment.
+**Join model (CONFIRMED).** The **global key is `l_gid`** (loans) ↔ **`la_gid`**
+(loan_account), matched with `la_source = l_source`; `la_dog_num = l_loan_number`
+is a control, not the cross-source key. Because the contract number collides
+across sources, joins on it must be **scoped per `la_source`** using the
+per-source keys in §3. **Population** is defined by membership in `loan_account`
+at a `la_reporting_date` (`loans` carries no snapshot). Grain is clean per source;
+prefer `gid` over `dog_num` (S17 has one `dog_num` collision per snapshot).
+
+**S02 caveat.** For cards, the **product dimension is absent** in the mart —
+`l_product_type / l_subproduct_type / l_loan_type / l_segment /
+l_credit_purpose / l_loan_purpose` are **NULL on all rows**; only `l_tag` (a 0/1
+flag) is filled. Cards can be reconciled by perimeter/balance/provisions, **not**
+by product.
 
 **Detailed columns.** Only `loans`, `borrower`, `loan_account`, `pledges`,
 `interest_rates` are catalogued at column level (they appear in the drafts) — see
-[`risk_analytics_data_model.md`](risk_analytics_data_model.md). The other tables'
-columns/keys/grains are **open items** (§10).
+[`risk_analytics_data_model.md`](risk_analytics_data_model.md). Other tables'
+columns/keys are open (§11).
 
 ## 5. Credit-risk lifecycle & IFRS 9 mapping
-
-The tables line up along the loan lifecycle; each stage supplies specific IFRS 9
-inputs.
 
 ```mermaid
 flowchart LR
     subgraph O["Origination"]
         A["borrower · loans · ratings<br/>interest_rates · credit_lines"]
     end
-    subgraph C["Collateral / mitigation"]
-        B["pledges · guarantees"]
+    subgraph B["Collateral / CRM"]
+        C["pledges · guarantees"]
     end
     subgraph S["Servicing"]
         D["repayment_schedule (plan)<br/>vs payments / payments_wiring (actual)<br/>→ loan_account (balances, DPD)"]
@@ -213,212 +185,221 @@ flowchart LR
     subgraph E["Risk events"]
         F["restructuring_v2 · refinance<br/>collections · bankrupt"]
     end
-    subgraph R["Resolution"]
-        G["cure (← payments)  |  writeoff → recovery"]
+    subgraph R["Resolution pipeline"]
+        G["cure (← payments) | writeoff → recovery<br/>offbalance / 7130 memorandum"]
     end
     O --> S --> E --> R
-    B -.-> R
+    C -.-> R
     E -. SICR / stage .-> S
 ```
 
 | IFRS 9 input | Driven by | Notes |
 |---|---|---|
-| **DPD** | `loan_account` (`days_past_due`), `repayment_schedule` vs `payments` | 30+ → Stage 2 presumption; 90+ → default/Stage 3 |
-| **SICR / forbearance** | `restructuring_v2`, `refinance` | Modification & forbearance → Stage 2/3 |
-| **Default (Stage 3)** | `bankrupt`, `collections`, `writeoff`, 90+ DPD | Hard + soft default markers |
-| **Cure** | `payments`, `payments_wiring` | Return from Stage 2/3 toward Stage 1 |
+| **DPD** | `loan_account` (`days_past_due`), `repayment_schedule` vs `payments` | 30+ → Stage 2 presumption; 90+ → default. **DPD diverges everywhere (§9)** |
+| **SICR / forbearance** | `restructuring_v2`, `refinance` | Modification → Stage 2/3 |
+| **Default (Stage 3)** | `bankrupt`, `collections`, `writeoff`, 90+ DPD | Hard + soft markers |
+| **Cure** | `payments`, `payments_wiring` | Return toward Stage 1 |
 | **PD** | `ratings`, `bankrupt` | Rating grade + default flags |
-| **LGD** | `pledges`, `guarantees`, `writeoff` | Collateral/CRM coverage + recovery experience |
-| **EAD** | `loan_account`, `credit_lines` (undrawn × CCF), `offbalance` (CCF) | On- + off-balance exposure |
-| **EIR / discounting** | `interest_rates`, `repayment_schedule` | Effective rate over contractual cash flows |
-| **Booked ECL** | `loan_account` (`1428` + `1845` + `18771`) | Posted provision (see §7) |
+| **LGD** | `pledges`, `guarantees`, `writeoff` | Coverage + recovery experience |
+| **EAD** | `loan_account`, `credit_lines` (undrawn × CCF), `offbalance` (CCF) | On- + off-balance |
+| **EIR** | `interest_rates`, `repayment_schedule` | Discounting of cash flows |
+| **Booked ECL** | `loan_account` (`1428` + `1845` + `18771`) | Posted provision (§7) |
 
-This mapping also explains the **write-off / memorandum branches** (§3): the
-`writeoff`/`collections`/`bankrupt` tables are the mart-side record of the
-accounting tail that lands in `spis_v_ubytok_*` and account `7130`. And it gives
-the tools to **validate the reconciliation's overdue-principal break** (§9): the
-`1424` classification can be checked against `repayment_schedule` vs `payments`
-DPD.
+> **Bucket vs DPD (S17 finding).** `delinquency_bucket` is formed **independently
+> of the DPD fields** (S17: basket 99.98% correct while DPD is mostly NULL). Which
+> field is the normative source for 90+/staging is an open question (§11).
 
 ## 6. GL accounts — regulatory map
 
-The `la_account_XXXX` columns are the bank's ledger accounts per V1100006793.
-The chart is organised in classes: **Class 1** assets, **Class 2** liabilities,
-**Class 6** contingent claims/obligations, **Class 7** memorandum (off-balance).
+Classes: **1** assets, **2** liabilities, **6** contingents, **7** memorandum.
 
 **Confirmed against the Standard Chart of Accounts:**
 
-| Account | Official grouping | Role in the extracts |
+| Account | Official grouping | Role |
 |---|---|---|
-| `1400` group — `1401`,`1403`,`1411`,`1417` | Требования к клиентам (client loans: overdraft, cards, short/long-term, leasing, factoring…) | Current **principal** — summed as `outstanding` |
-| `1424` | Просроченная задолженность клиентов (overdue client debt, within 1400) | **Overdue principal** |
-| `1428` | Резервы (провизии) по займам и фин. лизингу клиентам | **IFRS provision** (main ECL) |
-| `1740` | Начисленные доходы по займам/лизингу клиентам | Accrued **interest** |
-| `1741` | (overdue accrued income, within 1740) | **Overdue interest** |
-| Class 7 e.g. `7130` | Меморандумные счета — долги, списанные в убыток | Written-off tail (see `RS_7130`, `spis_v_ubytok_*`, `writeoff`) |
+| `1401`,`1403`,`1411`,`1417` (grp `1400`) | Требования к клиентам (client loans) | Current **principal** = `outstanding` |
+| `1424` | Просроченная задолженность клиентов | **Overdue principal** |
+| `1428` | Резервы (провизии) по займам/лизингу | **IFRS provision** (main ECL) |
+| `1740` / `1741` | Начисленные доходы (accrued / overdue) | Interest / overdue interest |
+| Class 7 (`7130`) | Долги, списанные в убыток (memorandum) | Write-off tail (`writeoff`, `spis_v_ubytok`) |
 
-**Functional role from the drafts (verify exact caption against the COA):**
+**Functional (verify caption vs COA):** `1430/1431/1434/1435` discounts (ХД/КХД);
+`1773/1774/1775/1784` deferred income/discount (1700-series); `1818` commissions;
+`1838` overdue commissions; `1845` provision component; `1860` fees; `1879`
+penalties; `2794` Class-2 deferred; `1877` (+ analytic `18770`/`18771`) IFRS
+provision. **Identity (S01, CONFIRMED):** `1877 = 18770 + 18771` (`18770` = 0 on
+the slice).
 
-| Account(s) | Used in extracts as | Likely COA meaning |
-|---|---|---|
-| `1430`, `1431` | `dis_1430`, `1431` | Adjustments / discount within 1400-series |
-| `1434`, `1435` | `discount_1434/1435`, `KHD_1434` | Discount / correction of carrying value (ХД/КХД) |
-| `1773`, `1774`, `1775`, `1784` | `discount_1773…1784` | Deferred income / discount (1700-series) |
-| `1818` | `loan_servicing_commissions` / `commissions` | Accrued commission income (1800-series) |
-| `1838` | `overdue_commissions_income` | Overdue commission income |
-| `1845` | `ifrs_1845` | Provision component (part of `provisions_total`) |
-| `1860` | `fees_1860` | Fees |
-| `1877` (+ `18770`, `18771`) | `IFRS1877`, `…_DEB`, `…_WTRAF_i_PENII` | IFRS provision account **and its analytic sub-accounts** (18770 debtor, 18771 write-off traffic & penalties) |
-| `1879` | `penalties` | Accrued penalties (неустойка/пеня/штраф) |
-| `2794` | `discount_2794` | **Class 2 (liability/deferred)** — deferred income / premium; verify |
+## 7. Account computation — formulas & identities
 
-> `18770`/`18771` are 5-digit **analytic extensions of `1877`** (bank
-> sub-ledger), not separate COA accounts.
-
-## 7. How the accounts are computed (team conventions)
-
-These formulas are consistent across the three drafts and are the **canonical
-definitions** the team uses. They belong in the mart/BI layer, not scattered in
-ad-hoc SQL.
+Canonical formulas the drafts share, plus identities **proven on data**
+(FINDINGS §3):
 
 ```text
-outstanding            = 1401 + 1403 + 1411 + 1417                     -- current principal
-od                     = outstanding + 1424                            -- total principal (incl. overdue)
-balance                = od + 1740 + 1741 + 1879 + 1818 + 1838         -- gross exposure
-OD_percent             = od + 1740 + 1741                              -- principal + interest only
-balance_with_discount  = balance                                       -- EAD (net of discounts)
-                         - (1434 + 1773 + 1774 + 1784)
-                         - (-1435 + 1775)
-provisions_calculated  = ( balance - (1434 - (-1435) - 1773) )         -- recomputed ECL
-                         * currency_reserve_percentage / 100
-provisions_total       = 1428 + 1845 + 18771                           -- booked ECL (from GL)
+outstanding            = 1401 + 1403 + 1411 + 1417
+od                     = outstanding + 1424
+balance (gross)        = od + 1740 + 1741 + 1879 + 1818 + 1838      -- CONFIRMED; incl. interest
+OD_percent             = od + 1740 + 1741
+balance_with_discount  = balance - (1434+1773+1774+1784) - (-1435+1775)   -- EAD
+provisions_total       = 1428 + 1845 + 18771       -- CONFIRMED on all 237,274 S03 rows
+                                                    -- (+18770/1877 BREAKS the identity → excluded)
+S17 old ifrs_balance   = outstanding + outstanding_overdue + interest + overdue_interest + penalties  -- 100%
+S17 new total_balance  = 1401+1403+1411+1417+1424+1740+1741+1879   -- CONFIRMED
+S01 new 18771          = PORTFOLIO_RS.deb_1877_prov + [_1877]
 dpd                    = days_past_due - 1
 ```
 
-Delinquency buckets (`basket`) on `days_past_due`: no-overdue (`≤1`/null),
-`1–29`, `30–59`, `60–89`, `90+`; `90+` also emitted as a 0/1 flag and `90+sum`.
-`provisions_total` (booked) vs `provisions_calculated` (recomputed) is the
-control pair — their divergence is what provisioning review inspects.
+`provisions_calculated = (balance - (1434 - (-1435) - 1773)) * reserve% / 100` —
+a legacy recompute (see finding #1). Delinquency buckets on `days_past_due`:
+no-overdue / 1–29 / 30–59 / 60–89 / 90+.
 
 ## 8. Correctness review — «всё ли там правильно»
 
-Ranked by impact. **C** = confirmed defect, **V** = needs verification / design
-decision.
+**C** = confirmed defect, **V** = verify / design decision, **R** = resolved.
 
-| # | Sev | Where | Finding | Fix / action |
+| # | Sev | Where | Finding | Fix / status |
 |---|---|---|---|---|
-| 1 | **C** | `provisions_calculated` vs `balance_with_discount` | The discount base for **provisions** and for **EAD** disagree. Provisions base = `balance − 1434 − 1435 + 1773`; EAD base = `balance − 1434 − 1773 − 1774 − 1784 + 1435 − 1775`. **Signs of `1773` and `1435` are opposite** between the two, and provisions ignore `1774/1775/1784`. IFRS ECL should sit on the same carrying base as EAD. This is the likely driver of the Excel gap where `provisions_calculated` (127.5 bn) far exceeds booked `provisions_total` (≈109–117 bn). | Agree ONE discount base. Almost certainly `provisions_calculated` should reuse the EAD net base; the `-(1434-(-1435)-1773)` term is a legacy simplification predating accounts `1774/1775/1784`. |
-| 2 | **C** | `join_RS.sql`, `b.b_oked 'Sector'` | Alias `b` is undefined — the borrower table is aliased `br`. As written the query fails to compile. | `br.b_oked`. |
-| 3 | **C** | `1435` sign | CL/pre-final negate `1435` (`-la.la_account_1435`); RS uses it raw. Combining CL and RS outputs mixes sign conventions. | Normalise `1435` (and the whole discount block) to one sign at the mart layer. |
-| 4 | **C** | DPD `-1` offset | CL applies `-1` to `days_past_due` (dpd) but **not** to `days_past_due_principal/_interest/max`; RS applies `-1` to the principal/interest/max day columns **and** to dpd. Same metric, different offset per report. | Fix the offset once in the mart; stop subtracting in the report layer. |
-| 5 | **C** | `join_RS.sql` purpose `CASE` | `120000000000004209` appears in **two** branches (differ only by capitalisation); the second is unreachable dead code. | Delete the duplicate; move the purpose map to a lookup table. |
-| 6 | **V** | Join fan-out | `pledges` (CL) and `interest_rates` (RS) are 1-to-many. A loan with several collateral/rate rows **multiplies** the `loan_account` money columns. RS masks this by filtering one contract; at scale it double-counts. The same hazard applies to any 1-to-many table (`payments`, `restructuring_v2`, `guarantees`) joined without aggregation. | Enforce ≤1 row per loan (pick latest / aggregate) before joining. |
-| 7 | **V** | Branch / `la_source` mixing | Each extract pins one `la_source`. Across branches a contract can exist twice — e.g. a card in `MIGR_WAY4` **and** `WAY4`, or a loan in `PORTFOLIO_RS` **and** `spis_v_ubytok_RS`. Unioning branches without de-dup double-counts balances **and** provisions. | Define branch precedence + de-dup keys; never sum memorandum (7130 / write-off) with live balance. |
-| 8 | **V** | `provisions_total` composition | `provisions_total = 1428 + 1845 + 18771` includes `18771` but **not** `18770` (debtor) or `1877` (parent), though all are selected. | Confirm whether `18770`/`1877` belong in booked ECL, or are deliberately receivables. |
-| 9 | **V** | `'status'` semantics | `join_pre_final` labels **`l_loan_status`** (decoded) as `status`; `join_CL` labels **`la.la_status`** (account status) as `status`. Two different fields share one column name. | Pick one; name them `loan_status` vs `account_status` distinctly. |
-| 10 | **V** | `la_account_1877` unqualified | Selected without the `la.` prefix (relies on the name being unique across joined tables). | Qualify all columns. |
+| 1 | **C** | `provisions_calculated` vs EAD | Provisions base `balance − 1434 − 1435 + 1773` ≠ EAD base `balance − 1434 − 1773 − 1774 − 1784 + 1435 − 1775` (opposite signs on `1773`/`1435`; provisions omit `1774/1775/1784`). A legacy recompute predating the newer discounts. | Agree ONE discount base; almost certainly reuse EAD. |
+| 2 | **C** | `join_RS.sql` `b.b_oked` | Alias `b` undefined (borrower = `br`) → won't compile. | `br.b_oked`. |
+| 3 | **C** | `1435` sign | CL/pre-final negate `1435`; RS uses it raw. | Normalise sign at the mart layer. |
+| 4 | **C** | DPD `-1` offset | CL applies `-1` to `dpd` only; RS to the day columns too. | Fix once in the mart. |
+| 5 | **C** | `join_RS.sql` `CASE` | `120000000000004209` duplicated (dead branch). | Delete; use a lookup table. |
+| 6 | **V** | Join fan-out | 1-to-many tables (`pledges`, `interest_rates`, `payments`, `restructuring_v2`, `guarantees`) multiply money columns if joined un-aggregated. | Enforce ≤1 row/loan before joining. |
+| 7 | **V** | Cross-source de-dup | Join/union on the contract number double-counts (9,659 collisions); memorandum tables must not sum with live balance. | Key on `gid` + `source`; separate resolution tables. |
+| 8 | **R** | `provisions_total` composition | **Resolved:** `1428 + 1845 + 18771`; adding `18770`/`1877` **breaks** the identity across all 237,274 S03 rows, so they are correctly **excluded**. | No change — confirmed correct. |
+| 9 | **V** | `'status'` semantics | `join_pre_final` labels `l_loan_status`, `join_CL` labels `la_status`, both as `status`. | Name `loan_status` vs `account_status`. |
+| 10 | **C (data)** | Key ≠ column name | `la_loan_id` matched **0** for S03; contract number is not global (9,659 collisions). | Always test key by **coverage per source**; use `gid`. |
 
-**What is right:** the principal/interest/penalty/commission assembly
-(`outstanding → od → balance`) is internally consistent and repeated identically
-across all three drafts; the join graph off `loans` is correct; `provisions_total`
-matches the standalone provisions check query. The core model is sound — the
-issues are concentrated in the **discount/provision base (#1)** and in
-**multi-branch de-duplication (#6, #7)**.
+Core assembly (`outstanding → od → balance`) and `provisions_total` are
+data-confirmed. Issues concentrate in the **provision base (#1)** and
+**cross-source keying / de-dup (#7, #10)**.
 
-## 9. Reconciliation — `CL_PORTFOLIO` staging ↔ mart (2026-04-01)
+## 9. Reconciliation — data-proven (FINDINGS, 01.07.2026)
 
-The `Сравнение_2026-04-01.xlsx` workbook reconciles the **`CL_PORTFOLIO`
-staging** side against the **`Dictionaries` mart** at `2026-04-01` (the same
-snapshot the `S03` pre-final extract targets). Aggregate figures (₸, bn = 10⁹):
+**Sweeping conclusion:** **balance reconciles across every source; provisions
+(`1428`/`18771`) and DPD diverge across every source.** These are two *systemic*
+questions for the mart author, not one-off defects.
 
-| Metric | Cl_portfolio | Dictionaries | Difference |
+| Source | Perimeter (old / new / matched) | Balance | Provisions | DPD |
+|---|---|---|---|---|
+| **S01** RS | 4,385 / 4,838 / 4,380 (by `loan_id`) | ✓ −0.02 ₸ | ✓ 100% (25.51 bn) | ✗ NULL 3,618/4,380; Jun→Jul +60%; +284 new-90+ vs old-0 |
+| **S03** CL | 237,274 / 237,386 / 234,367 (234,362 ≤0.01 ₸) | ✓ Δ 140,854 ₸ | ✗ **new higher +30.6 bn** | ✗ NULL 205,264; DPD=−1 |
+| **S17** Fenix | 79,621 / 90,596 / 79,617 (by `contractnumber`) | ✓ Δ −5.6 M (4 contracts) | ✗ new higher +29.8 M (`18771`) | ✗ interest-DPD all NULL; 90+ lost on 932 (273 M) |
+| **S02** Cards | **not yet reconciled — next, riskiest** | — | — | — |
+
+- **S03 provisions +30.6 bn is CONFIRMED real** (composition holds). It splits:
+  **`1428` ≈ 28.2 bn → owner = MODEL** (revaluation) and **`18771` ≈ 2.3 bn →
+  owner = ETL / population**. Lumping both into "new is higher" is under-resolved.
+- **ONLY_OLD / ONLY_NEW.** S03 ONLY_OLD 2,907 = status **V (terminated)**;
+  ONLY_NEW ~3,019 of which ~1,000 status **O with zero balance** = a mart
+  **over-retention defect** (stale Opens stuck since Jan-2026, tag 11).
+- **S02 is untouched and highest-risk**: UNION of three card tables across the
+  **Feb-2026 migration break** (`loan_account` S02 ~185k/mo → 31k), product fields
+  NULL, defect cluster B1A (`ID`/`LOAN_ID_KR`). Prove key + date + population
+  before provisions.
+
+### DISPROVEN — do not repeat
+
+- ❌ **"S03: 17.2 bn lost exposure."** Reality: 2,907 contracts = status **V
+  (terminated)**, confirmed both branches. Gross 17.2 / od 14.1 / prov 8.5 →
+  **net ~5.6 bn**. Direction is **reversed**: OLD *over-retains* terminated
+  contracts; the mart correctly *excludes* them by lifecycle rule. **This is the
+  same phenomenon as the +17.55 bn overdue-principal break in the 2026-04-01
+  aggregate below** — an OLD over-retention, not a mart loss.
+- ❌ **"balances changed ⇒ alive."** Movement in 824/2,902 (28%) is residual
+  accounting, not a live loan.
+- ❌ **"Installment/kpk/Payda are structurally ONLY_NEW."** Reality: S02 product
+  fields NULL on all 27,825 rows → products can't be matched because the S02
+  product dimension is **absent** in the mart.
+- ✅ **"S03 2,907 not in writeoff/collections/offbalance"** — held after re-keying
+  by `gid` (a string key gave a false 0; `gid` also gives 0 = real absence).
+
+### 2026-04-01 aggregate (earlier `Сравнение` workbook)
+
+The `CL_PORTFOLIO` staging ↔ mart aggregate at 2026-04-01 (₸ bn):
+
+| Metric | Cl_portfolio | Dictionaries | Δ |
 |---|---:|---:|---:|
-| Contract count | 263,450 | 261,464 | **+1,986** |
-| Outstanding (principal) | 904.87 bn | 902.97 bn | +1.90 bn |
-| Overdue principal (1424) | 23.29 bn | 5.74 bn | **+17.55 bn** |
-| `od` | 928.16 bn | 908.72 bn | +19.44 bn |
-| `balance` | 962.02 bn | 937.33 bn | +24.69 bn |
-| Provisions `1428` | 108.62 bn | 113.96 bn | −5.34 bn |
-| EAD (`balance_with_discount`) | 933.28 bn | 910.90 bn | +22.39 bn |
-| `provisions_calculated` | 127.48 bn | 112.62 bn | +14.85 bn |
-| `provisions_total` | 109.06 bn | 117.01 bn | **−7.95 bn** |
+| Contracts | 263,450 | 261,464 | +1,986 |
+| Outstanding | 904.87 | 902.97 | +1.90 |
+| Overdue principal (`1424`) | 23.29 | 5.74 | **+17.55** |
+| `balance` | 962.02 | 937.33 | +24.69 |
+| Provisions `1428` | 108.62 | 113.96 | −5.34 |
+| EAD | 933.28 | 910.90 | +22.39 |
+| `provisions_calculated` | 127.48 | 112.62 | +14.85 |
+| `provisions_total` | 109.06 | 117.01 | −7.95 |
 
-**Reading it:**
-- **Population gap** drives most rows: ≈3,544 contracts in staging but not the
-  mart, ≈1,559 in the mart but not staging → net **+1,986**. The two books differ
-  in **both** directions (not a one-way lag) — consistent with §8 de-dup / branch
-  scope questions.
-- **Overdue principal** is the largest relative break (+17.55 bn): staging
-  classifies far more `1424` than the mart — a **staging vs mart mapping/timing**
-  difference in what counts as overdue. Cross-check via `repayment_schedule` vs
-  `payments` DPD (§5).
-- **Provisions move opposite to exposure** — the mart holds *more* booked ECL
-  (`1428` −5.34 bn; `provisions_total` −7.95 bn) despite *less* overdue balance,
-  while staging's *recomputed* `provisions_calculated` is +14.85 bn. This is
-  finding **#1** surfacing at portfolio scale: the recompute base ≠ the booked
-  base. Reconcile the provisions line first.
+The **+17.55 bn overdue break is explained by the DISPROVEN item above** (OLD
+retains terminated-contract overdue the mart drops). Provisions being higher in
+the mart (`1428` −5.34; `provisions_total` −7.95) is **directionally consistent**
+with the S03 +30.6 bn at 01.07.2026. The workbook is an ETL DQ control before the
+numbers feed provisioning/regulatory reporting.
 
-The workbook is an **ETL data-quality control** confirming the staging→mart load
-is complete and value-accurate before the numbers feed IFRS provisioning and
-regulatory reporting.
+## 10. Reconciliation method & guardrails
 
-## 10. Open questions to confirm
+From [`risk_dwh_reconciliation/CLAUDE.md`](risk_dwh_reconciliation/CLAUDE.md) —
+the discipline behind the findings above:
 
-1. **`la_source` dictionary** — the full code↔branch map (only `S01`=RS,
-   `S03`=CL are proven). Where do Fenix, the three card branches, `RS_7130`,
-   `OFF_BALANCE` and the write-off branches land?
-2. **`brm_all_data` scope** — is it the **final BRM consumption витрина**? If so
-   it is **P0**, and Layer-3 reports should read it rather than re-joining base
-   tables. Confirm what it contains (which of the ~19 tables are pre-joined) and
-   its grain.
-3. **Keys & grains of the newly-inventoried tables** — confirm join keys and
-   whether contract- or borrower-level for `repayment_schedule`, `payments`,
-   `payments_wiring`, `ratings`, `restructuring_v2`, `refinance`, `collections`,
-   `writeoff`, `bankrupt`, `offbalance`, `guarantees`, `credit_lines`.
-4. **`payments` vs `payments_wiring`** — confirm `payments_wiring` is the
-   allocation breakdown (principal / interest / commission / penalty) and that it
-   reconciles to the `loan_account` GL buckets.
-5. **Stage / SICR source of truth** — which table/column carries the IFRS 9 stage
-   (1/2/3) and the SICR / forbearance flags (`restructuring_v2`? a stage column on
-   `loan_account`?).
-6. **Provision base (#1)** — is the `provisions_calculated` discount base a
-   deliberate policy or a legacy bug? This decides ≈15 bn of the gap.
-7. **Account captions** — pin `1430/1431/1773/1774/1775/1784/1818/1838/1860/2794`
-   to their exact V1100006793 captions (§6 lists functional roles).
-8. **Write-off / off-balance handling** — confirm memorandum branches (7130,
-   `spis_v_ubytok_*`, `OFF_BALANCE`) and the `writeoff`/`offbalance` tables are
-   excluded from live-exposure sums.
+- **Spiral order.** schema/key types → `source` domain → grain (`raw_rows` vs
+  `distinct_key`) → key **by coverage** → align dates to month-start → FULL OUTER
+  perimeter → balances on MATCHED → economic substance → provisions/DPD/90+ →
+  resolution pipeline. *Don't deepen until the prior turn closes with a **cause**,
+  not a number.*
+- **Antipatterns.** Column name ≠ semantics · presence-in-table ≠ live loan ·
+  `NULL` ≠ 0 (and `NULL days_past_due` ≠ no overdue) · `INNER JOIN` is blind to
+  ONLY_OLD/ONLY_NEW · "new higher" ≠ "new wrong" (need an IFRS 9/accounting
+  benchmark) · triple-zero across three tables = a **broken key**, re-key by
+  `gid` before concluding absence.
+- **SQL engine rules.** Read-only (SELECT / `#temp`); `MAXDOP 1` on heavy
+  queries; no PII in output; source/date/tolerance are parameters; **do not bake
+  normalisation into JOINs** (raw key = normalised, 259,905 = 259,905;
+  `UPPER(LTRIM(RTRIM()))` on both sides makes the JOIN non-sargable → hangs);
+  aggregate first, then detail.
 
-## 11. Glossary (RU/EN)
+## 11. Open questions (for the mart author / human)
+
+Resolved by FINDINGS: `la_source` map (§3); global key `l_gid` (§4);
+`provisions_total` composition (#8). **Remaining:**
+
+1. **Valence of `1428` (+~28 bn):** does the new over-value or the old
+   under-reserve? Needs an accounting / approved IFRS 9 benchmark.
+2. **Semantics of new-`1428` vs old-`1428`** — the formula identity holds; the
+   *meaning* identity is unproven.
+3. **S2T rules for `1428` / `18771` / DPD source** across all sources.
+4. **DPD mass-NULL** — fill semantics; is `−1`/`1→0` allowed; the Jun→Jul jump.
+5. **Normative field for 90+/buckets** — DPD or `delinquency_bucket`? (S17:
+   bucket is independent of DPD.)
+6. **S02 product markup** — dropped in migration, or fetched from a dictionary by
+   `gid`?
+7. **`brm_all_data` scope** — is it the final consumption витрина (→ P0)? What's
+   pre-joined, at what grain?
+8. **Owner of the current provisioning report** — source of the 8.5 bn on
+   terminated contracts (double count?).
+
+## 12. Glossary (RU/EN)
 
 | RU | EN / meaning |
 |---|---|
-| Требования к клиентам | Client loan claims (account class 1400) |
-| Провизии / резервы | Provisions / reserves (ECL) — `1428`, `1845`, `18771` |
-| Вознаграждение | Interest (`1740` accrued, `1741` overdue) |
+| Требования к клиентам | Client loans (class 1400) |
+| Провизии / резервы | Provisions / ECL (`1428`+`1845`+`18771`) |
 | Основной долг (ОД) | Principal (`outstanding`; `od` incl. overdue `1424`) |
-| Просрочка / дней просрочки (DPD) | Overdue / days past due |
-| Дисконт (ХД/КХД) | Discount / carrying-value correction (`1434/1435/1773…`) |
-| Списание в убыток | Write-off to loss (Class 7 memorandum, `7130`; `writeoff` table) |
-| Внебалансовый / меморандум | Off-balance / memorandum (Class 6/7; `offbalance`) |
-| Реструктуризация / форбиренс | Restructuring / forbearance (`restructuring_v2`) → SICR |
-| Рефинансирование | Refinancing (`refinance`) — new contract replaces old |
-| Взыскание | Collections (`collections`) — problem-asset recovery |
-| Кюр (cure) | Return from Stage 2/3 to Stage 1 after payments |
-| Ветка / источник | Branch / source system (`la_source`) |
-| МСФО 9 / IFRS 9 | Expected-credit-loss provisioning standard |
-| SICR | Significant Increase in Credit Risk → Stage 2 |
-| Stage 1/2/3 | Performing / underperforming (SICR) / credit-impaired |
-| PD / LGD / EAD | Probability of Default / Loss Given Default / Exposure at Default |
-| CCF | Credit Conversion Factor (undrawn/off-balance → EAD) |
-| EIR (ЭПС) | Effective Interest Rate — discounting of cash flows |
-| NPL | Non-performing loan |
+| Просрочка / DPD | Overdue / days past due |
+| Списание в убыток | Write-off to loss (class 7 memo, `7130`) |
+| Реструктуризация / рефинанс | Restructuring / refinancing → SICR |
+| Взыскание | Collections → Stage 3 |
+| Кюр (cure) | Return from Stage 2/3 to Stage 1 |
+| Валентность | Valence — which branch is right (needs a benchmark) |
+| Периметр / бакет | Perimeter / bucket (MATCHED / ONLY_OLD / ONLY_NEW) |
+| Ветка / источник (`la_source`) | Branch / source (S01/S02/S03/S17) |
+| `l_gid` / `la_gid` | Global loan key (not the contract number) |
+| SICR / Stage 1-2-3 | Sig. increase in credit risk / staging |
+| PD / LGD / EAD / CCF / EIR | ECL parameters |
 
 ## Sources
 
-- [V1100006793 — Standard Chart of Accounts for second-tier banks (NBK, 31.01.2011)](https://adilet.zan.kz/rus/docs/V1100006793)
+- [FINDINGS.md — ground truth (data-proven, 01.07.2026)](risk_dwh_reconciliation/FINDINGS.md)
+- [CLAUDE.md — reconciliation project charter & rules](risk_dwh_reconciliation/CLAUDE.md)
+- [V1100006793 — Standard Chart of Accounts, second-tier banks (NBK, 31.01.2011)](https://adilet.zan.kz/rus/docs/V1100006793)
 - [NBK accounting-rules amendments (nationalbank.kz file 62676)](https://nationalbank.kz/file/download/62676)
-- Team table inventory + criticality/semantic map (this session)
-- Draft SQL: `join_CL.sql`, `join_pre_final.sql`, `join_RS.sql` (idea warehouse)
-- Reconciliation workbook `Сравнение_2026-04-01.xlsx`
+- Draft SQL `join_CL.sql` / `join_pre_final.sql` / `join_RS.sql`; workbook `Сравнение_2026-04-01.xlsx`
 - Companion: [`risk_analytics_data_model.md`](risk_analytics_data_model.md)

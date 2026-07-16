@@ -36,6 +36,8 @@ docs/
   analysis/                  # document-set classification summaries + data-model reference
                              #   credit_risk_knowledge_base.md  — end-to-end loan data architecture (branches→mart→reports, ~19-table inventory, IFRS 9 map)
                              #   risk_analytics_data_model.md   — column-level schema of the 5 draft-SQL tables
+                             #   risk_dwh_reconciliation/       — ground truth from the БРМ OLD↔NEW reconciliation
+                             #     FINDINGS.md (data-proven keys/grain/formulas/discrepancies) · CLAUDE.md (project charter)
 sql/                         # AQR data-check scripts (T-SQL), e.g. the B3B closed-before-2025 reconciliation
 tests/                       # pytest suite (synthetic snippets, no confidential data)
 data/                        # local document store — git-ignored (confidential)
