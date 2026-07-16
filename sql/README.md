@@ -22,20 +22,41 @@ reports, per loan, its **actual** last presence and state — the evidence that
 corroborates or contradicts a "closed-before-2025" claim.
 
 - **Base** (the B3B scope): `[CL_PORTFOLIO].[dbo].[FOR_B3B_AQR2026_16072026]`, key `[LOAN_ID]`
-- **Time-series** (snapshots): `[CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]`, key `(contract_number, [date])`
+- **Time-series** (snapshots): the `UNION ALL` of **all six source-system portfolio
+  tables** (B3B guide §2 — each `loan_id` belongs to one source system, so a B3B
+  loan may live in any of these), key `(contract_number, [date])`:
+
+  | source system | table |
+  |---|---|
+  | Credilogic (CL) | `[CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]` |
+  | Fenix (EBCL) | `[CL_PORTFOLIO].[dbo].[PORTFOLIO_Fenix]` |
+  | RS | `[CL_PORTFOLIO].[dbo].[PORTFOLIO_RS]` |
+  | Cards — MIGR_WAY4 (W) | `[CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_MIGR_WAY4]` |
+  | Cards — SMART_CARD (W) | `[CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_SMART_CARD]` |
+  | Cards — WAY4 (W) | `[CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_WAY4]` |
+
 - **Join**: `base.[LOAN_ID] = ts.contract_number`
 
-For each loan it pulls the **latest snapshot** (`date, od, balance, dpd,
-category, tag_1, status, balance_with_discount, provisions_total`) plus presence
-aggregates, and computes review flags:
+Each branch of the `UNION ALL` selects the **same columns** (`contract_number,
+[date], od, balance, dpd, category, tag_1, status, balance_with_discount,
+provisions_total`); if a source table names a column differently or lacks one,
+adjust **that** branch (alias it, or `CAST(NULL AS <type>) AS <col>`), keeping
+the types aligned across branches.
+
+For each loan it pulls the **latest snapshot across all systems** (`source_system,
+date, od, balance, dpd, category, tag_1, status, balance_with_discount,
+provisions_total`) plus presence aggregates, and computes review flags:
 
 | Flag | Meaning |
 |---|---|
-| `missing_in_portfolio` | loan is in B3B scope but has **no** snapshot in the time-series |
+| `missing_in_portfolio` | loan is in B3B scope but has **no** snapshot in **any** source system |
 | `no_activity_in_audit_year` | loan has snapshots, but **none** in 2025 → looks gone before 2025 |
 | `last_activity_before_audit_year` | its **last-ever** snapshot predates 2025 (strongest signal) |
 | `zero_balance_at_last` | balance already 0 at the last snapshot (consistent with a close) |
-| `review_flag` | headline: any of the above → **must be reviewed** before defending inclusion |
+| `multi_source_system` | loan found in **more than one** source system (data-quality signal; expected = 1) |
+| `review_flag` | headline: missing / no-2025-activity / last-before-2025 → **must be reviewed** |
+
+The `source_system` column reports which system holds the latest snapshot.
 
 A loan with real snapshots **inside 2025** (`review_flag = 0`) is defensible: the
 portfolio data itself shows it was still present in the audited year, regardless
