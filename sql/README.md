@@ -4,6 +4,12 @@ SQL checks for the AQR / B3B workstream. **Microsoft SQL Server (T-SQL).** These
 scripts read schema (table/column names) only — no confidential data values are
 stored here.
 
+- **`b3b_reconciliation_2025.sql`** — closed-before-audited-year check across all
+  six source-system portfolio tables (below).
+- **`b3b_comment_mapping.sql`** — normalize the free-text column-E comments in
+  `EUB_B3B_v0` to the NBRK «Причина» dropdown vocabulary and flag what still needs
+  manual review; see the mapping table in [`docs/b3b_guide.md`](../docs/b3b_guide.md) §8.
+
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
 ### The problem
