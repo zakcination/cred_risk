@@ -30,15 +30,22 @@ Each `loan_id` belongs to **one** source system. Split the АФР list by
 |---|---|---|
 | `W` | Cards | Cards team |
 | `CL` | CrediLogic | CrediLogic owner ("Гроз Б.М.Э.") |
-| `RS` | RS | Naumen Helpdesk — **see the ORIZ sub-zone in §7** |
+| `RS` | RS | Naumen Helpdesk — **but see the ORIZ sub-zone below** |
 | `EBCL` | Fenix | Naumen Helpdesk |
 | — | ОУСА / KUSA | handled separately, with confirming screenshots |
 
-> ⚠️ **Responsibility is not purely by source system.** Within a source system
-> there can be a **sub-zone owned by a different team** (e.g. part of `RS` is
-> **ORIZ's** responsibility). Whoever prepares a source-system slice **must**
-> identify and hand off any sub-zone they do not own, and include that team on
-> the distribution. This is exactly where the 2026 cycle broke — see §7.
+**RS is split between two teams:**
+
+| RS sub-zone | Owner |
+|---|---|
+| **Portfolio RS + Individual Loans (Индивидуальные Займы / INDLOANS)** | **ORIZ** |
+| the remainder of RS | ОПАиРОЗ |
+
+> ⚠️ **Responsibility is not purely by source system.** Within `RS`, the
+> **Portfolio RS + Individual Loans (Индивидуальные Займы)** segment is
+> **ORIZ's** responsibility; the rest is ОПАиРОЗ's. Whoever prepares the RS
+> slice **must** split out the ORIZ segment, hand it to ORIZ, and include ORIZ
+> on the distribution. This is exactly where the 2026 cycle broke — see §7.2.
 
 ## 3. Requesting data from owners
 Request **closing dates** and **write-off marks** from each owner. Today these
@@ -125,11 +132,15 @@ distribution message did **not include ORIZ** as a recipient or in copy. As a
 result, of the ~8 089 remainder, **717 loans belonging to ORIZ were never
 tasked to ORIZ** and — discovered at the deadline — were **left unfilled**.
 
+**ORIZ's zone within RS.** **Portfolio RS + Individual Loans (Индивидуальные
+Займы / INDLOANS)** are ORIZ's part of the RS source (see §2). The 717 unfilled
+loans fall in this segment.
+
 **Root cause.** A communication/hand-off failure: the person preparing the RS
-slice knew (or should have known) that part of RS is ORIZ's zone and **should
-have flagged ORIZ's zone of responsibility and included ORIZ** on the
+slice knew (or should have known) that the Portfolio RS + Individual Loans
+segment is ORIZ's zone and **should have flagged it and included ORIZ** on the
 distribution. Responsibility was treated as purely per-source-system, but RS
-contains an ORIZ sub-zone (see §2 warning).
+contains an ORIZ sub-zone (see §2).
 
 **Impact.** 717 loans unfilled at the deadline; risk of an incomplete B3B
 submission and regulator questions.
@@ -142,8 +153,10 @@ submission and regulator questions.
 
 **Prevention (next cycle).**
 - Maintain an explicit **source-system → responsible-team RACI**, including
-  **sub-zones** (RS is split between ОПАиРОЗ and **ORIZ**), so no zone is
-  silently skipped.
+  **sub-zones**: RS = **ORIZ** for *Portfolio RS + Individual Loans
+  (Индивидуальные Займы)*, ОПАиРОЗ for the rest — so no zone is silently skipped.
+  Encode the split as a filter (RS-source loans flagged as Individual Loans →
+  ORIZ) so the ORIZ population can be extracted mechanically each cycle.
 - The initial distribution email **must include every responsible team**
   (ORIZ in recipients/cc) for their zone from the start.
 - Add a **completeness check before the deadline**: reconcile the count assigned
