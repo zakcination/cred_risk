@@ -81,6 +81,15 @@ loans.l_loan_number   = interest_rates.dlcr_dog_num  -- 1 loan : rate record(s)
 The prefix differences (`la_`, `c_`, `dlcr_`) are a naming-heterogeneity signal —
 each satellite table was modelled by/for a different source feed.
 
+> ⚠️ **The contract number is a per-source key, not a global one.** Data-proven
+> in the reconciliation project: the number collides **9,659 times across
+> sources**, so the true global key is **`l_gid` ↔ `la_gid`** (matched with
+> `la_source`); `la_dog_num = l_loan_number` is only a control. Old↔new keys also
+> differ per source (S03 `contract_number→l_loan_number`; S01
+> `contract_id→l_loan_id`; S17 `contractnumber→la_dog_num`+source+date). See the
+> [knowledge base §3–§4](credit_risk_knowledge_base.md) and
+> [`FINDINGS.md`](risk_dwh_reconciliation/FINDINGS.md).
+
 ```mermaid
 erDiagram
     loans ||--o{ loan_account : "l_loan_number = la_dog_num (per date×source)"
