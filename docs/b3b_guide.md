@@ -1,0 +1,222 @@
+# B3B Collection — Process Guide & Runbook
+
+Practical runbook for assembling the **AQR B3B** form. It complements the
+official *«Инструкция по AQR B3B.docx»* (which says *what* and *for whom*); this
+file says *how* — the SQL, the source-system split, status logic, the
+audited-year rule, escalation, and the **lessons learned / process gaps** to fix
+before the next cycle.
+
+> Companion: the reconciliation check in
+> [`sql/b3b_reconciliation_2025.sql`](../sql/b3b_reconciliation_2025.sql) and its
+> [README](../sql/README.md) — use it as the completeness safety-net (see §7).
+
+---
+
+## 1. What B3B is
+B3B is the list of **special-case contracts**: loans that were present at the
+start of a quarter and **disappeared by its end**. They affect the **PD**
+calculation. The trigger is **АФР**, which sends the final special-cases list;
+it is routed to **ОРИЗ / ОПАиРОЗ** to fill in closing dates and write-off marks.
+
+The **source of truth is the АФР list**, not any preliminary self-built list. A
+preliminary list (from the B1A tables) can be prepared in advance to cover most
+of the population, but it never replaces reconciliation against the АФР list.
+
+## 2. Source-system distribution (who owns what)
+Each `loan_id` belongs to **one** source system. Split the АФР list by
+`source_system` and route each slice to its owner:
+
+| Source | System | Owner / where to request |
+|---|---|---|
+| `W` | Cards | Cards team |
+| `CL` | CrediLogic | CrediLogic owner ("Гроз Б.М.Э.") |
+| `RS` | RS | Naumen Helpdesk — **but see the ORIZ sub-zone below** |
+| `EBCL` | Fenix | Naumen Helpdesk |
+| — | ОУСА / KUSA | handled separately, with confirming screenshots |
+
+**RS is split between two teams:**
+
+| RS sub-zone | Owner |
+|---|---|
+| **Portfolio RS + Individual Loans (Индивидуальные Займы / INDLOANS)** | **ORIZ** |
+| the remainder of RS | ОПАиРОЗ |
+
+> ⚠️ **Responsibility is not purely by source system.** Within `RS`, the
+> **Portfolio RS + Individual Loans (Индивидуальные Займы)** segment is
+> **ORIZ's** responsibility; the rest is ОПАиРОЗ's. Whoever prepares the RS
+> slice **must** split out the ORIZ segment, hand it to ORIZ, and include ORIZ
+> on the distribution. This is exactly where the 2026 cycle broke — see §7.2.
+
+## 3. Requesting data from owners
+Request **closing dates** and **write-off marks** from each owner. Today these
+are one-off emails / Naumen tickets; the Cards and CrediLogic close-date feeds
+are candidates for a standing DWH task so the process is reproducible and
+auditable.
+
+## 4. Status mapping & the audited-year rule
+From the returned data, set the dropdown status and the matching date:
+
+| Condition | Status | Date field |
+|---|---|---|
+| `dte_close` (CrediLogic) / `DATE_EXPIRE` (cards) NOT NULL | fully repaid / closed | closing date |
+| written off to loss | written off to loss | `dte_writeoff` |
+| written off off-balance | written off off-balance | `dte_Tag11_last` |
+| present in the sales DB | assignment of rights (cession) | selling date |
+
+**Priority when several conditions match** (strong → weak): 1) sale/cession,
+2) written off to loss, 3) written off off-balance, 4) repaid/closed. Fix this
+order with methodology so the status does not drift between runs.
+
+**§ Audited-year rule (critical).** Before mapping, **filter all dates to the
+audited year only** — a repayment / write-off / close date you record **must
+fall in 2025**. A date outside the audited year is the "closed before 2025 but
+reported in 2025" contradiction the regulator challenges. Use the reconciliation
+check (§7) to find loans whose actual last portfolio presence is **before 2025**.
+
+> Take care with the sales/cession comment: "assignment of rights" is chosen
+> because it is legally precise, **not** to avoid the word "sale". Confirm the
+> same `loan_id` is treated as a sale consistently in LGD / B3D — a comment that
+> hides the economic substance from the regulator is the same "bank not open in
+> their positions" risk already raised on B3D.
+
+## 5. Escalation of the unrecognized remainder
+Whatever automatic mapping does not close is escalated to the nearest colleagues
+in the risk department (**ОПАиРОЗ**) for manual entry. The consolidated version
+is assembled only after the remainder is closed.
+
+**2026 cycle remainder** (per the 15 Jul escalation): of **217 059** records,
+**8 089** had no comment → **208 970** processed. Remainder by source:
+
+| Source | Count |
+|---|---|
+| W (Cards) | 5 829 |
+| CL | 852 |
+| RS | 752 |
+| EBCL | 655 |
+| Заём ОУСА | 1 |
+| **Total** | **8 089** |
+
+> 📌 **Count discrepancy to reconcile.** The 15 Jul mail cites **217 059**
+> total; the prior guide cited **271 059**. The remainder (8 089) matches in
+> both, but the base differs by 54 000 — verify which total is correct before
+> sign-off.
+
+## 6. After acceptance
+After АФР accepts the template it usually asks for the **sources of repayment**
+as confirmation (request to the Operations Department and БЦБ). Final data go to
+АФР. The finished B3B file is loaded to history (**RISKDWH → `CL_PORTFOLIO`**)
+for later reconciliations.
+
+---
+
+## 7. Process gaps & lessons learned
+
+### 7.1 Recurring gaps (carry-over)
+1. **Remainder concentrated in Cards.** ~72% of the unrecognized remainder
+   (5 829 of 8 089) is `W` (Cards). Fix the card **close-date feed** as a
+   standing DWH task instead of escalating the tail by hand every cycle.
+2. **Pre-list ≠ final list.** The preliminary list is not a production step; it
+   covers part of the population — reconciliation against the АФР list is always
+   required.
+3. **Sales comment consistency.** "Assignment of rights" must be consistent with
+   LGD / B3D and never used to obscure a sale (§4).
+4. **Status priority not fixed.** Agree the priority order with methodology (§4).
+5. **Manual letters/escalations** for close dates are candidates for a standing
+   DWH task / Naumen template.
+
+### 7.2 2026 cycle — ORIZ responsibility zone omitted (communication gap) 🔴
+
+**What happened.** While filling the **RS** source, the ОПАиРОЗ colleague
+handling it **skipped the ORIZ zone of responsibility**, and the initial B3B
+distribution message did **not include ORIZ** as a recipient or in copy. As a
+result, of the ~8 089 remainder, **717 loans belonging to ORIZ were never
+tasked to ORIZ** and — discovered at the deadline — were **left unfilled**.
+
+**ORIZ's zone within RS.** **Portfolio RS + Individual Loans (Индивидуальные
+Займы / INDLOANS)** are ORIZ's part of the RS source (see §2). The 717 unfilled
+loans fall in this segment.
+
+**Root cause.** A communication/hand-off failure: the person preparing the RS
+slice knew (or should have known) that the Portfolio RS + Individual Loans
+segment is ORIZ's zone and **should have flagged it and included ORIZ** on the
+distribution. Responsibility was treated as purely per-source-system, but RS
+contains an ORIZ sub-zone (see §2).
+
+**Impact.** 717 loans unfilled at the deadline; risk of an incomplete B3B
+submission and regulator questions.
+
+**Corrective measures (taken this cycle).**
+1. **Forward the ORIZ slice to ORIZ now** and request them to fill the data
+   (closing dates / write-off marks) for the 717 loans.
+2. **Ask the regulator (АФР) to extend the deadline** to **tomorrow 18:00** to
+   allow ORIZ to complete their zone.
+
+**Prevention (next cycle).**
+- Maintain an explicit **source-system → responsible-team RACI**, including
+  **sub-zones**: RS = **ORIZ** for *Portfolio RS + Individual Loans
+  (Индивидуальные Займы)*, ОПАиРОЗ for the rest — so no zone is silently skipped.
+  Encode the split as a filter (RS-source loans flagged as Individual Loans →
+  ORIZ) so the ORIZ population can be extracted mechanically each cycle.
+- The initial distribution email **must include every responsible team**
+  (ORIZ in recipients/cc) for their zone from the start.
+- Add a **completeness check before the deadline**: reconcile the count assigned
+  per team against the remainder breakdown by source, so an unassigned
+  sub-population (like the 717) surfaces early — the reconciliation script in
+  `sql/` is the tool for this (it flags loans with no filled outcome / no 2025
+  activity per `source_system`).
+- **Escalate deadline risk on discovery, not at the deadline.**
+
+### 7.3 Operational notes (2026 cycle)
+- Working folder: `R:\...\AQR_2026\B3B\<date>\Рабочая папка`; Fenix data recorded
+  in `EUB_B3B_v0`.
+- Reminder for fillers: **if you record a repayment or write-off, the date must
+  be in 2025** (audited-year rule, §4).
+
+---
+
+## 8. Column E «Причина» — official reference & comment mapping
+
+The NBRK B3B form («Список особых случаев», file `EUB_B3B_v0.xlsx`) requires, for
+each loan that disappeared from B1A in 2025, a **reason in column E** taken from a
+fixed dropdown, plus conditional columns. **Deadline: 18:00, 16.07.2026.**
+
+### 8.1 Official column-E vocabulary (use these values exactly)
+- `списание`
+- `реструктуризация / модификация`
+- `полное погашение`
+- `проданный финансовый актив`
+- `пролонгация путем выдачи нового займа`
+- `иное`
+
+### 8.2 Conditional columns
+| If column E = | then fill |
+|---|---|
+| `проданный финансовый актив` | **H** — buyer type (коллекторское агентство / ЧСИ / организация по управлению стрессовыми активами / БВУ / …) |
+| `реструктуризация / модификация` | **G** — the related ID in the other slice |
+| `пролонгация путем выдачи нового займа` | **G** — the related ID |
+| `иное` | **F** — free-form explanation |
+
+### 8.3 Mapping of the observed raw comments → column E
+Applied in bulk by [`sql/b3b_comment_mapping.sql`](../sql/b3b_comment_mapping.sql).
+**⚠ = confirm before submission** (goes to the regulator).
+
+| Raw comment (as entered) | → Column E «Причина» | F / G / H | Note |
+|---|---|---|---|
+| `Полное погашение` | полное погашение | — | exact |
+| `продажа` | проданный финансовый актив | **H**: buyer type | ⚠ H must be filled |
+| `СПИСАННЫЕ НА ВНЕСИСТЕМНЫЙ УЧЕТ` | списание | — | off-balance write-off; date 2025 |
+| `СПИСАННЫЕ В УБЫТОК` | списание | — | loss write-off; date 2025 |
+| `прощение` | списание | F: «прощение долга» | ⚠ confirm списание vs иное |
+| `Обратный выкуп, списан` | списание | F: «обратный выкуп + списание» | ⚠ confirm |
+| `Баланс меньше 5000` | иное | F: «остаток < 5000 (несущественный)» | ⚠ threshold, not a disposal reason — confirm actual fate |
+| `Отменен` | иное | F: «договор отменен/аннулирован» | ⚠ investigate — cancelled? |
+| `0` | **— (unmapped)** | — | ⚠ no reason — fill manually |
+| `Открытый` | **— (review)** | — | ⚠ loan still OPEN — should not be in B3B; investigate (reconciliation check) |
+| *ОУСА block* (Парасат / Алиби / Алиби-Агро / Сайхинстройсервис) | **split per loan** | **H**: attach АБИС screenshots | ⚠ Парасат = полное погашение (Q2 2025); Алиби group = списание на внесистемный учет (Q4 2025) |
+
+Two raw values are **not** disposal reasons and need attention rather than a
+straight map:
+- **`Открытый`** — the loan is still active, so it should not be a "disappeared"
+  special case. Run `sql/b3b_reconciliation_2025.sql`: if it has 2025 snapshots,
+  its inclusion in B3B is the thing to challenge, not its reason.
+- **`0`** — empty placeholder; these are unfilled and must be completed manually.

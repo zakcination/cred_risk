@@ -4,6 +4,12 @@ SQL checks for the AQR / B3B workstream. **Microsoft SQL Server (T-SQL).** These
 scripts read schema (table/column names) only — no confidential data values are
 stored here.
 
+- **`b3b_reconciliation_2025.sql`** — closed-before-audited-year check across all
+  six source-system portfolio tables (below).
+- **`b3b_comment_mapping.sql`** — normalize the free-text column-E comments in
+  `EUB_B3B_v0` to the NBRK «Причина» dropdown vocabulary and flag what still needs
+  manual review; see the mapping table in [`docs/b3b_guide.md`](../docs/b3b_guide.md) §8.
+
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
 ### The problem
@@ -14,7 +20,8 @@ supplied by the system owner ("Гроз Б.М.Э."). Some of those closing dates
 **before the audited year (2025)**, yet the loans still appear in the 2025
 report. If a contract was "closed before 2025", the regulator will question why
 it is in the 2025 population. This is the check behind **§6 of the B3B guide
-("Фильтр по аудируемому году")**.
+("Фильтр по аудируемому году")** — see the process runbook in
+[`docs/b3b_guide.md`](../docs/b3b_guide.md).
 
 ### What the script does
 Cross-checks every B3B loan against the objective portfolio time-series and
