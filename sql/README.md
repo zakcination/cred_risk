@@ -14,7 +14,8 @@ supplied by the system owner ("Гроз Б.М.Э."). Some of those closing dates
 **before the audited year (2025)**, yet the loans still appear in the 2025
 report. If a contract was "closed before 2025", the regulator will question why
 it is in the 2025 population. This is the check behind **§6 of the B3B guide
-("Фильтр по аудируемому году")**.
+("Фильтр по аудируемому году")** — see the process runbook in
+[`docs/b3b_guide.md`](../docs/b3b_guide.md).
 
 ### What the script does
 Cross-checks every B3B loan against the objective portfolio time-series and
