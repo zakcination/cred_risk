@@ -43,9 +43,9 @@
       (N'продажа',                        N'иное',             N'по данному займу была переуступка прав требования по кредиту в СФК (специальная финансовая компания)', 0, N'decision 16.07: cession to SFK -> иное (not проданный фин.актив)'),
       (N'прощение',                       N'иное',             N'по данному займу была процедура прощения',                                             0,  N'decision 16.07: -> иное + comment'),
       (N'обратный выкуп, списан',         N'иное',             N'данный займ был переуступлен, далее возвращен на баланс банка, далее списан в убыток',  0,  N'decision 16.07: -> иное + comment'),
+      (N'отменен',                        N'иное',             N'займ был выдан и отменен (аннулирован): по денежным займам - отмена в течение 5 рабочих дней без решения УО, по истечении 5 дней - на основании решения УО Банка; по автозаймам - отмена в течение 14 рабочих дней', 0, N'decision 16.07: cancellation -> иное + universal comment'),
       -- Left OPEN for now (decision pending):
       (N'баланс меньше 5000',             NULL,                NULL,                                                                                    1,  N'OPEN - decision pending'),
-      (N'отменен',                        NULL,                NULL,                                                                                    1,  N'OPEN - decision pending'),
       (N'открытый',                       NULL,                NULL,                                                                                    1,  N'OPEN - loan still active; should not be in B3B - investigate (b3b_reconciliation_2025.sql)'),
       (N'0',                              NULL,                NULL,                                                                                    1,  N'OPEN - no reason provided; fill manually')
     ) v(raw_norm, reason_E, note_F, needs_review, review_note)
@@ -91,7 +91,9 @@ mapped AS (
                     THEN 1 ELSE 0 END, N'реструктуризация / модификация', NULL,                                                                                 1, N'fill G: related ID in the other slice'),
           (9, CASE WHEN s.c LIKE N'%пролонгац%' OR s.c LIKE N'%нового займа%'
                     THEN 1 ELSE 0 END, N'пролонгация путем выдачи нового займа', NULL,                                                                          1, N'fill G: related ID in the other slice'),
-          (10, CASE WHEN s.c LIKE N'%баланс%5000%' OR s.c LIKE N'%отмен%' OR s.c LIKE N'%иное%'
+          (10, CASE WHEN s.c LIKE N'%отмен%'
+                    THEN 1 ELSE 0 END, N'иное',                        N'займ был выдан и отменен (аннулирован): по денежным займам - отмена в течение 5 рабочих дней без решения УО, по истечении 5 дней - на основании решения УО Банка; по автозаймам - отмена в течение 14 рабочих дней', 1, N'иное - cancellation universal comment'),
+          (11, CASE WHEN s.c LIKE N'%баланс%5000%' OR s.c LIKE N'%иное%'
                     THEN 1 ELSE 0 END, N'иное',                        N'уточнить в свободной форме',                                                           1, N'иное - fill F free-form'),
           (99, 1,                                                     NULL,                              NULL,                                                    1, N'UNMAPPED - no reason recognised; fill manually')
         ) f(pri, hit, reason_E, note_F, needs_review, review_note)
