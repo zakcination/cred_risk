@@ -9,6 +9,10 @@ stored here.
 - **`b3b_comment_mapping.sql`** — normalize the free-text column-E comments in
   `EUB_B3B_v0` to the NBRK «Причина» dropdown vocabulary and flag what still needs
   manual review; see the mapping table in [`docs/b3b_guide.md`](../docs/b3b_guide.md) §8.
+- **`stage3_cure_candidates.sql`** — size the Stage 3 loans that would cure under a
+  relaxed rule (stuck only by minor DPD slips) to confirm/refute Retail Business's
+  ~12 bn ₸ estimate; methodology in
+  [`docs/analysis/stage3_cure_analysis.md`](../docs/analysis/stage3_cure_analysis.md).
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
