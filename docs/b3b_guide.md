@@ -200,22 +200,29 @@ fixed dropdown, plus conditional columns. **Deadline: 18:00, 16.07.2026.**
 Applied in bulk by [`sql/b3b_comment_mapping.sql`](../sql/b3b_comment_mapping.sql).
 **⚠ = confirm before submission** (goes to the regulator).
 
-| Raw comment (as entered) | → Column E «Причина» | F / G / H | Note |
-|---|---|---|---|
-| `Полное погашение` | полное погашение | — | exact |
-| `продажа` | проданный финансовый актив | **H**: buyer type | ⚠ H must be filled |
-| `СПИСАННЫЕ НА ВНЕСИСТЕМНЫЙ УЧЕТ` | списание | — | off-balance write-off; date 2025 |
-| `СПИСАННЫЕ В УБЫТОК` | списание | — | loss write-off; date 2025 |
-| `прощение` | списание | F: «прощение долга» | ⚠ confirm списание vs иное |
-| `Обратный выкуп, списан` | списание | F: «обратный выкуп + списание» | ⚠ confirm |
-| `Баланс меньше 5000` | иное | F: «остаток < 5000 (несущественный)» | ⚠ threshold, not a disposal reason — confirm actual fate |
-| `Отменен` | иное | F: «договор отменен/аннулирован» | ⚠ investigate — cancelled? |
-| `0` | **— (unmapped)** | — | ⚠ no reason — fill manually |
-| `Открытый` | **— (review)** | — | ⚠ loan still OPEN — should not be in B3B; investigate (reconciliation check) |
-| *ОУСА block* (Парасат / Алиби / Алиби-Агро / Сайхинстройсервис) | **split per loan** | **H**: attach АБИС screenshots | ⚠ Парасат = полное погашение (Q2 2025); Алиби group = списание на внесистемный учет (Q4 2025) |
+Decisions taken **16.07.2026** (✅ = finalized, 🟡 = left open):
 
-Two raw values are **not** disposal reasons and need attention rather than a
-straight map:
+| Raw comment (as entered) | → Column E «Причина» | F / G / H | Status |
+|---|---|---|---|
+| `СПИСАННЫЕ НА ВНЕСИСТЕМНЫЙ УЧЕТ` | списание | — | ✅ off-balance write-off; date 2025 |
+| `СПИСАННЫЕ В УБЫТОК` | списание | — | ✅ loss write-off; date 2025 |
+| `Полное погашение` | полное погашение | — | ✅ exact |
+| `продажа` | **иное** | F: «по данному займу была переуступка прав требования по кредиту в СФК (специальная финансовая компания)» | ✅ cession to SFK → иное (not «проданный финансовый актив») |
+| `прощение` | **иное** | F: «по данному займу была процедура прощения» | ✅ |
+| `Обратный выкуп, списан` | **иное** | F: «данный займ был переуступлен, далее возвращен на баланс банка, далее списан в убыток» | ✅ |
+| `Баланс меньше 5000` | — | — | 🟡 left open |
+| `Отменен` | — | — | 🟡 left open |
+| `0` | — | — | 🟡 open — unfilled, complete manually |
+| `Открытый` | — | — | 🟡 open — loan still OPEN, should not be in B3B; investigate (reconciliation check) |
+| *ОУСА block* (Парасат / Алиби / Алиби-Агро / Сайхинстройсервис) | **split per loan** | **H**: attach АБИС screenshots | 🟡 Парасат = полное погашение (Q2 2025); Алиби group = списание на внесистемный учет (Q4 2025) |
+
+> **Transparency note (from §4).** `продажа` is recorded as **иное** with a
+> cession-to-СФК explanation rather than «проданный финансовый актив». Keep this
+> consistent with how the same `loan_id` is treated in LGD / B3D — the reason
+> should reflect economic substance, not obscure a sale.
+
+Two of the open values are **not** disposal reasons and need attention rather
+than a straight map:
 - **`Открытый`** — the loan is still active, so it should not be a "disappeared"
   special case. Run `sql/b3b_reconciliation_2025.sql`: if it has 2025 snapshots,
   its inclusion in B3B is the thing to challenge, not its reason.
