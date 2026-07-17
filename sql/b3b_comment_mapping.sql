@@ -35,17 +35,19 @@
 -------------------------------------------------------------------------------
 ;WITH map_ref (raw_norm, reason_E, note_F, needs_review, review_note) AS (
     SELECT * FROM (VALUES
-      -- raw (normalised, lower)          reason_E (column E)                note_F (column F)                                              rev  review_note
-      (N'продажа',                        N'проданный финансовый актив',     NULL,                                                          1,  N'fill H: buyer type (коллектор/ЧСИ/ОУСА/БВУ)'),
-      (N'полное погашение',               N'полное погашение',               NULL,                                                          0,  NULL),
-      (N'списанные на внесистемный учет', N'списание',                       NULL,                                                          0,  N'off-balance write-off; date must be 2025'),
-      (N'списанные в убыток',             N'списание',                       NULL,                                                          0,  N'loss write-off; date must be 2025'),
-      (N'прощение',                       N'списание',                       N'прощение долга',                                             1,  N'confirm: списание vs иное'),
-      (N'баланс меньше 5000',             N'иное',                           N'остаток менее 5000 (ниже порога существенности)',           1,  N'threshold, not a disposal reason - confirm the actual fate (списание/погашение)'),
-      (N'обратный выкуп, списан',         N'списание',                       N'обратный выкуп с последующим списанием',                     1,  N'confirm'),
-      (N'отменен',                        N'иное',                           N'договор отменен/аннулирован',                                1,  N'investigate - cancelled/annulled before disbursement?'),
-      (N'открытый',                       NULL,                              NULL,                                                          1,  N'loan still OPEN - not a disappearance reason; should not be in B3B - investigate (see b3b_reconciliation_2025.sql)'),
-      (N'0',                              NULL,                              NULL,                                                          1,  N'no reason provided - fill manually')
+      -- raw (normalised, lower)          reason_E (column E)  note_F (column F)                                                                        rev  review_note
+      -- Decisions taken 16.07.2026:
+      (N'списанные на внесистемный учет', N'списание',         NULL,                                                                                    0,  N'off-balance write-off; date must be 2025'),
+      (N'списанные в убыток',             N'списание',         NULL,                                                                                    0,  N'loss write-off; date must be 2025'),
+      (N'полное погашение',               N'полное погашение', NULL,                                                                                    0,  NULL),
+      (N'продажа',                        N'иное',             N'по данному займу была переуступка прав требования по кредиту в СФК (специальная финансовая компания)', 0, N'decision 16.07: cession to SFK -> иное (not проданный фин.актив)'),
+      (N'прощение',                       N'иное',             N'по данному займу была процедура прощения',                                             0,  N'decision 16.07: -> иное + comment'),
+      (N'обратный выкуп, списан',         N'иное',             N'Данный займ был переуступлен, после переуступки обратно возвращён на баланс банка, далее был списан в убыток',  0,  N'decision 16.07: -> иное + comment'),
+      (N'отменен',                        N'иное',             N'займ был выдан и отменен (аннулирован): по денежным займам - отмена в течение 5 рабочих дней без решения УО, по истечении 5 дней - на основании решения УО Банка; по автозаймам - отмена в течение 14 рабочих дней', 0, N'decision 16.07: cancellation -> иное + universal comment'),
+      (N'баланс меньше 5000',             N'иное',             N'Порог отсечения менее 5000 тг',                                                        0,  N'decision 16.07: threshold cutoff -> иное'),
+      -- Left OPEN for now (decision pending):
+      (N'открытый',                       NULL,                NULL,                                                                                    1,  N'OPEN - loan still active; should not be in B3B - investigate (b3b_reconciliation_2025.sql)'),
+      (N'0',                              NULL,                NULL,                                                                                    1,  N'OPEN - no reason provided; fill manually')
     ) v(raw_norm, reason_E, note_F, needs_review, review_note)
 ),
 src AS (
@@ -71,21 +73,33 @@ mapped AS (
         -- comment is not an exact reference value above.
         SELECT TOP 1 reason_E, note_F, needs_review, review_note
         FROM (VALUES
+          -- Consolidated EAD-zero explanation (accompanies written-off loans);
+          -- text is supplementary "дополнительная информация" — verify the reason.
+          (0, CASE WHEN s.c LIKE N'%нулевое значение ead%' OR s.c LIKE N'%накопленный дисконт%'
+                    THEN 1 ELSE 0 END, N'списание',                    N'Нулевое значение EAD в отдельных кварталах отчетного года обусловлено тем, что накопленный дисконт превышал балансовую задолженность займа, в связи с чем расчетное значение EAD принимало отрицательное значение. К концу отчетного года (01.01.2025) счета по дисконтам обнуляются, что привело к увеличению значения EAD.', 1, N'EAD-zero note for a written-off loan; confirm reason (списание) and place this text as additional info'),
           (1, CASE WHEN s.c LIKE N'%внесистемн%' OR s.c LIKE N'%оуса%'
-                    THEN 1 ELSE 0 END, N'списание',                    NULL,                              1, N'ОУСА / off-balance special case - split per loan (e.g. Парасат=полное погашение; Алиби/Алиби-Агро/Сайхинстройсервис=списание) and attach АБИС screenshots (column H)'),
-          (2, CASE WHEN s.c LIKE N'%продаж%' OR s.c LIKE N'%проданн%'
-                    THEN 1 ELSE 0 END, N'проданный финансовый актив',  NULL,                              1, N'fill H: buyer type'),
-          (3, CASE WHEN s.c LIKE N'%в убыток%' OR s.c LIKE N'%внебаланс%' OR s.c LIKE N'%списан%' OR s.c LIKE N'%прощени%' OR s.c LIKE N'%выкуп%'
-                    THEN 1 ELSE 0 END, N'списание',                    NULL,                              1, N'write-off (verify sub-type & 2025 date)'),
-          (4, CASE WHEN s.c LIKE N'%полное погашен%' OR s.c LIKE N'%погасил%' OR s.c LIKE N'%погашен%'
-                    THEN 1 ELSE 0 END, N'полное погашение',            NULL,                              0, NULL),
-          (5, CASE WHEN s.c LIKE N'%реструктур%' OR s.c LIKE N'%модификац%'
-                    THEN 1 ELSE 0 END, N'реструктуризация / модификация', NULL,                           1, N'fill G: related ID in the other slice'),
-          (6, CASE WHEN s.c LIKE N'%пролонгац%' OR s.c LIKE N'%нового займа%'
-                    THEN 1 ELSE 0 END, N'пролонгация путем выдачи нового займа', NULL,                    1, N'fill G: related ID in the other slice'),
-          (7, CASE WHEN s.c LIKE N'%баланс%5000%' OR s.c LIKE N'%отмен%' OR s.c LIKE N'%иное%'
-                    THEN 1 ELSE 0 END, N'иное',                        N'уточнить в свободной форме',     1, N'иное - fill F free-form'),
-          (99, 1,                                                     NULL,                              NULL, 1, N'UNMAPPED - no reason recognised; fill manually')
+                    THEN 1 ELSE 0 END, N'списание',                    NULL,                                                                                    1, N'ОУСА / off-balance special case - split per loan (e.g. Парасат=полное погашение; Алиби/Алиби-Агро/Сайхинстройсервис=списание) and attach АБИС screenshots (column H)'),
+          (2, CASE WHEN s.c LIKE N'%прощени%'
+                    THEN 1 ELSE 0 END, N'иное',                        N'по данному займу была процедура прощения',                                             1, N'иное - verify F text'),
+          (3, CASE WHEN s.c LIKE N'%выкуп%'
+                    THEN 1 ELSE 0 END, N'иное',                        N'Данный займ был переуступлен, после переуступки обратно возвращён на баланс банка, далее был списан в убыток',  1, N'иное - verify F text'),
+          (4, CASE WHEN s.c LIKE N'%переуступ%' OR s.c LIKE N'%цесси%' OR s.c LIKE N'%сфк%'
+                    THEN 1 ELSE 0 END, N'иное',                        N'переуступка прав требования по кредиту в СФК (специальная финансовая компания)',       1, N'иное - verify F text'),
+          (5, CASE WHEN s.c LIKE N'%продаж%' OR s.c LIKE N'%проданн%'
+                    THEN 1 ELSE 0 END, N'иное',                        N'переуступка прав требования по кредиту в СФК (специальная финансовая компания)',       1, N'verify: cession-to-SFK (иное) vs проданный финансовый актив (+H buyer type)'),
+          (6, CASE WHEN s.c LIKE N'%в убыток%' OR s.c LIKE N'%внебаланс%' OR s.c LIKE N'%списан%'
+                    THEN 1 ELSE 0 END, N'списание',                    NULL,                                                                                    1, N'write-off (verify sub-type & 2025 date)'),
+          (7, CASE WHEN s.c LIKE N'%полное погашен%' OR s.c LIKE N'%погасил%' OR s.c LIKE N'%погашен%'
+                    THEN 1 ELSE 0 END, N'полное погашение',            NULL,                                                                                    0, NULL),
+          (8, CASE WHEN s.c LIKE N'%реструктур%' OR s.c LIKE N'%модификац%'
+                    THEN 1 ELSE 0 END, N'реструктуризация / модификация', NULL,                                                                                 1, N'fill G: related ID in the other slice'),
+          (9, CASE WHEN s.c LIKE N'%пролонгац%' OR s.c LIKE N'%нового займа%'
+                    THEN 1 ELSE 0 END, N'пролонгация путем выдачи нового займа', NULL,                                                                          1, N'fill G: related ID in the other slice'),
+          (10, CASE WHEN s.c LIKE N'%отмен%'
+                    THEN 1 ELSE 0 END, N'иное',                        N'займ был выдан и отменен (аннулирован): по денежным займам - отмена в течение 5 рабочих дней без решения УО, по истечении 5 дней - на основании решения УО Банка; по автозаймам - отмена в течение 14 рабочих дней', 1, N'иное - cancellation universal comment'),
+          (11, CASE WHEN s.c LIKE N'%баланс%5000%' OR s.c LIKE N'%иное%'
+                    THEN 1 ELSE 0 END, N'иное',                        N'уточнить в свободной форме',                                                           1, N'иное - fill F free-form'),
+          (99, 1,                                                     NULL,                              NULL,                                                    1, N'UNMAPPED - no reason recognised; fill manually')
         ) f(pri, hit, reason_E, note_F, needs_review, review_note)
         WHERE f.hit = 1
         ORDER BY f.pri
