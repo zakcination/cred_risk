@@ -44,8 +44,8 @@
       (N'прощение',                       N'иное',             N'по данному займу была процедура прощения',                                             0,  N'decision 16.07: -> иное + comment'),
       (N'обратный выкуп, списан',         N'иное',             N'данный займ был переуступлен, далее возвращен на баланс банка, далее списан в убыток',  0,  N'decision 16.07: -> иное + comment'),
       (N'отменен',                        N'иное',             N'займ был выдан и отменен (аннулирован): по денежным займам - отмена в течение 5 рабочих дней без решения УО, по истечении 5 дней - на основании решения УО Банка; по автозаймам - отмена в течение 14 рабочих дней', 0, N'decision 16.07: cancellation -> иное + universal comment'),
+      (N'баланс меньше 5000',             N'иное',             N'Порог отсечения менее 5000 тг',                                                        0,  N'decision 16.07: threshold cutoff -> иное'),
       -- Left OPEN for now (decision pending):
-      (N'баланс меньше 5000',             NULL,                NULL,                                                                                    1,  N'OPEN - decision pending'),
       (N'открытый',                       NULL,                NULL,                                                                                    1,  N'OPEN - loan still active; should not be in B3B - investigate (b3b_reconciliation_2025.sql)'),
       (N'0',                              NULL,                NULL,                                                                                    1,  N'OPEN - no reason provided; fill manually')
     ) v(raw_norm, reason_E, note_F, needs_review, review_note)
@@ -73,6 +73,10 @@ mapped AS (
         -- comment is not an exact reference value above.
         SELECT TOP 1 reason_E, note_F, needs_review, review_note
         FROM (VALUES
+          -- Consolidated EAD-zero explanation (accompanies written-off loans);
+          -- text is supplementary "дополнительная информация" — verify the reason.
+          (0, CASE WHEN s.c LIKE N'%нулевое значение ead%' OR s.c LIKE N'%накопленный дисконт%'
+                    THEN 1 ELSE 0 END, N'списание',                    N'Нулевое значение EAD в отдельных кварталах отчетного года обусловлено тем, что накопленный дисконт превышал балансовую стоимость займа, в связи с чем расчетное значение EAD принимало нулевое значение. По мере расформирования дисконта к концу отчетного года EAD отражается без его влияния, что обусловило увеличение значения EAD.', 1, N'EAD-zero note for a written-off loan; confirm reason (списание) and place this text as additional info'),
           (1, CASE WHEN s.c LIKE N'%внесистемн%' OR s.c LIKE N'%оуса%'
                     THEN 1 ELSE 0 END, N'списание',                    NULL,                                                                                    1, N'ОУСА / off-balance special case - split per loan (e.g. Парасат=полное погашение; Алиби/Алиби-Агро/Сайхинстройсервис=списание) and attach АБИС screenshots (column H)'),
           (2, CASE WHEN s.c LIKE N'%прощени%'
