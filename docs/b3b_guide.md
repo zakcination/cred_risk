@@ -211,7 +211,7 @@ Decisions taken **16.07.2026** (✅ = finalized, 🟡 = left open):
 | `прощение` | **иное** | F: «по данному займу была процедура прощения» | ✅ |
 | `Обратный выкуп, списан` | **иное** | F: «данный займ был переуступлен, далее возвращен на баланс банка, далее списан в убыток» | ✅ |
 | `Отменен` | **иное** | F: «займ был выдан и отменен (аннулирован): по денежным займам — в течение 5 раб. дней без решения УО, по истечении 5 дней — на основании решения УО Банка; по автозаймам — в течение 14 раб. дней» | ✅ |
-| `Баланс меньше 5000` | — | — | 🟡 left open |
+| `Баланс меньше 5000` | **иное** | F: «Порог отсечения менее 5000 тг» | ✅ |
 | `0` | — | — | 🟡 open — unfilled, complete manually |
 | `Открытый` | — | — | 🟡 open — loan still OPEN, should not be in B3B; investigate (reconciliation check) |
 | *ОУСА block* (Парасат / Алиби / Алиби-Агро / Сайхинстройсервис) | **split per loan** | **H**: attach АБИС screenshots | 🟡 Парасат = полное погашение (Q2 2025); Алиби group = списание на внесистемный учет (Q4 2025) |
@@ -227,3 +227,20 @@ than a straight map:
   special case. Run `sql/b3b_reconciliation_2025.sql`: if it has 2025 snapshots,
   its inclusion in B3B is the thing to challenge, not its reason.
 - **`0`** — empty placeholder; these are unfilled and must be completed manually.
+
+### 8.4 Consolidated reusable comment — zero-EAD explanation
+Several written-off loans carried near-duplicate free-text explaining why EAD was
+zero in some quarters and then rose (accumulated discount exceeded the loan's book
+value; the discount is released by year-end). Column E for these stays **списание**;
+use this **one general comment** as the supplementary explanation (column H /
+notes) instead of the quarter-specific variants:
+
+> Нулевое значение EAD в отдельных кварталах отчетного года обусловлено тем, что
+> накопленный дисконт превышал балансовую стоимость займа, в связи с чем расчетное
+> значение EAD принимало нулевое значение. По мере расформирования дисконта к
+> концу отчетного года EAD отражается без его влияния, что обусловило увеличение
+> значения EAD.
+
+It generalizes the per-quarter originals (Q3 / Q2 → «в отдельных кварталах
+отчетного года»; the `01.10.2025` / end-of-year discount-release dates → «по мере
+расформирования дисконта к концу отчетного года»).
