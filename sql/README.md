@@ -9,6 +9,21 @@ stored here.
 - **`b3b_comment_mapping.sql`** — normalize the free-text column-E comments in
   `EUB_B3B_v0` to the NBRK «Причина» dropdown vocabulary and flag what still needs
   manual review; see the mapping table in [`docs/b3b_guide.md`](../docs/b3b_guide.md) §8.
+- **`stage3_cure_candidates.sql`** — size the Stage 3 loans that would cure under a
+  relaxed rule (stuck only by minor DPD slips) to confirm/refute Retail Business's
+  ~12 bn ₸ estimate; methodology in
+  [`docs/analysis/stage3_cure_analysis.md`](../docs/analysis/stage3_cure_analysis.md).
+- **`stage3_cure_funnel.sql`** — grounded snapshot version (CL_PORTFOLIO_2,
+  `category='3'`, exclude `tag='11'`, default_date ≥ 31.12.2025): population funnel
+  through each criterion + relaxed-DPD cure counts (loans/balance/provisions/rate)
+  for n ∈ {1,3,7,10}.
+- **`stage3_dpd_trajectory.sql`** — per Stage-3 contract, DPD at each of the 12
+  months after its default date (`def+1 … def+12`) pivoted from the CL_PORTFOLIO_2
+  snapshots — the post-default cure/re-default path used to test sustained-cure rules.
+- **`stage3_cure_pool.sql`** — materializes the analysis **pool**: a head table
+  (non-null Stage-3 contracts at 01.07.2026 + default/restructuring dates) and a
+  long-form monthly-DPD table (default_date → 01.07.2026), plus deeper-analysis
+  starters (per-contract DPD stats; relaxed-cure count at n ∈ {0,1,3,7,10}).
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
