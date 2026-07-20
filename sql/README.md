@@ -17,6 +17,9 @@ stored here.
   `category='3'`, exclude `tag='11'`, default_date ≥ 31.12.2025): population funnel
   through each criterion + relaxed-DPD cure counts (loans/balance/provisions/rate)
   for n ∈ {1,3,7,10}.
+- **`stage3_dpd_trajectory.sql`** — per Stage-3 contract, DPD at each of the 12
+  months after its default date (`def+1 … def+12`) pivoted from the CL_PORTFOLIO_2
+  snapshots — the post-default cure/re-default path used to test sustained-cure rules.
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
