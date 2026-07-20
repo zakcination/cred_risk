@@ -13,6 +13,10 @@ stored here.
   relaxed rule (stuck only by minor DPD slips) to confirm/refute Retail Business's
   ~12 bn ₸ estimate; methodology in
   [`docs/analysis/stage3_cure_analysis.md`](../docs/analysis/stage3_cure_analysis.md).
+- **`stage3_cure_funnel.sql`** — grounded snapshot version (CL_PORTFOLIO_2,
+  `category='3'`, exclude `tag='11'`, default_date ≥ 31.12.2025): population funnel
+  through each criterion + relaxed-DPD cure counts (loans/balance/provisions/rate)
+  for n ∈ {1,3,7,10}.
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
