@@ -20,6 +20,10 @@ stored here.
 - **`stage3_dpd_trajectory.sql`** — per Stage-3 contract, DPD at each of the 12
   months after its default date (`def+1 … def+12`) pivoted from the CL_PORTFOLIO_2
   snapshots — the post-default cure/re-default path used to test sustained-cure rules.
+- **`stage3_cure_pool.sql`** — materializes the analysis **pool**: a head table
+  (non-null Stage-3 contracts at 01.07.2026 + default/restructuring dates) and a
+  long-form monthly-DPD table (default_date → 01.07.2026), plus deeper-analysis
+  starters (per-contract DPD stats; relaxed-cure count at n ∈ {0,1,3,7,10}).
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
