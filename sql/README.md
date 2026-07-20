@@ -21,9 +21,23 @@ stored here.
   months after its default date (`def+1 … def+12`) pivoted from the CL_PORTFOLIO_2
   snapshots — the post-default cure/re-default path used to test sustained-cure rules.
 - **`stage3_cure_pool.sql`** — materializes the analysis **pool**: a head table
-  (non-null Stage-3 contracts at 01.07.2026 + default/restructuring dates) and a
-  long-form monthly-DPD table (default_date → 01.07.2026), plus deeper-analysis
-  starters (per-contract DPD stats; relaxed-cure count at n ∈ {0,1,3,7,10}).
+  (non-null Stage-3 contracts at 01.07.2026 + default/restructuring/cure dates)
+  and a long-form monthly-DPD table (calendar window @MonthFrom → @AsOf), plus
+  deeper-analysis starters (per-contract DPD stats; relaxed-cure count at
+  n ∈ {0,1,3,7,10}). Writes to `##` global temp tables — **run this first**, in
+  the same session as the two scripts below.
+- **`stage3_delinquency_groups.sql`** — per-loan monthly DPD **and** delinquency
+  flag, a pattern-group label (e.g. `@345` = delinquent in the 3rd/4th/5th
+  observed months), and **episode-aware severity**: DPD is a running day-count,
+  so a 3-month-consecutive delinquency doesn't show 3 independent readings — it
+  shows one number growing by ~30/31 days/month. This decomposes each loan's
+  delinquency into consecutive-run episodes and reports the DPD at the **start**
+  of the first episode (the true initial miss, not inflated by elapsed time)
+  alongside the longest episode's length (chronicity) and its implied monthly
+  increment (a ~30 value confirms continuous non-payment). Per-group quantiles
+  (q25/median/q75) of both the raw and corrected metric — compare them to see
+  how much a naive `MAX(dpd)` threshold would be misled, and to pick a sensible
+  relax threshold on the corrected metric instead.
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
