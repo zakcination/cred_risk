@@ -10,3 +10,11 @@ compressed-rtf>=1.0    # decompress the RTF-HTML body when no plain-text body ex
 
 # Tests (dev)
 pytest>=7.0
+
+# Local DB-connected analyst scripts (scripts/) — optional, not needed for
+# topic_classifier itself. Requires the "ODBC Driver 17 for SQL Server" system
+# package separately (not pip-installable).
+pandas>=2.0
+matplotlib>=3.7
+pyodbc>=5.0
+python-dotenv>=1.0
