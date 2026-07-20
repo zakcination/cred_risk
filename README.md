@@ -43,6 +43,7 @@ docs/
                              #       (project charter) · sql_scripts_archive.sql (every script run, both
                              #       sides, verbatim, for traceability)
 sql/                         # AQR data-check scripts (T-SQL), e.g. the B3B closed-before-2025 reconciliation
+scripts/                     # local DB-connected analyst tooling (Python), e.g. the Stage 3 DPD chart
 tests/                       # pytest suite (synthetic snippets, no confidential data)
 data/                        # local document store — git-ignored (confidential)
 examples/                    # non-confidential example artifacts
