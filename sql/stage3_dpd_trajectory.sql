@@ -1,4 +1,10 @@
 /* =============================================================================
+   ПРОСТЫМ ЯЗЫКОМ:
+   По каждому займу 3-й стадии показываем просрочку (dpd) по месяцам после даты
+   дефолта — колонки def+1 … def+12 (видно, как заёмщик платил после дефолта).
+   Затем считаем, сколько займов «оздоровилось» бы при мягком правиле: 6 месяцев
+   подряд с просрочкой ≤ n дней (n = 0 строго / 1 / 3 / 7 / 10).
+   ---------------------------------------------------------------------------
    Stage 3 post-default DPD trajectory — dpd at each of the 12 months after the
    default date, per contract (def+1 … def+12). CrediLogic / S03.
    =============================================================================
@@ -74,6 +80,56 @@ SELECT
 FROM stage3 s
 LEFT JOIN pivoted p ON p.contract_number = s.contract_number
 ORDER BY s.contract_number;
+
+
+-------------------------------------------------------------------------------
+-- (2) СКОЛЬКО ЗАЙМОВ «ОЗДОРОВИЛОСЬ» БЫ при мягком правиле.
+--     Правило: есть 6 месяцев ПОДРЯД с просрочкой dpd ≤ n (после дефолта).
+--     n = 0 — текущее строгое правило (база); n = 1/3/7/10 — смягчения.
+--     Прирост от смягчения = (строка n) − (строка 0).
+-------------------------------------------------------------------------------
+DECLARE @CleanMonths int = 6;   -- сколько чистых месяцев подряд нужно для cure
+
+;WITH stage3 AS (
+    SELECT a.contract_number, a.[balance], a.[provisions_total],
+           COALESCE(b.default_date, c.default_date) AS default_date
+    FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] a
+    LEFT JOIN [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT] b ON a.contract_number = b.account_number
+    LEFT JOIN [IFRS9].[dbo].[KAN_20260601_for_LGD_Fenix]      c ON a.contract_number = c.account_number
+    WHERE a.[date] = @AsOf AND a.[category] = '3' AND ISNULL(a.[tag],'') <> '11'
+),
+traj AS (
+    SELECT s.contract_number, DATEDIFF(MONTH, s.default_date, p.[date]) AS m, p.[dpd]
+    FROM stage3 s
+    JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] p ON p.contract_number = s.contract_number
+    WHERE s.default_date IS NOT NULL AND DATEDIFF(MONTH, s.default_date, p.[date]) BETWEEN 1 AND 12
+),
+ns(n) AS ( SELECT n FROM (VALUES (0),(1),(3),(7),(10)) v(n) ),
+-- «чистые» месяцы (dpd ≤ n); islands of consecutive months via (m − ROW_NUMBER())
+clean AS (
+    SELECT t.contract_number, ns.n, t.m,
+           t.m - ROW_NUMBER() OVER (PARTITION BY t.contract_number, ns.n ORDER BY t.m) AS grp
+    FROM traj t CROSS JOIN ns
+    WHERE ISNULL(t.[dpd], 0) <= ns.n          -- NULL dpd = «без просрочки» (см. заметку)
+),
+runs AS (
+    SELECT contract_number, n, COUNT(*) AS run_len
+    FROM clean GROUP BY contract_number, n, grp
+),
+cured AS (
+    SELECT DISTINCT contract_number, n FROM runs WHERE run_len >= @CleanMonths
+)
+SELECT
+    cu.n                       AS dpd_tolerance,      -- 0 = строго
+    COUNT(*)                   AS curable_loans,
+    SUM(s.balance)             AS curable_balance,
+    SUM(s.balance)/1e9         AS curable_balance_bn,
+    SUM(s.provisions_total)    AS provisions_released
+FROM cured cu
+JOIN stage3 s ON s.contract_number = cu.contract_number
+GROUP BY cu.n
+ORDER BY cu.n;
+-- Прирост «оздоровлённых» от смягчения правила до n дней = (curable at n) − (curable at 0).
 
 -------------------------------------------------------------------------------
 -- Notes
