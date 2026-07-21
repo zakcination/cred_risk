@@ -7,6 +7,10 @@ data/*
 !data/README.md
 !data/.gitkeep
 
+# Database credentials for scripts/ (SQL_SERVER, SQL_USER, SQL_PASSWORD, ...)
+.env
+*.env
+
 # Classifier outputs
 results*.json
 *.out
