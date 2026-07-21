@@ -36,6 +36,14 @@ stored here.
   documented `[Dictionaries].[risk_analytics].[restructuring_v2]` event table —
   never queried from this repo, access unconfirmed). §4 is a fill-in-the-blank
   template for that extract once the real table/columns are found.
+- **`stage3_safezone_discovery.sql`** — disambiguates the restructuring-
+  end-date source before the 12-month DPD safe-zone / re-default simulation:
+  profiles the candidate tables surfaced by `stage3_raw_extract.sql` §0b
+  (two `KAN_*_for_LGD_Fenix` variants, `kan_0101_rus`/`kan_0106_rus`, the RS
+  event log `Реструктуризация_RS$`, the `[Dictionaries].restructuring_v2`
+  mart if reachable) for coverage/completeness, and searches the RS event log
+  for a suspension-period or cancellation field — neither has a confirmed
+  source anywhere in this repo yet.
 - **`stage3_delinquency_groups.sql`** — per-loan monthly DPD **and** delinquency
   flag, a pattern-group label (e.g. `@345` = delinquent in the 3rd/4th/5th
   observed months), and **episode-aware severity**: DPD is a running day-count,
