@@ -44,6 +44,18 @@ stored here.
   mart if reachable) for coverage/completeness, and searches the RS event log
   for a suspension-period or cancellation field — neither has a confirmed
   source anywhere in this repo yet.
+- **`stage3_safezone_rolling_extract.sql`** — **purest raw pulls for the
+  12-month DPD safe-zone / re-default simulation** (notebook-side): a 12-date
+  report ladder (`MMYYYYPORTFOLIO` labels), the raw Stage 3 pool at each date,
+  one flat raw monthly panel (dpd/category/balance/tag) spanning 6 months
+  before the earliest portfolio date through the latest, and a placeholder
+  restructuring-reference pull (swap once `stage3_safezone_discovery.sql`
+  picks a source with real 12-month coverage). Encodes the locked-in
+  methodology for traceability only — restructuring-covered clean months stay
+  in the pool but get flagged (not excluded); re-default = first later month
+  where `category` returns to `'3'` for any reason; the downward-trend
+  hypothesis is strict monotonic non-increasing DPD across the 6-month window.
+  All threshold/streak/re-default logic itself runs in pandas, not SQL.
 - **`stage3_delinquency_groups.sql`** — per-loan monthly DPD **and** delinquency
   flag, a pattern-group label (e.g. `@345` = delinquent in the 3rd/4th/5th
   observed months), and **episode-aware severity**: DPD is a running day-count,
