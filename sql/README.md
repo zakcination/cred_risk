@@ -26,6 +26,16 @@ stored here.
   deeper-analysis starters (per-contract DPD stats; relaxed-cure count at
   n ∈ {0,1,3,7,10}). Writes to `##` global temp tables — **run this first**, in
   the same session as the two scripts below.
+- **`stage3_raw_extract.sql`** — **purest raw pulls for notebook (ipynb) work**:
+  no derived columns, no COALESCE, no dedup-to-latest, no aggregation — plain
+  `SELECT *` scoped to the Stage 3 pool's contracts (`category='3'`, exclude
+  `tag=11`) from each confirmed source table (`CL_PORTFOLIO_2`,
+  `HISTORY_DEFAULT_ACCOUNT`, `IFRS9.KAN_20260601_for_LGD_Fenix`), plus a §0
+  schema/keyword-discovery block to locate the **not-yet-confirmed**
+  suspension-period and restructuring-cancellation sources (candidate: the
+  documented `[Dictionaries].[risk_analytics].[restructuring_v2]` event table —
+  never queried from this repo, access unconfirmed). §4 is a fill-in-the-blank
+  template for that extract once the real table/columns are found.
 - **`stage3_delinquency_groups.sql`** — per-loan monthly DPD **and** delinquency
   flag, a pattern-group label (e.g. `@345` = delinquent in the 3rd/4th/5th
   observed months), and **episode-aware severity**: DPD is a running day-count,
