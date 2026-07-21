@@ -166,7 +166,38 @@ submission and regulator questions.
   activity per `source_system`).
 - **Escalate deadline risk on discovery, not at the deadline.**
 
-### 7.3 Operational notes (2026 cycle)
+### 7.3 2026 cycle — 20 loans mis-marked «полное погашение» found via write-off ledger cross-check 🔴
+
+**What happened.** A manual read of the department comments provided to prove
+the submitted statuses caught **4** loans (`680917300967`, `830301402913`,
+`760513350200`, `501213400735`) whose comment explicitly said "written off to
+loss" / "recognized bankrupt" — directly contradicting the submitted
+**полное погашение** status. Cross-checking the same submission against
+**`spis_v_ubytok_RS`** (the RS write-off-to-loss ledger in `CL_PORTFOLIO`)
+found the real count is **20** — the manual comment read missed **16 of 20**
+(80%) of the actual contradictions.
+
+**Root cause.** Comment text is free-form and inconsistently worded (§8.3)
+— reading it catches only the cases where the filler happened to say the
+right words. A structural cross-check against the write-off ledger catches
+every case where the two data sources disagree, regardless of wording.
+
+**Corrective measures (this cycle).** The 20 loans are being corrected from
+`полное погашение` to `списание` before submission.
+
+**Prevention (next cycle) — standing QC gate.**
+[`sql/b3b_writeoff_qc_check.sql`](../sql/b3b_writeoff_qc_check.sql) turns this
+into a repeatable check: every loan submitted as `полное погашение` is joined
+against the write-off ledger(s); any match is a contradiction to fix before
+submission, not after. Run it straight after `b3b_comment_mapping.sql`, same
+session, and treat a nonzero count as a submission blocker without a
+documented override. `spis_v_ubytok_RS` only covers the **RS** source — check
+whether CL / Fenix / Cards have an equivalent ledger (the script's §0b sweep
+looks for `spis_v_ubytok_%` siblings) and repeat the cross-check per source
+system found, the same way the six-source split already works in
+`b3b_reconciliation_2025.sql`.
+
+### 7.4 Operational notes (2026 cycle)
 - Working folder: `R:\...\AQR_2026\B3B\<date>\Рабочая папка`; Fenix data recorded
   in `EUB_B3B_v0`.
 - Reminder for fillers: **if you record a repayment or write-off, the date must

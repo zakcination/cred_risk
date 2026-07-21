@@ -9,6 +9,12 @@ stored here.
 - **`b3b_comment_mapping.sql`** — normalize the free-text column-E comments in
   `EUB_B3B_v0` to the NBRK «Причина» dropdown vocabulary and flag what still needs
   manual review; see the mapping table in [`docs/b3b_guide.md`](../docs/b3b_guide.md) §8.
+- **`b3b_writeoff_qc_check.sql`** — QC gate: cross-checks B3B loans submitted
+  with reason `полное погашение` against the write-off-to-loss ledger
+  (`spis_v_ubytok_RS`, RS source); any match is a contradiction to fix before
+  submission. Generalizes a manual comment-reading catch (4 loans) that this
+  cross-check expanded to 20 — see
+  [`docs/b3b_guide.md`](../docs/b3b_guide.md) §7.3.
 - **`stage3_cure_candidates.sql`** — size the Stage 3 loans that would cure under a
   relaxed rule (stuck only by minor DPD slips) to confirm/refute Retail Business's
   ~12 bn ₸ estimate; methodology in
