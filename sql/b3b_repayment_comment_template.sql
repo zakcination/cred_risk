@@ -1,105 +1,61 @@
 /* =============================================================================
    ПРОСТЫМ ЯЗЫКОМ:
-   В прошлом (2025) цикле для колонки «Комментарии/пояснения Банка» (источники
-   погашения — просят после утверждения формы, см. §6 гайда) использовали
-   ФИКСИРОВАННЫЙ шаблон текста в зависимости от АБИС, определяемой по ФОРМАТУ
-   номера займа — не писали каждый раз новый текст руками для Кредилоджик/Way4:
-     • номер вида NNN/SO/N или F../.../SO/N              -> РС-Банк — узкая
-       транзакционная история пишется вручную (у каждой она своя).
-     • номер вида L21######## / L22######## (без /SO/)   -> Кредилоджик —
-       шаблон «вложены реестры входящих платежей и детальные выписки…»
-     • номер вида KZ..A.. (IBAN)                          -> Way4 (карты) —
-       шаблон «вложены выписки и скрин с АБИС»
-   Этот скрипт классифицирует займы этого года по тому же правилу и сразу
-   подставляет нужный шаблон, оставляя РС-Банк и нераспознанные номера (напр.
-   вида F../..._conv без /SO/) на ручное заполнение. Выписки за этот год лежат
-   в R:\!!!!!!AQR_2026\B3B\на отправку\22.07.2026\выписки.
+   Не нужно разных шаблонов на каждую АБИС — один универсальный комментарий на
+   все займы: «Документы и запрошенные выписки вложены в папке «выписки»».
+   Выписки за этот год лежат в
+   R:\!!!!!!AQR_2026\B3B\на отправку\22.07.2026\выписки. Займы, которые на
+   самом деле НЕ погашены (отменённый ДБЗ / реально списаны в убыток — см.
+   §7.3 гайда), этот универсальный комментарий не получают — для них нужен
+   отдельный, содержательный комментарий, а не ссылка на выписки о погашении.
    -----------------------------------------------------------------------------
-   Classify this cycle's B3B loans by loan-ref FORMAT (not a lookup table —
-   the ref format itself encodes the АБИС, per the 2025-cycle precedent) and
-   apply the matching «Комментарии/пояснения Банка» template. See
-   docs/b3b_guide.md §6.1 for the full template table and the misroute note.
+   One universal «Комментарии/пояснения Банка» comment for this cycle's B3B
+   loans — "documents and requested statements are attached in the «выписки»
+   folder" — instead of the source-system-specific templates from the 2025
+   cycle. Loans already known NOT to be genuine repayments (cancelled
+   agreements, actual write-offs per b3b_writeoff_qc_check.sql) are excluded —
+   see docs/b3b_guide.md §6.1.
    T-SQL (Microsoft SQL Server).
    ============================================================================= */
 
+DECLARE @StatementsFolder nvarchar(200) =
+    N'R:\!!!!!!AQR_2026\B3B\на отправку\22.07.2026\выписки';
+
 ;WITH src AS (
-    -- >>> same source used by b3b_comment_mapping.sql — adjust if this year's
-    -- ref lives in a different column (e.g. ID / LOAN_ID_KR, not LOAN_ID) <<<
+    -- >>> same source used by b3b_comment_mapping.sql <<<
     SELECT [LOAN_ID], [comment] AS existing_comment
     FROM [CL_PORTFOLIO].[dbo].[FOR_B3B_AQR2026_16072026]
 ),
-classified AS (
+flagged AS (
     SELECT
         s.[LOAN_ID],
         s.existing_comment,
-        CASE
-            WHEN s.[LOAN_ID] LIKE '%/SO/%'                              THEN N'РС-Банк'
-            WHEN s.[LOAN_ID] LIKE 'L2[0-9][0-9]%' AND s.[LOAN_ID] NOT LIKE '%/%' THEN N'Кредилоджик'
-            WHEN s.[LOAN_ID] LIKE 'KZ%'                                 THEN N'Way4'
-            ELSE N'UNRECOGNISED FORMAT'
-        END AS abis_source,
-        -- was this loan's agreement CANCELLED rather than repaid? (existing
-        -- comment already says so) — overrides the template below either way.
+        -- cancelled agreement (ДБЗ отменён) — not a repayment, keep its own comment
         CASE WHEN LOWER(s.existing_comment) LIKE N'%отменён%' OR LOWER(s.existing_comment) LIKE N'%отменен%'
-             THEN 1 ELSE 0 END AS is_cancelled
+             THEN 1 ELSE 0 END AS is_cancelled,
+        -- actual write-off per the RS ledger cross-check (b3b_writeoff_qc_check.sql)
+        CASE WHEN EXISTS (
+                SELECT 1 FROM [CL_PORTFOLIO].[dbo].[spis_v_ubytok_RS] w
+                WHERE w.[contractnumber] = s.[LOAN_ID]   -- ⚠ confirm real join key, see b3b_writeoff_qc_check.sql §0a
+             ) THEN 1 ELSE 0 END AS is_writeoff
     FROM src s
 )
 SELECT
-    c.[LOAN_ID],
-    c.abis_source                                          AS [АБИС],
+    f.[LOAN_ID],
     CASE
-        WHEN c.is_cancelled = 1
-            THEN N'MANUAL (ДБЗ cancellation formula) — «ДБЗ [ref] был отменён [дата] на основании выписки № [ref] от [дата][, входящие платежи возвращены клиенту / входящих платежей не было]»'
-        WHEN c.abis_source = N'Кредилоджик'
-            THEN N'вложены реестры входящих платежей и детальные выписки (развернутые графики платежей)'
-        WHEN c.abis_source = N'Way4'
-            THEN N'вложены выписки и скрин с АБИС'
-        WHEN c.abis_source = N'РС-Банк'
-            THEN N'MANUAL — full transaction narrative required (see выписки for this loan)'
-        ELSE N'MANUAL — unrecognised ref format, classify by hand before requesting statements'
-    END                                                     AS [Комментарии/пояснения Банка],
-    c.existing_comment,
-    -- flag the misroute pattern from §6.1: Кредилоджик-format ref whose
-    -- existing comment says "not our system" (asked of the wrong team).
-    CASE WHEN c.abis_source = N'Кредилоджик'
-              AND (LOWER(c.existing_comment) LIKE N'%не в компетенции%'
-                   OR LOWER(c.existing_comment) LIKE N'%не относится%')
-         THEN 1 ELSE 0 END                                  AS likely_misrouted
-FROM classified c
-ORDER BY c.abis_source, c.[LOAN_ID];
-
--------------------------------------------------------------------------------
--- Summary — how many fall into each bucket (sanity-check before requesting
--- statements from R:\!!!!!!AQR_2026\B3B\на отправку\22.07.2026\выписки).
--------------------------------------------------------------------------------
-;WITH src AS (
-    SELECT [LOAN_ID], [comment] AS existing_comment
-    FROM [CL_PORTFOLIO].[dbo].[FOR_B3B_AQR2026_16072026]
-),
-classified AS (
-    SELECT
-        CASE
-            WHEN s.[LOAN_ID] LIKE '%/SO/%'                              THEN N'РС-Банк'
-            WHEN s.[LOAN_ID] LIKE 'L2[0-9][0-9]%' AND s.[LOAN_ID] NOT LIKE '%/%' THEN N'Кредилоджик'
-            WHEN s.[LOAN_ID] LIKE 'KZ%'                                 THEN N'Way4'
-            ELSE N'UNRECOGNISED FORMAT'
-        END AS abis_source
-    FROM src s
-)
-SELECT abis_source, COUNT(*) AS loans
-FROM classified
-GROUP BY abis_source
-ORDER BY loans DESC;
+        WHEN f.is_cancelled = 1 THEN N'SKIP — cancelled agreement, use the ДБЗ-cancellation comment instead (§6.1)'
+        WHEN f.is_writeoff  = 1 THEN N'SKIP — actually written off (spis_v_ubytok_RS), fix reason to списание first (§7.3)'
+        ELSE N'Документы и запрошенные выписки вложены в папке «выписки»'
+    END                                          AS [Комментарии/пояснения Банка],
+    @StatementsFolder                            AS statements_folder,
+    f.existing_comment
+FROM flagged f
+ORDER BY f.[LOAN_ID];
 
 -------------------------------------------------------------------------------
 -- Notes
 -------------------------------------------------------------------------------
--- * Ref-format classification, not a source_system lookup — matches how the
---   2025-cycle table's own АБИС column lined up 1:1 with the ref format.
---   Cross-check against the six-source union in b3b_reconciliation_2025.sql
---   if any row looks misclassified.
--- * UNRECOGNISED FORMAT will catch refs like `F05/35/17-703_conv` (no /SO/,
---   `_conv` suffix) seen this cycle — these don't match any of the three
---   2025-cycle patterns; confirm their real АБИС by hand before templating.
--- * Templates are boilerplate text ONLY — actually attaching the registry/
---   statement/screenshot from the выписки folder is a separate manual step.
+-- * Universal comment applies to every loan except the two known exceptions
+--   above — no per-АБИС branching.
+-- * is_writeoff depends on spis_v_ubytok_RS's real join key (placeholder,
+--   same caveat as b3b_writeoff_qc_check.sql) — confirm before trusting the
+--   SKIP flag.

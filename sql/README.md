@@ -9,12 +9,11 @@ stored here.
 - **`b3b_comment_mapping.sql`** — normalize the free-text column-E comments in
   `EUB_B3B_v0` to the NBRK «Причина» dropdown vocabulary and flag what still needs
   manual review; see the mapping table in [`docs/b3b_guide.md`](../docs/b3b_guide.md) §8.
-- **`b3b_repayment_comment_template.sql`** — classifies this cycle's B3B loans
-  by loan-ref **format** (`.../SO/...` → РС-Банк, `L21…`/`L22…` → Кредилоджик,
-  `KZ…A…` → Way4 — the same rule the 2025-cycle submission's АБИС column
-  followed) and fills in the matching «Комментарии/пояснения Банка» boilerplate
-  (Кредилоджик/Way4) or flags it for manual narrative (РС-Банк, cancelled
-  agreements, unrecognised formats); see
+- **`b3b_repayment_comment_template.sql`** — applies ONE universal
+  «Комментарии/пояснения Банка» comment («Документы и запрошенные выписки
+  вложены в папке «выписки»») to this cycle's B3B population, skipping
+  cancelled agreements and loans actually written off
+  (`b3b_writeoff_qc_check.sql`) — those get their own comment instead; see
   [`docs/b3b_guide.md`](../docs/b3b_guide.md) §6.1.
 - **`b3b_writeoff_qc_check.sql`** — QC gate: cross-checks B3B loans submitted
   with reason `полное погашение` against the write-off-to-loss ledger
