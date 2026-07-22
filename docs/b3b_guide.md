@@ -109,30 +109,35 @@ for later reconciliations.
 
 ### 6.1 «Комментарии/пояснения Банка» — sources-of-repayment comment template
 
-The 2025-cycle submission (25 loans) established a **fixed comment style per
-АБИС (source system)**, identifiable by the loan reference's own format — reuse
-it verbatim rather than free-writing a new comment per loan:
+The 2025-cycle submission (25 loans) used a comment style that varied by АБИС
+(source system) — narrated per loan for РС-Банк, boilerplate "documents
+attached" for Кредилоджик/Way4. **2026 cycle: one universal comment covers
+the whole population** — the statements are already collected in a single
+shared folder, so there's no need to vary the wording by source:
 
-| АБИС | Loan-ref format | Comment template |
-|---|---|---|
-| **РС-Банк** | `NNN/SO/N`, `F../../.../SO/N` | Full transaction narrative: source account, amount, payment purpose, counterparty (e.g. *"погашение с текущего счета клиента (поступление на сумму … с назначением — …)"*) — written per loan, not templated, since the underlying transaction differs each time. |
-| **Кредилоджик** | `L21…` / `L22…` (10-digit, no `/SO/`) | *«вложены реестры входящих платежей и детальные выписки (развернутые графики платежей)»* — boilerplate; attach the incoming-payment registry + detailed statement instead of narrating the transaction. |
-| **Way4 (Cards)** | `KZ…A…` (IBAN-style) | *«вложены выписки и скрин с АБИС»* — boilerplate; attach the statement + an АБИС screenshot. |
-| *(cancelled agreement, any АБИС)* | — | *«ДБЗ [ref] был отменён [date] на основании выписки № [ref] от [date][, и поступившие входящие платежи на общую сумму … тенге были возвращены клиенту / Входящих платежей от клиента не было]»* — used instead of the above when the loan agreement itself was cancelled, not repaid. |
+> «Документы и запрошенные выписки вложены в папке «выписки»»
 
-**2026 cycle:** supporting statements (`выписки`) for this year's confirmation
-live at `R:\!!!!!!AQR_2026\B3B\на отправку\22.07.2026\выписки`. Classify this
-year's population by loan-ref format (same rule as above) and apply the
-matching template; [`sql/b3b_repayment_comment_template.sql`](../sql/b3b_repayment_comment_template.sql)
-does the classification mechanically instead of eyeballing 200+ refs one by one.
+Supporting statements for this year's confirmation live at
+`R:\!!!!!!AQR_2026\B3B\на отправку\22.07.2026\выписки`.
+[`sql/b3b_repayment_comment_template.sql`](../sql/b3b_repayment_comment_template.sql)
+applies this to the whole population **except** two kinds of loan that aren't
+genuine repayments and need their own comment instead:
+- **Cancelled agreements** (ДБЗ отменён) — keep the ДБЗ-cancellation formula:
+  *«ДБЗ [ref] был отменён [date] на основании выписки № [ref] от [date][, и
+  поступившие входящие платежи на общую сумму … тенге были возвращены клиенту
+  / Входящих платежей от клиента не было]»*.
+- **Actual write-offs** caught by the `spis_v_ubytok_RS` cross-check (§7.3) —
+  these need their reason corrected to `списание` first, not a statements
+  comment that implies repayment.
 
-> ⚠ **Misroute risk.** A loan whose ref is `L21…` (Кредилоджик format) but was
-> asked of the wrong team will come back as "not in our system" instead of a
-> real confirmation — this already happened once this cycle (loan
-> `020206601187`, ref `L211204400204` — RS/УАБО correctly said *"не в
-> компетенции УАБО (не относится к RSbank)"* because it's actually a
-> Кредилоджик loan). Classify by ref format **before** routing the request,
-> not after a department bounces it.
+> ⚠ **Misroute risk (unrelated to the comment template, still open).** A loan
+> whose ref is `L21…` (Кредилоджик format) but was asked of the wrong team
+> comes back as "not in our system" instead of a real confirmation — this
+> already happened once this cycle (loan `020206601187`, ref
+> `L211204400204` — RS/УАБО correctly said *"не в компетенции УАБО (не
+> относится к RSbank)"* because it's actually a Кредилоджик loan). Route by
+> the loan-ref's source system before requesting anything, not after a
+> department bounces it.
 
 ---
 
