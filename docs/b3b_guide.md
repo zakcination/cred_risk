@@ -198,7 +198,7 @@ submission and regulator questions.
   activity per `source_system`).
 - **Escalate deadline risk on discovery, not at the deadline.**
 
-### 7.3 2026 cycle — 20 loans mis-marked «полное погашение» found via write-off ledger cross-check 🔴
+### 7.3 2026 cycle — 20 loans mis-marked «полное погашение» found via write-off ledger cross-check ✅ resolved
 
 **What happened.** A manual read of the department comments provided to prove
 the submitted statuses caught **4** loans (`680917300967`, `830301402913`,
@@ -214,8 +214,32 @@ found the real count is **20** — the manual comment read missed **16 of 20**
 right words. A structural cross-check against the write-off ledger catches
 every case where the two data sources disagree, regardless of wording.
 
-**Corrective measures (this cycle).** The 20 loans are being corrected from
-`полное погашение` to `списание` before submission.
+**Corrective measures (taken this cycle).** All 20 loans corrected from
+`полное погашение` to `списание`; a corrected `EUB_B3B_v0.xlsx` was sent to
+АФР with the following explanatory note, requesting it replace the
+previously submitted version:
+
+> Добрый день!
+>
+> В ответ на запрос о предоставлении выписок, подтверждающих полное погашение
+> по договорам, сообщаем следующее.
+>
+> При проведении анализа и сверки информации по договорам, указанным в вашем
+> запросе, было установлено, что по 4 договорам ранее ошибочно была отражена
+> причина закрытия «Полное погашение», тогда как фактическим основанием
+> является «Списание».
+>
+> После выявления данного несоответствия нами была проведена дополнительная
+> проверка всех договоров, включенных в шаблон B3B. По результатам проверки
+> были выявлены аналогичные ошибки еще по 16 договорам.
+>
+> Таким образом, всего установлено 20 договоров, по которым причина закрытия
+> была отражена некорректно. По всем указанным договорам информация
+> скорректирована: причина закрытия изменена с «Полное погашение» на
+> «Списание».
+>
+> Во вложении направляем скорректированный файл и просим использовать его
+> взамен ранее представленной версии.
 
 **Prevention (next cycle) — standing QC gate.**
 [`sql/b3b_writeoff_qc_check.sql`](../sql/b3b_writeoff_qc_check.sql) turns this
