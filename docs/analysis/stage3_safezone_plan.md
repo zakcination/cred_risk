@@ -13,16 +13,28 @@ computation runs in pandas (ipynb), per the "purest raw extractions" direction.
 
 ## Phase A — data readiness (SQL)
 
-- [ ] **Run** `sql/stage3_safezone_discovery.sql` (§0a/0b/0c) against the real DB.
-- [ ] **Paste back**: which `KAN_*`/`kan_*` table has full 12-month coverage +
-      fill rate on the restructuring end-date; any `FIELD_NAME` hit in
-      `Реструктуризация_RS$` for suspension-period / cancellation; whether
-      `[Dictionaries]` is reachable and what `restructuring_v2` looks like.
-- [ ] *(Claude)* Finalize `stage3_safezone_rolling_extract.sql` §3 against the
-      confirmed source — replace the `KAN_20260601_for_LGD_Fenix` placeholder.
+- [x] **Run** `sql/stage3_safezone_discovery.sql` — done 23.07.2026. Resolved:
+      **`[Dictionaries].[risk_analytics].[restructuring_v2]`** is the winning
+      source — a multi-source (`dlcr$source`) restructuring EVENT table with
+      **both previously-missing pieces**: suspension period
+      (`grace_od_begin_date`/`grace_od_end_date` for principal,
+      `grace_int_begin_date`/`grace_int_end_date` for interest) and
+      cancellation (`canc_date`). The RS event log turned out to be a dead end
+      (only one field: "Наличие реструктуризации"); `KAN_20250301_for_LGD_
+      Fenix_DI_BI` doesn't exist; the `KAN_*_for_LGD` monthly family has a
+      real per-month series back to 2018 but the restructuring-end-date
+      column's spelling is inconsistent across ~15 months in 2023 (7+ variant
+      names) before settling — moot now that `restructuring_v2` supersedes it
+      for restructuring info. Fill rates for reference: `KAN_20260601_for_LGD_
+      Fenix` 29.5%, `kan_0101_rus` 53.5% (but only 2 of these "_rus" tables
+      exist — not a full monthly series, and has a `1899-12-30` null-date
+      artifact), `kan_0106_rus` 28.7%.
+- [x] *(Claude)* Finalized `stage3_safezone_rolling_extract.sql` §3 against
+      `restructuring_v2` (raw event pull, `loan_id = contract_number` assumed
+      — unconfirmed, verify row counts) — replaces the placeholder.
 - [ ] **Run** `stage3_safezone_rolling_extract.sql` end to end and export each
       result set (report-date ladder, Stage 3 pool, DPD/category panel,
-      restructuring reference) to CSV/parquet for the notebook.
+      restructuring events) to CSV/parquet for the notebook.
 
 ## Phase B — notebook setup (Python)
 
@@ -30,9 +42,12 @@ computation runs in pandas (ipynb), per the "purest raw extractions" direction.
 - [ ] Per `portfolio_asof`, slice each loan's 6-month lookback window from the
       flat DPD/category panel.
 - [ ] Compute `restr_active_pct` per loan/window (share of the 6 months
-      covered by an active restructuring — `snap_date ≤ дата окончания
-      реструктуры`). Report **% of the population with a restructuring
-      end-date defined vs. not**, per month — the transparency metric.
+      covered by an active grace period — `grace_od_begin_date ≤ snap_date ≤
+      grace_od_end_date` and/or the `grace_int_*` pair; pick the most recent
+      restructuring event as of each `snap_date` first). Report **% of the
+      population with a restructuring event defined vs. not**, per month —
+      the transparency metric. Also flag any event with a non-null
+      `canc_date` — a cancelled restructuring shouldn't count as "active."
 
 ## Phase C — Task #1: find the safe-zone threshold
 

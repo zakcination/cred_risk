@@ -12,10 +12,13 @@
         и до @LastAsOf (запас вперёд — мониторить re-default). Не 12 отдельных
         выгрузок — один плоский лист, а разложение по (портфель, смещение)
         делаете в Python.
-     3) Справочная запись по реструктуризации — ВРЕМЕННО единственный
-        подтверждённый источник (KAN_20260601_for_LGD_Fenix, один снимок, НЕ
-        помесячный) — замените после того как stage3_safezone_discovery.sql
-        укажет, какая таблица реально покрывает все 12 месяцев.
+     3) Справочная запись по реструктуризации — теперь из подтверждённого
+        источника [Dictionaries].[risk_analytics].[restructuring_v2] (журнал
+        СОБЫТИЙ реструктуризации по ВСЕМ источникам, найден через discovery-
+        скрипт 23.07.2026). Именно здесь лежат ранее не найденные период
+        приостановки (grace_od_*/grace_int_*) и дата отмены реструктуризации
+        (canc_date) — SELECT * без фильтра «последняя запись», раскладку по
+        (портфель, контракт) делаете в Python.
 
    Зафиксированные решения по методологии (для трассируемости — считать всё
    равно в Python, тут только сырые данные):
@@ -89,10 +92,17 @@ CROSS JOIN span s
 WHERE p.[date] >= s.panel_from AND p.[date] <= s.panel_to;
 
 -------------------------------------------------------------------------------
--- 3. RAW restructuring reference — PLACEHOLDER. Only KAN_20260601_for_LGD_
---    Fenix is fully confirmed right now (a single June-2026 snapshot, NOT a
---    per-portfolio-month value). Swap this block once stage3_safezone_
---    discovery.sql tells you which candidate actually covers all 12 months.
+-- 3. RAW restructuring EVENT log — [Dictionaries].[risk_analytics].
+--    [restructuring_v2], confirmed reachable and multi-source (dlcr$source).
+--    SELECT * — every column, every event row per contract, no "keep only
+--    last" filter (do that in pandas: sort by restructuring_date/report_date,
+--    groupby(loan_id).tail(1)). Has BOTH previously-missing pieces:
+--      • suspension period — grace_od_begin_date/grace_od_end_date (principal),
+--        grace_int_begin_date/grace_int_end_date (interest) — separate pairs.
+--      • cancellation — canc_date.
+--    ⚠ Join key assumed loan_id = contract_number (same assumption used
+--    everywhere else cross-system in this repo) — unconfirmed, check row
+--    counts below if the join looks too thin.
 -------------------------------------------------------------------------------
 ;WITH pool_contracts AS (
     SELECT DISTINCT a.contract_number
@@ -100,9 +110,9 @@ WHERE p.[date] >= s.panel_from AND p.[date] <= s.panel_to;
     JOIN ##SAFEZONE_REPORT_DATES rd ON a.[date] = rd.asof_date
     WHERE a.[category] = '3' AND ISNULL(a.[tag], '') <> '11'
 )
-SELECT c.*
-FROM [IFRS9].[dbo].[KAN_20260601_for_LGD_Fenix] c
-JOIN pool_contracts pc ON pc.contract_number = c.account_number;
+SELECT r.*
+FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
+JOIN pool_contracts pc ON pc.contract_number = r.loan_id;
 
 -------------------------------------------------------------------------------
 -- Notes
@@ -113,10 +123,14 @@ JOIN pool_contracts pc ON pc.contract_number = c.account_number;
 -- * category is numeric-as-text in CL_PORTFOLIO_2 ('3' = Stage 3) — this IS
 --   the "any Stage 3 criterion" signal for the re-default definition; no
 --   separate DPD≥91 check needed once you're comparing category across months.
--- * §3 is a KNOWN GAP, not a finished join: one static snapshot applied to 12
---   rolling portfolios is a simplification (restructuring end dates don't
---   change, but WHICH restructuring is "last" as of each portfolio date could,
---   if a contract restructured more than once — unconfirmed either way).
+-- * §3's restructuring_v2 is an EVENT table — a contract can have multiple
+--   rows (multiple restructurings over time). "Last restructuring as of each
+--   portfolio_asof" is a pandas-side filter (restructuring_date <= asof_date,
+--   keep the max), not something this raw pull decides.
+-- * restr_active_pct (Phase B of the plan) should use grace_od_end_date /
+--   grace_int_end_date from here instead of KAN's "дата окончания реструктуры"
+--   — more precise (separate principal/interest) and from the confirmed
+--   multi-source table, not a single-source monthly snapshot family.
 -- * @LastAsOf caps the lookforward window for re-default monitoring — the most
 --   recent portfolio dates will have little/no forward runway yet (right-
 --   censoring); handle that in pandas, don't drop those rows in SQL.
