@@ -110,23 +110,28 @@ def extract_contracts(path: Path, header_row: int, contract_col: int) -> pd.Data
     return pd.concat(frames, ignore_index=True) if frames else empty
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--base-dir", type=Path, default=DEFAULT_BASE_DIR)
-    parser.add_argument("--years", nargs="+", default=DEFAULT_YEARS)
-    parser.add_argument("--header-row", type=int, default=DEFAULT_HEADER_ROW)
-    parser.add_argument("--contract-col", type=int, default=DEFAULT_CONTRACT_COL)
-    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    args = parser.parse_args()
+def run_scan(
+    base_dir: Path = DEFAULT_BASE_DIR,
+    years: list[str] = DEFAULT_YEARS,
+    header_row: int = DEFAULT_HEADER_ROW,
+    contract_col: int = DEFAULT_CONTRACT_COL,
+    out: Path | None = DEFAULT_OUT,
+) -> pd.DataFrame:
+    """Run the scan and (if `out` is given) write the consolidated CSV. Callable
+    directly from a notebook cell with plain Python args -- no argparse involved:
 
-    print(f"Scanning {args.base_dir} for years {args.years} ...")
-    files = find_excel_files(args.base_dir, args.years)
+        from writeoff_restoration_scan import run_scan
+        df = run_scan(years=["2025", "2026"])
+    """
+    base_dir = Path(base_dir)
+    print(f"Scanning {base_dir} for years {years} ...")
+    files = find_excel_files(base_dir, years)
     print(f"\nFound {len(files)} .xlsx file(s) total.\n")
 
     all_rows = []
     for f in files:
-        rel = f.relative_to(args.base_dir)
-        extracted = extract_contracts(f, args.header_row, args.contract_col)
+        rel = f.relative_to(base_dir)
+        extracted = extract_contracts(f, header_row, contract_col)
         print(f"{rel}  ->  {len(extracted)} contract row(s)")
         all_rows.append(extracted)
 
@@ -137,14 +142,35 @@ def main() -> None:
     )
     result = result.drop_duplicates()
 
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    result.to_csv(args.out, index=False, encoding="utf-8-sig")
+    if out is not None:
+        out = Path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        result.to_csv(out, index=False, encoding="utf-8-sig")
+        print(f"\nWrote {len(result)} row(s), {result['contract_number'].nunique()} distinct contract(s) to {out}")
 
-    print(f"\nWrote {len(result)} row(s), {result['contract_number'].nunique()} distinct contract(s) to {args.out}")
     if not result.empty:
         print("\nRows by month:")
         by_month = result.assign(month=result["event_date"].dt.to_period("M")).groupby("month").size()
         print(by_month.to_string())
+
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--base-dir", type=Path, default=DEFAULT_BASE_DIR)
+    parser.add_argument("--years", nargs="+", default=DEFAULT_YEARS)
+    parser.add_argument("--header-row", type=int, default=DEFAULT_HEADER_ROW)
+    parser.add_argument("--contract-col", type=int, default=DEFAULT_CONTRACT_COL)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    # parse_known_args, not parse_args: running this via `%run` in Jupyter leaks
+    # ipykernel's own launch args (e.g. --f=...kernel-....json) into sys.argv --
+    # parse_args() would hard-crash on those; unknown args are just ignored here.
+    args, unknown = parser.parse_known_args()
+    if unknown:
+        print(f"(ignoring unrecognized args, likely from the Jupyter kernel launch: {unknown})")
+
+    run_scan(args.base_dir, args.years, args.header_row, args.contract_col, args.out)
 
 
 if __name__ == "__main__":
