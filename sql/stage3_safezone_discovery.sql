@@ -5266,6 +5266,24 @@ FROM [Dictionaries].INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_NAME = 'restructuring_v2'
 ORDER BY ORDINAL_POSITION;
 
+/*
+TABLE_NAME	COLUMN_NAME	DATA_TYPE
+restructuring_v2	dlcr_gid	bigint
+restructuring_v2	dlcr$source	nvarchar
+restructuring_v2	loan_id	nvarchar
+restructuring_v2	restructuring_date	date
+restructuring_v2	new_interest_rate	float
+restructuring_v2	days_past_due_at_restructuring	float
+restructuring_v2	new_maturity_date	date
+restructuring_v2	financial_deterioration_flag	nvarchar
+restructuring_v2	payment_deferral	float
+restructuring_v2	canc_date	date
+restructuring_v2	grace_od_begin_date	date
+restructuring_v2	grace_int_begin_date	date
+restructuring_v2	grace_od_end_date	date
+restructuring_v2	grace_int_end_date	date
+restructuring_v2	report_date	date
+*/
 -------------------------------------------------------------------------------
 -- Notes
 -------------------------------------------------------------------------------
