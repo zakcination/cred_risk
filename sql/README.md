@@ -48,6 +48,11 @@ stored here.
   documented `[Dictionaries].[risk_analytics].[restructuring_v2]` event table —
   never queried from this repo, access unconfirmed). §4 is a fill-in-the-blank
   template for that extract once the real table/columns are found.
+- **`stage3_safezone_discovery.sql`** / **`stage3_safezone_rolling_extract.sql`**
+  — step-by-step action plan for this whole workstream (Task #1: derive the
+  DPD safe-zone threshold from a 12-month re-default simulation; Task #2:
+  size the candidate list under two competing recovery rules) is in
+  [`docs/analysis/stage3_safezone_plan.md`](../docs/analysis/stage3_safezone_plan.md).
 - **`stage3_safezone_discovery.sql`** — disambiguates the restructuring-
   end-date source before the 12-month DPD safe-zone / re-default simulation:
   profiles the candidate tables surfaced by `stage3_raw_extract.sql` §0b
