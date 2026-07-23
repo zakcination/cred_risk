@@ -15,9 +15,13 @@
         банку, и именно среди «ушедших» займов.
    ⚠ KAN_write_off_AQR / KAN_sale_KA_AQR имеют суффикс «_AQR» — как и
    AQR20XX_B1A/B1B/B3C таблицы, это МОГУТ быть точечные выгрузки под конкретный
-   цикл AQR, а не непрерывно обновляемый операционный журнал. §4 добавляет
+   цикл AQR, а не непрерывно обновляемый операционный журнал. §5 добавляет
    схему-разведку по spis_v_ubytok_RS / SOLD_PORTFOLIO_FOR_LGD как более
-   «живую» альтернативу, если объёмы из §2/§3 не объясняют разрыв.
+   «живую» альтернативу, если объёмы из §3/§4 не объясняют разрыв.
+   §7/§8 — прямая наводка: [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025]
+   («Продажа & Прощение», декабрь 2025) — похоже на точный список декабрьских
+   продаж/прощений долга, что отлично совпадает с 98.2% «ушедших» займов,
+   которые просто ИСЧЕЗЛИ из CL_PORTFOLIO_2 (не tag=11, а именно исчезли).
    -----------------------------------------------------------------------------
    Investigate the Dec-2025 -> Jan-2026 Stage 3 pool drop-off (54,088 -> 28,668
    loans, non-uniform: non-restructured loans fell 70%, restructured only 34%).
@@ -137,6 +141,37 @@ SELECT
         WHERE s.[sale_date] >= @WindowStart AND s.[sale_date] <= @WindowEnd) AS covered_by_sale;
 
 -------------------------------------------------------------------------------
+-- 7. Direct lead: Prodaja&Proschenie_12_2025 ("Продажа & Прощение" = sale &
+--    forgiveness, December 2025) — sounds like exactly a December sale/
+--    forgiveness batch list. Schema first (name unconfirmed beyond what the
+--    "&" in the table name implies — two categories in one table?).
+-------------------------------------------------------------------------------
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, ORDINAL_POSITION
+FROM [CL_PORTFOLIO].INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'Prodaja&Proschenie_12_2025'
+ORDER BY ORDINAL_POSITION;
+
+SELECT TOP (20) * FROM [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025];
+
+-------------------------------------------------------------------------------
+-- 8. Cross-check against the GONE population (§2). ⚠ ADJUST [contract_number]
+--    to whatever §7 shows as the real loan-id column — this is a guess based
+--    on the convention used everywhere else in CL_PORTFOLIO. Same for a
+--    reason/type column if you want to split sale vs forgiveness counts.
+-------------------------------------------------------------------------------
+;WITH gone AS (
+    SELECT e.contract_number, e.[balance]
+    FROM ##EXITED e
+    LEFT JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] jan
+        ON jan.contract_number = e.contract_number AND jan.[date] = @JanAsOf
+    WHERE jan.contract_number IS NULL   -- the 26,887 "GONE — no row at all" bucket from §2
+)
+SELECT COUNT(*) AS gone_and_in_prodaja_proschenie, SUM(g.[balance]) AS balance
+FROM gone g
+JOIN [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025] pp
+    ON pp.[contract_number] = g.contract_number;   -- ⚠ confirm real column name from §7
+
+-------------------------------------------------------------------------------
 -- Notes
 -------------------------------------------------------------------------------
 -- * @WindowStart/@WindowEnd cover the last ~2 weeks of December 2025 per the
@@ -149,5 +184,8 @@ SELECT
 --   KAN_write_off_AQR event, not just a tag update on its own.
 -- * If §6's covered_by_writeoff + covered_by_sale is well short of
 --   total_exited, the explanation is probably NOT write-off/sale at all —
---   revisit §5's alternate ledgers, or consider a category/methodology
---   change effective 01.01.2026 rather than a portfolio event.
+--   check §8 next (Prodaja&Proschenie_12_2025 is the strongest lead so far:
+--   98.2% of exits vanished from CL_PORTFOLIO_2 entirely rather than being
+--   tag-flagged, which fits a sale/forgiveness batch that removes the row
+--   outright), or consider a category/methodology change effective 01.01.2026
+--   rather than a portfolio event if §8 also comes up short.
