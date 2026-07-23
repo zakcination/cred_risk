@@ -16,7 +16,7 @@
         источника [Dictionaries].[risk_analytics].[restructuring_v2] (журнал
         СОБЫТИЙ реструктуризации по ВСЕМ источникам, найден через discovery-
         скрипт 23.07.2026). Именно здесь лежат ранее не найденные период
-        приостановки (grace_od_*/grace_int_*) и дата отмены реструктуризации
+        приостановки (grace_od_ /grace_int_ ) и дата отмены реструктуризации
         (canc_date) — SELECT * без фильтра «последняя запись», раскладку по
         (портфель, контракт) делаете в Python.
 
@@ -59,6 +59,24 @@ FROM n;
 
 SELECT * FROM ##SAFEZONE_REPORT_DATES ORDER BY asof_date;
 
+/*
+reposnse: 
+
+asof_date	months_back	portfolio_label
+2025-08-01	11	082025PORTFOLIO
+2025-09-01	10	092025PORTFOLIO
+2025-10-01	9	102025PORTFOLIO
+2025-11-01	8	112025PORTFOLIO
+2025-12-01	7	122025PORTFOLIO
+2026-01-01	6	012026PORTFOLIO
+2026-02-01	5	022026PORTFOLIO
+2026-03-01	4	032026PORTFOLIO
+2026-04-01	3	042026PORTFOLIO
+2026-05-01	2	052026PORTFOLIO
+2026-06-01	1	062026PORTFOLIO
+2026-07-01	0	072026PORTFOLIO
+
+*/
 -------------------------------------------------------------------------------
 -- 1. RAW Stage 3 pool at each of the 12 report dates. SELECT * — every
 --    CL_PORTFOLIO_2 column, untouched, one row per (contract, portfolio_label).
@@ -68,6 +86,13 @@ FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] a
 JOIN ##SAFEZONE_REPORT_DATES rd ON a.[date] = rd.asof_date
 WHERE a.[category] = '3'
   AND ISNULL(a.[tag], '') <> '11';
+
+/*
+respomse :
+
+481.818k loans
+
+*/
 
 -------------------------------------------------------------------------------
 -- 2. RAW monthly panel — dpd/category/balance/tag for every contract that
@@ -91,6 +116,8 @@ JOIN pool_contracts pc ON pc.contract_number = p.contract_number
 CROSS JOIN span s
 WHERE p.[date] >= s.panel_from AND p.[date] <= s.panel_to;
 
+/* Respone : 1.080891M loans*/
+
 -------------------------------------------------------------------------------
 -- 3. RAW restructuring EVENT log — [Dictionaries].[risk_analytics].
 --    [restructuring_v2], confirmed reachable and multi-source (dlcr$source).
@@ -113,6 +140,7 @@ WHERE p.[date] >= s.panel_from AND p.[date] <= s.panel_to;
 SELECT r.*
 FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
 JOIN pool_contracts pc ON pc.contract_number = r.loan_id;
+/* Respone : 91.679k loans loans*/
 
 -------------------------------------------------------------------------------
 -- Notes
