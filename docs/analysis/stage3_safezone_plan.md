@@ -32,9 +32,13 @@ computation runs in pandas (ipynb), per the "purest raw extractions" direction.
 - [x] *(Claude)* Finalized `stage3_safezone_rolling_extract.sql` §3 against
       `restructuring_v2` (raw event pull, `loan_id = contract_number` assumed
       — unconfirmed, verify row counts) — replaces the placeholder.
-- [ ] **Run** `stage3_safezone_rolling_extract.sql` end to end and export each
-      result set (report-date ladder, Stage 3 pool, DPD/category panel,
-      restructuring events) to CSV/parquet for the notebook.
+- [x] **Run** `stage3_safezone_rolling_extract.sql` — done 23.07.2026. Ladder
+      confirmed 08.2025→07.2026 (12 months) as designed. Row counts: §1 Stage 3
+      pool 481.818k rows (loan × portfolio_label, ~40k/month), §2 DPD/category
+      panel 1.080891M rows, §3 restructuring_v2 join 91.679k rows — the
+      `loan_id = contract_number` join key returns a plausible non-trivial
+      count, so treat it as working unless the notebook turns up a mismatch.
+      **Still open:** export each result set to CSV/parquet for the notebook.
 
 ## Phase B — notebook setup (Python)
 
