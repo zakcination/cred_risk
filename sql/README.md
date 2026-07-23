@@ -62,7 +62,8 @@ stored here.
   not recategorized — just gone), only 1.8% were reclassified — then
   cross-checks write-off (`KAN_write_off_AQR`), sale (`KAN_sale_KA_AQR`), and
   the direct lead `Prodaja&Proschenie_12_2025` ("Продажа & Прощение", Dec
-  2025 — sale & forgiveness) against that "gone" population.
+  2025 — sale & forgiveness; confirmed schema: `Contract`/`Продажа и
+  прошение`/`IIN`/`SFK`) against that "gone" population, split by reason.
 - **`stage3_safezone_discovery.sql`** — disambiguated the restructuring
   source before the 12-month DPD safe-zone / re-default simulation. **Resolved
   23.07.2026**: `[Dictionaries].[risk_analytics].[restructuring_v2]` — a

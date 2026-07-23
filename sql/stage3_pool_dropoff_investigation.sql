@@ -141,35 +141,53 @@ SELECT
         WHERE s.[sale_date] >= @WindowStart AND s.[sale_date] <= @WindowEnd) AS covered_by_sale;
 
 -------------------------------------------------------------------------------
--- 7. Direct lead: Prodaja&Proschenie_12_2025 ("Продажа & Прощение" = sale &
---    forgiveness, December 2025) — sounds like exactly a December sale/
---    forgiveness batch list. Schema first (name unconfirmed beyond what the
---    "&" in the table name implies — two categories in one table?).
+-- 7. Prodaja&Proschenie_12_2025 — CONFIRMED schema: [Contract] (loan id),
+--    [Продажа и прошение] (reason — "Продажа" seen so far, watch for
+--    "Прощение" too; values carry trailing whitespace, LTRIM/RTRIM before
+--    grouping), [IIN], [SFK] (buyer / special financial company, e.g. ATLAS —
+--    matches the cession-to-SFK wording already used for продажа in
+--    b3b_comment_mapping.sql). No date column — the table name itself scopes
+--    it to December 2025, so no date filter is needed against @WindowStart/
+--    @WindowEnd here.
 -------------------------------------------------------------------------------
-SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH, ORDINAL_POSITION
-FROM [CL_PORTFOLIO].INFORMATION_SCHEMA.COLUMNS
-WHERE TABLE_NAME = 'Prodaja&Proschenie_12_2025'
-ORDER BY ORDINAL_POSITION;
+SELECT LTRIM(RTRIM([Продажа и прошение])) AS reason,
+       COUNT(*) AS rows_total, COUNT(DISTINCT [Contract]) AS distinct_contracts
+FROM [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025]
+GROUP BY LTRIM(RTRIM([Продажа и прошение]))
+ORDER BY rows_total DESC;
 
-SELECT TOP (20) * FROM [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025];
+SELECT [SFK], COUNT(*) AS rows_total
+FROM [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025]
+GROUP BY [SFK]
+ORDER BY rows_total DESC;
 
 -------------------------------------------------------------------------------
--- 8. Cross-check against the GONE population (§2). ⚠ ADJUST [contract_number]
---    to whatever §7 shows as the real loan-id column — this is a guess based
---    on the convention used everywhere else in CL_PORTFOLIO. Same for a
---    reason/type column if you want to split sale vs forgiveness counts.
+-- 8. Cross-check against the GONE population (§2's 26,887 "no row at all"
+--    bucket) — materialized here so it doesn't need re-deriving per query.
 -------------------------------------------------------------------------------
-;WITH gone AS (
-    SELECT e.contract_number, e.[balance]
-    FROM ##EXITED e
-    LEFT JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] jan
-        ON jan.contract_number = e.contract_number AND jan.[date] = @JanAsOf
-    WHERE jan.contract_number IS NULL   -- the 26,887 "GONE — no row at all" bucket from §2
-)
-SELECT COUNT(*) AS gone_and_in_prodaja_proschenie, SUM(g.[balance]) AS balance
-FROM gone g
-JOIN [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025] pp
-    ON pp.[contract_number] = g.contract_number;   -- ⚠ confirm real column name from §7
+IF OBJECT_ID('tempdb..##GONE') IS NOT NULL DROP TABLE ##GONE;
+SELECT e.contract_number, e.[balance]
+INTO ##GONE
+FROM ##EXITED e
+LEFT JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] jan
+    ON jan.contract_number = e.contract_number AND jan.[date] = @JanAsOf
+WHERE jan.contract_number IS NULL;
+
+SELECT
+    (SELECT COUNT(*) FROM ##GONE) AS gone_total,
+    (SELECT COUNT(DISTINCT g.contract_number)
+     FROM ##GONE g
+     JOIN [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025] pp ON pp.[Contract] = g.contract_number
+    ) AS gone_matched_in_prodaja_proschenie;
+
+SELECT
+    LTRIM(RTRIM(pp.[Продажа и прошение])) AS reason,
+    COUNT(DISTINCT g.contract_number) AS loans,
+    SUM(g.[balance]) AS balance
+FROM ##GONE g
+JOIN [CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025] pp ON pp.[Contract] = g.contract_number
+GROUP BY LTRIM(RTRIM(pp.[Продажа и прошение]))
+ORDER BY loans DESC;
 
 -------------------------------------------------------------------------------
 -- Notes
