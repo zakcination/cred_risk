@@ -53,6 +53,14 @@ stored here.
   DPD safe-zone threshold from a 12-month re-default simulation; Task #2:
   size the candidate list under two competing recovery rules) is in
   [`docs/analysis/stage3_safezone_plan.md`](../docs/analysis/stage3_safezone_plan.md).
+- **`stage3_pool_dropoff_investigation.sql`** — investigates the Dec-2025 →
+  Jan-2026 Stage 3 pool discontinuity found while running
+  `stage3_safezone_rolling_extract.sql` (54,088 → 28,668 loans, non-uniform:
+  non-restructured loans fell 70%, restructured only 34%). Builds the exited-
+  loan set directly from `CL_PORTFOLIO_2` and classifies each by what actually
+  happened (gone entirely / tag flipped to 11 / category reclassified), then
+  cross-checks write-off (`KAN_write_off_AQR`) and sale (`KAN_sale_KA_AQR`)
+  volume in the last ~2 weeks of December against that set.
 - **`stage3_safezone_discovery.sql`** — disambiguated the restructuring
   source before the 12-month DPD safe-zone / re-default simulation. **Resolved
   23.07.2026**: `[Dictionaries].[risk_analytics].[restructuring_v2]` — a
