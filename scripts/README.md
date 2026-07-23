@@ -35,6 +35,19 @@ python scripts/writeoff_restoration_scan.py
 python scripts/writeoff_restoration_scan.py --header-row 5 --contract-col 2 --out my_events.csv
 ```
 
+From a Jupyter cell, call `run_scan()` directly instead of the CLI (`%run`
+leaks ipykernel's own launch args like `--f=...kernel-....json` into
+`sys.argv`, which `main()` now tolerates via `parse_known_args`, but calling
+the function directly skips argument parsing entirely):
+
+```python
+import sys
+sys.path.append(r"..\scripts")   # adjust to wherever scripts/ is from the notebook
+from writeoff_restoration_scan import run_scan
+
+df = run_scan(years=["2025", "2026"], out=r"C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.csv")
+```
+
 Prints per-file/per-sheet diagnostics as it goes (files found per year, rows
 extracted per file, warnings for files/sheets it couldn't date or read) — a
 `[WARN]`/`[ERROR]` line means that file was skipped, not silently miscounted.
