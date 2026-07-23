@@ -1,9 +1,52 @@
-# `scripts/` — local analyst tooling (DB-connected)
+# `scripts/` — local analyst tooling (DB- or filesystem-connected)
 
 Unlike `topic_classifier/` (an installable package) and `sql/` (pure T-SQL),
-this folder holds **local Python scripts that connect to the real database** —
-they are not run in CI, and their output can contain confidential figures, so
-it always goes to `data/` (git-ignored).
+this folder holds **local Python scripts that connect to real data** — either
+the database (`stage3_dpd_chart.py`) or a local file archive
+(`writeoff_restoration_scan.py`). They are not run in CI, and their output can
+contain confidential figures, so it always goes to `data/` (git-ignored).
+
+## `writeoff_restoration_scan.py` — write-off/restoration Excel archive scanner
+
+ПРОСТЫМ ЯЗЫКОМ: обходит `R:\!!!ukr1\списание-восстановление\{2025,2026}\...`,
+читает каждый `.xlsx` (шапка — 7-я строка листа), берёт только 2-ю колонку
+(«Контракт») и дату — сначала из НАЗВАНИЯ ЛИСТА, если там нет — из ИМЕНИ ФАЙЛА
+(«...на 29.04.2026 года...» → `2026-04-29`) — и складывает всё в один CSV.
+Это сырьё для censoring-логики в
+[`docs/analysis/stage3_safezone_plan.md`](../docs/analysis/stage3_safezone_plan.md):
+займы, которые продали/списали/простили, не должны засчитываться как
+«безопасно вылечились» только потому что пропали из портфеля — SQL-версия of
+this exists only for December 2025
+(`sql/stage3_pool_dropoff_investigation.sql` §7/§8,
+`Prodaja&Proschenie_12_2025`); the other months (082025, 102025, 04-06/2026,
+confirmed so far) only exist as this Excel archive.
+
+### Usage
+
+```bash
+pip install pandas openpyxl
+
+python scripts/writeoff_restoration_scan.py
+# defaults: base-dir R:\!!!ukr1\списание-восстановление, years 2025 2026,
+# header row 7 (Excel, 1-indexed), contract column 2 (Excel, 1-indexed),
+# out C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.csv
+
+# override any of those if a particular month's file differs:
+python scripts/writeoff_restoration_scan.py --header-row 5 --contract-col 2 --out my_events.csv
+```
+
+Prints per-file/per-sheet diagnostics as it goes (files found per year, rows
+extracted per file, warnings for files/sheets it couldn't date or read) — a
+`[WARN]`/`[ERROR]` line means that file was skipped, not silently miscounted.
+Verified end to end against a synthetic `.xlsx` fixture covering both date
+sources (filename-only, and multi-sheet-with-dated-sheet-names) before being
+shared — real files may still differ; adjust `--header-row`/`--contract-col`
+per the printed warnings if a specific month doesn't match.
+
+### Output columns
+`contract_number, event_date, source_file, source_sheet` — deliberately
+minimal (just the loan id + the date it happened, per what's needed for
+censoring), traceable back to the source file/sheet for spot-checking.
 
 ## `stage3_dpd_chart.py` — Stage 3 post-default DPD projection
 

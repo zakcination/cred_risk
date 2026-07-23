@@ -11,10 +11,11 @@ compressed-rtf>=1.0    # decompress the RTF-HTML body when no plain-text body ex
 # Tests (dev)
 pytest>=7.0
 
-# Local DB-connected analyst scripts (scripts/) — optional, not needed for
-# topic_classifier itself. Requires the "ODBC Driver 17 for SQL Server" system
-# package separately (not pip-installable).
+# Local analyst scripts (scripts/) — optional, not needed for topic_classifier
+# itself. pyodbc needs the "ODBC Driver 17 for SQL Server" system package
+# separately (not pip-installable) for the DB-connected scripts.
 pandas>=2.0
 matplotlib>=3.7
 pyodbc>=5.0
 python-dotenv>=1.0
+openpyxl>=3.1          # writeoff_restoration_scan.py — reads the local .xlsx archive
