@@ -44,6 +44,8 @@ docs/
                              #       sides, verbatim, for traceability)
 sql/                         # AQR data-check scripts (T-SQL), e.g. the B3B closed-before-2025 reconciliation
 scripts/                     # local DB-connected analyst tooling (Python), e.g. the Stage 3 DPD chart
+notebooks/                   # ipynb analysis notebooks that consume SQL raw extracts (not DB-connected)
+                             #   stage3_safezone_analysis.ipynb — Stage 3 DPD safe-zone / re-default study, Phase B
 tests/                       # pytest suite (synthetic snippets, no confidential data)
 data/                        # local document store — git-ignored (confidential)
 examples/                    # non-confidential example artifacts

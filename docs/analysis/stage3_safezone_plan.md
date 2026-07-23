@@ -42,16 +42,21 @@ computation runs in pandas (ipynb), per the "purest raw extractions" direction.
 
 ## Phase B — notebook setup (Python)
 
-- [ ] Load the 4 raw extracts into pandas.
-- [ ] Per `portfolio_asof`, slice each loan's 6-month lookback window from the
-      flat DPD/category panel.
-- [ ] Compute `restr_active_pct` per loan/window (share of the 6 months
-      covered by an active grace period — `grace_od_begin_date ≤ snap_date ≤
-      grace_od_end_date` and/or the `grace_int_*` pair; pick the most recent
-      restructuring event as of each `snap_date` first). Report **% of the
-      population with a restructuring event defined vs. not**, per month —
-      the transparency metric. Also flag any event with a non-null
-      `canc_date` — a cancelled restructuring shouldn't count as "active."
+[`notebooks/stage3_safezone_analysis.ipynb`](../../notebooks/stage3_safezone_analysis.ipynb)
+implements all of Phase B below; run it against your exported CSVs
+(`C:\project_mz\surau\DPDRelaxing\raw_data`) and confirm the sanity-check
+counts match before moving to Phase C.
+
+- [x] Load the 4 raw extracts into pandas.
+- [x] Per `portfolio_asof`, slice each loan's 6-month lookback window from the
+      flat DPD/category panel (`build_lookback_dpd`).
+- [x] Compute `restr_active_pct` per loan/window (share of the 6 months
+      covered by an active, non-cancelled grace period — checks ANY
+      qualifying restructuring event's `grace_od_*`/`grace_int_*` window
+      against each `snap_date`, excludes events with `canc_date ≤ snap_date`).
+      Report **% of the population with a restructuring event defined vs.
+      not**, per month — the transparency metric
+      (`restructuring_coverage_summary`).
 
 ## Phase C — Task #1: find the safe-zone threshold
 
