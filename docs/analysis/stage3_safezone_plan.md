@@ -40,6 +40,41 @@ computation runs in pandas (ipynb), per the "purest raw extractions" direction.
       count, so treat it as working unless the notebook turns up a mismatch.
       **Still open:** export each result set to CSV/parquet for the notebook.
 
+## Phase A.5 — resolved: the Dec-2025→Jan-2026 pool discontinuity
+
+While running Phase A, the Stage 3 pool dropped 54,088 → 28,668 loans between
+the December 2025 and January 2026 snapshots — non-uniformly (non-restructured
+loans fell 70%, restructured loans only 34%). Investigated in
+[`sql/stage3_pool_dropoff_investigation.sql`](../../sql/stage3_pool_dropoff_investigation.sql) —
+**98.1% resolved**, not a data bug:
+
+- 26,887 of 27,385 exited loans (98.2%) had **no row at all** in
+  `CL_PORTFOLIO_2` on 01.01.2026 (not tag=11, not recategorized — gone
+  outright). `KAN_write_off_AQR`/`KAN_sale_KA_AQR` (both confirmed in
+  `IFRS9`, not `CL_PORTFOLIO`) explained **0** of them — stale AQR-cycle
+  exports, as suspected.
+- `[CL_PORTFOLIO].[dbo].[Prodaja&Proschenie_12_2025]` (`Contract`/`Продажа и
+  прошение`/`IIN`/`SFK`) explained **26,360 of 26,887 (98.0%)**: 21,341 sold
+  (FinCore/ATLAS), 5,016 written off to off-balance (dated 30.12.2025), 3
+  forgiven. Plus 498 loans legitimately reclassified out of Stage 3
+  (category change). ~527 loans (1.9%) remain unexplained — small enough not
+  to chase further.
+- **Same pattern confirmed in other months** (082025, 102025, 04-06/2026 so
+  far) — but only as a local Excel archive
+  (`R:\!!!ukr1\списание-восстановление\{2025,2026}\...`), not SQL.
+  [`scripts/writeoff_restoration_scan.py`](../../scripts/writeoff_restoration_scan.py)
+  scans it (header row 7, contract = 2nd column, date from sheet name or
+  filename) into `censoring_events.csv` for the notebook.
+
+**Methodology consequence for Phase C:** a loan that was sold/written-off/
+forgiven exited the panel for a reason **unrelated to credit performance** —
+it must be treated as **censored**, not as "safely survived" (the current
+re-default logic — `category` never returns to `'3'` → not re-defaulted —
+would silently misclassify every one of these as a clean outcome, biasing
+every threshold to look safer than it is). Added to locked methodology below;
+wiring `censoring_events.csv` into the re-default scan is a Phase C
+prerequisite, not yet done.
+
 ## Phase B — notebook setup (Python)
 
 [`notebooks/stage3_safezone_analysis.ipynb`](../../notebooks/stage3_safezone_analysis.ipynb)
@@ -60,6 +95,13 @@ counts match before moving to Phase C.
 
 ## Phase C — Task #1: find the safe-zone threshold
 
+- [ ] Load `censoring_events.csv` (from `writeoff_restoration_scan.py`, plus
+      December's `Prodaja&Proschenie_12_2025` exported the same way) and mark
+      any loan whose panel exit coincides with a censoring event as
+      **censored**, not re-defaulted/not-re-defaulted — exclude censored
+      exits from the re-default-rate denominator rather than counting them as
+      clean survivors. Confirm coverage for all 12 months first; log (don't
+      silently assume zero events) for any month with no censoring source.
 - [ ] For `n ∈ {0, 3, 7, 10, …, 30}`: flag "provisionally recovered" loans per
       portfolio month (DPD ≤ n for the whole 6-month window). Restructuring-
       covered months stay **in** the pool, flagged — not excluded.
@@ -107,3 +149,7 @@ counts match before moving to Phase C.
   reason** — first hit counts, no sustained-months requirement.
 - Hypothesis 2's "downward trend" = **strict monotonic non-increasing** DPD
   across all 6 months.
+- A loan that exits the panel via sale/write-off/forgiveness (per
+  `censoring_events.csv`) is **censored**, not a clean survivor — excluded
+  from the re-default-rate denominator for the months it would otherwise
+  have been observed, not counted as "did not re-default."
