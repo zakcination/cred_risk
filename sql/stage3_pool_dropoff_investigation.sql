@@ -88,16 +88,27 @@ GROUP BY exit_reason
 ORDER BY loans DESC;
 
 -------------------------------------------------------------------------------
+-- 2b. ⚠ FIX for Msg 208 "Invalid object name 'CL_PORTFOLIO.dbo.KAN_write_
+--     off_AQR'" — that table isn't in CL_PORTFOLIO after all. §3/§4 below now
+--     point at IFRS9 instead (same DB as KAN_20260601_for_LGD_Fenix and most
+--     other uppercase KAN_* tables). Run this first to CONFIRM before trusting
+--     §3/§4 — if both come back empty, the table lives somewhere else entirely.
+-------------------------------------------------------------------------------
+SELECT 'IFRS9' AS db, name FROM [IFRS9].sys.tables WHERE name IN ('KAN_write_off_AQR', 'KAN_sale_KA_AQR')
+UNION ALL
+SELECT 'CL_PORTFOLIO', name FROM [CL_PORTFOLIO].sys.tables WHERE name IN ('KAN_write_off_AQR', 'KAN_sale_KA_AQR');
+
+-------------------------------------------------------------------------------
 -- 3. Write-off volume — overall in the window, and restricted to the exited
 --    Stage 3 set (does write-off activity actually cover these loans?).
 -------------------------------------------------------------------------------
 SELECT COUNT(*) AS writeoffs_in_window, COUNT(DISTINCT [CONTRACT_NUMBER]) AS distinct_contracts
-FROM [CL_PORTFOLIO].[dbo].[KAN_write_off_AQR]
+FROM [IFRS9].[dbo].[KAN_write_off_AQR]
 WHERE [Write_off_date] >= @WindowStart AND [Write_off_date] <= @WindowEnd;
 
 SELECT COUNT(*) AS exited_and_written_off, SUM(e.[balance]) AS balance
 FROM ##EXITED e
-JOIN [CL_PORTFOLIO].[dbo].[KAN_write_off_AQR] w
+JOIN [IFRS9].[dbo].[KAN_write_off_AQR] w
     ON w.[CONTRACT_NUMBER] = e.contract_number
 WHERE w.[Write_off_date] >= @WindowStart AND w.[Write_off_date] <= @WindowEnd;
 
@@ -106,12 +117,12 @@ WHERE w.[Write_off_date] >= @WindowStart AND w.[Write_off_date] <= @WindowEnd;
 -------------------------------------------------------------------------------
 SELECT COUNT(*) AS sales_in_window, COUNT(DISTINCT contract_number) AS distinct_contracts,
        SUM([discount]) AS total_discount
-FROM [CL_PORTFOLIO].[dbo].[KAN_sale_KA_AQR]
+FROM [IFRS9].[dbo].[KAN_sale_KA_AQR]
 WHERE [sale_date] >= @WindowStart AND [sale_date] <= @WindowEnd;
 
 SELECT COUNT(*) AS exited_and_sold, SUM(e.[balance]) AS balance
 FROM ##EXITED e
-JOIN [CL_PORTFOLIO].[dbo].[KAN_sale_KA_AQR] s
+JOIN [IFRS9].[dbo].[KAN_sale_KA_AQR] s
     ON s.contract_number = e.contract_number
 WHERE s.[sale_date] >= @WindowStart AND s.[sale_date] <= @WindowEnd;
 
@@ -133,10 +144,10 @@ ORDER BY TABLE_NAME, ORDINAL_POSITION;
 -------------------------------------------------------------------------------
 SELECT
     (SELECT COUNT(*) FROM ##EXITED) AS total_exited,
-    (SELECT COUNT(*) FROM ##EXITED e JOIN [CL_PORTFOLIO].[dbo].[KAN_write_off_AQR] w
+    (SELECT COUNT(*) FROM ##EXITED e JOIN [IFRS9].[dbo].[KAN_write_off_AQR] w
         ON w.[CONTRACT_NUMBER] = e.contract_number
         WHERE w.[Write_off_date] >= @WindowStart AND w.[Write_off_date] <= @WindowEnd) AS covered_by_writeoff,
-    (SELECT COUNT(*) FROM ##EXITED e JOIN [CL_PORTFOLIO].[dbo].[KAN_sale_KA_AQR] s
+    (SELECT COUNT(*) FROM ##EXITED e JOIN [IFRS9].[dbo].[KAN_sale_KA_AQR] s
         ON s.contract_number = e.contract_number
         WHERE s.[sale_date] >= @WindowStart AND s.[sale_date] <= @WindowEnd) AS covered_by_sale;
 
