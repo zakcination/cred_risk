@@ -9,6 +9,18 @@ stored here.
 - **`b3b_comment_mapping.sql`** — normalize the free-text column-E comments in
   `EUB_B3B_v0` to the NBRK «Причина» dropdown vocabulary and flag what still needs
   manual review; see the mapping table in [`docs/b3b_guide.md`](../docs/b3b_guide.md) §8.
+- **`b3b_repayment_comment_template.sql`** — applies ONE universal
+  «Комментарии/пояснения Банка» comment («Документы и запрошенные выписки
+  вложены в папке «выписки»») to this cycle's B3B population, skipping
+  cancelled agreements and loans actually written off
+  (`b3b_writeoff_qc_check.sql`) — those get their own comment instead; see
+  [`docs/b3b_guide.md`](../docs/b3b_guide.md) §6.1.
+- **`b3b_writeoff_qc_check.sql`** — QC gate: cross-checks B3B loans submitted
+  with reason `полное погашение` against the write-off-to-loss ledger
+  (`spis_v_ubytok_RS`, RS source); any match is a contradiction to fix before
+  submission. Generalizes a manual comment-reading catch (4 loans) that this
+  cross-check expanded to 20 — see
+  [`docs/b3b_guide.md`](../docs/b3b_guide.md) §7.3.
 - **`stage3_cure_candidates.sql`** — size the Stage 3 loans that would cure under a
   relaxed rule (stuck only by minor DPD slips) to confirm/refute Retail Business's
   ~12 bn ₸ estimate; methodology in
@@ -21,9 +33,70 @@ stored here.
   months after its default date (`def+1 … def+12`) pivoted from the CL_PORTFOLIO_2
   snapshots — the post-default cure/re-default path used to test sustained-cure rules.
 - **`stage3_cure_pool.sql`** — materializes the analysis **pool**: a head table
-  (non-null Stage-3 contracts at 01.07.2026 + default/restructuring dates) and a
-  long-form monthly-DPD table (default_date → 01.07.2026), plus deeper-analysis
-  starters (per-contract DPD stats; relaxed-cure count at n ∈ {0,1,3,7,10}).
+  (non-null Stage-3 contracts at 01.07.2026 + default/restructuring/cure dates)
+  and a long-form monthly-DPD table (calendar window @MonthFrom → @AsOf), plus
+  deeper-analysis starters (per-contract DPD stats; relaxed-cure count at
+  n ∈ {0,1,3,7,10}). Writes to `##` global temp tables — **run this first**, in
+  the same session as the two scripts below.
+- **`stage3_raw_extract.sql`** — **purest raw pulls for notebook (ipynb) work**:
+  no derived columns, no COALESCE, no dedup-to-latest, no aggregation — plain
+  `SELECT *` scoped to the Stage 3 pool's contracts (`category='3'`, exclude
+  `tag=11`) from each confirmed source table (`CL_PORTFOLIO_2`,
+  `HISTORY_DEFAULT_ACCOUNT`, `IFRS9.KAN_20260601_for_LGD_Fenix`), plus a §0
+  schema/keyword-discovery block to locate the **not-yet-confirmed**
+  suspension-period and restructuring-cancellation sources (candidate: the
+  documented `[Dictionaries].[risk_analytics].[restructuring_v2]` event table —
+  never queried from this repo, access unconfirmed). §4 is a fill-in-the-blank
+  template for that extract once the real table/columns are found.
+- **`stage3_safezone_discovery.sql`** / **`stage3_safezone_rolling_extract.sql`**
+  — step-by-step action plan for this whole workstream (Task #1: derive the
+  DPD safe-zone threshold from a 12-month re-default simulation; Task #2:
+  size the candidate list under two competing recovery rules) is in
+  [`docs/analysis/stage3_safezone_plan.md`](../docs/analysis/stage3_safezone_plan.md).
+- **`stage3_pool_dropoff_investigation.sql`** — investigates the Dec-2025 →
+  Jan-2026 Stage 3 pool discontinuity found while running
+  `stage3_safezone_rolling_extract.sql` (54,088 → 28,668 loans, non-uniform:
+  non-restructured loans fell 70%, restructured only 34%). Builds the exited-
+  loan set directly from `CL_PORTFOLIO_2` and classifies each by what actually
+  happened — **98.2% simply vanished from the table entirely** (not tag=11,
+  not recategorized — just gone), only 1.8% were reclassified — then
+  cross-checks write-off (`KAN_write_off_AQR`), sale (`KAN_sale_KA_AQR`), and
+  the direct lead `Prodaja&Proschenie_12_2025` ("Продажа & Прощение", Dec
+  2025 — sale & forgiveness; confirmed schema: `Contract`/`Продажа и
+  прошение`/`IIN`/`SFK`) against that "gone" population, split by reason.
+- **`stage3_safezone_discovery.sql`** — disambiguated the restructuring
+  source before the 12-month DPD safe-zone / re-default simulation. **Resolved
+  23.07.2026**: `[Dictionaries].[risk_analytics].[restructuring_v2]` — a
+  multi-source restructuring EVENT table with both previously-missing pieces
+  (suspension period via `grace_od_*`/`grace_int_*`; cancellation via
+  `canc_date`). The RS event log (`Реструктуризация_RS$`) was a dead end
+  (one field only); the `KAN_*_for_LGD` monthly family goes back to 2018 but
+  has 7+ inconsistent spellings of the restructuring-end-date column across
+  2023 — moot now.
+- **`stage3_safezone_rolling_extract.sql`** — **purest raw pulls for the
+  12-month DPD safe-zone / re-default simulation** (notebook-side): a 12-date
+  report ladder (`MMYYYYPORTFOLIO` labels), the raw Stage 3 pool at each date,
+  one flat raw monthly panel (dpd/category/balance/tag) spanning 6 months
+  before the earliest portfolio date through the latest, and the raw
+  restructuring-event pull from `restructuring_v2` (§3, resolved — no longer a
+  placeholder). Encodes the locked-in methodology for traceability only —
+  restructuring-covered clean months stay in the pool but get flagged (not
+  excluded); re-default = first later month where `category` returns to `'3'`
+  for any reason; the downward-trend hypothesis is strict monotonic
+  non-increasing DPD across the 6-month window.
+  All threshold/streak/re-default logic itself runs in pandas, not SQL.
+- **`stage3_delinquency_groups.sql`** — per-loan monthly DPD **and** delinquency
+  flag, a pattern-group label (e.g. `@345` = delinquent in the 3rd/4th/5th
+  observed months), and **episode-aware severity**: DPD is a running day-count,
+  so a 3-month-consecutive delinquency doesn't show 3 independent readings — it
+  shows one number growing by ~30/31 days/month. This decomposes each loan's
+  delinquency into consecutive-run episodes and reports the DPD at the **start**
+  of the first episode (the true initial miss, not inflated by elapsed time)
+  alongside the longest episode's length (chronicity) and its implied monthly
+  increment (a ~30 value confirms continuous non-payment). Per-group quantiles
+  (q25/median/q75) of both the raw and corrected metric — compare them to see
+  how much a naive `MAX(dpd)` threshold would be misled, and to pick a sensible
+  relax threshold on the corrected metric instead.
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
