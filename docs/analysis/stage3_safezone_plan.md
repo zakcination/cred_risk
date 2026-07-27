@@ -131,13 +131,23 @@ counts match before moving to Phase C.
       "полное" across all twelve months — at which point the lower-bound
       caveat disappears from Phase C entirely. Until then those six months
       carry it.
-- [ ] ⚠ **Open question — do the annexes also contain restorations?** The
-      archive is «списание-**восстановление**», and 64 contracts appear in two
-      or more months. If restorations are mixed in, some of those 22k loans
-      came back into the portfolio and must **not** be censored. Currently
-      only the contract-number column is read, so the operation type is
-      invisible. Check with `run_prilozhenie_scan(inspect=True)` whether the
-      file carries a type column before Phase C treats every row as an exit.
+- [x] **Restorations — the file cannot answer it, so the panel does.**
+      Confirmed 27.07.2026 that «Приложение №1» has **no operation-type
+      column**: `Контракт · Дни просрочки · КОРЗИНА · Провизии % в LAM ·
+      Задолженность без учёта дисконта · Задолженность с учётом дисконта ·
+      ОД · Все провизии · Дисконты · Штраф 1860 · Провизии 18770 · Продукт ·
+      Тэг` — the loan's balance-sheet position at the moment of the
+      operation, with nothing distinguishing a write-off from a restoration.
+      (The layout also drifts between months — 05.2026 renames «Дисконты» to
+      «Дисконт / премия» — which is a further reason to read only the
+      contract-number column.)
+      Resolved by observation instead (`censoring_reentry_check`): a loan
+      that genuinely left stops appearing in `CL_PORTFOLIO_2`, one that was
+      restored does not. Any censored contract still present in the panel at
+      or after its M+1 boundary is dropped from the censoring set, and
+      **Phase C uses `censored_from_clean`, not `censored_from`.** This is
+      stronger evidence than a flag would have been: it observes what
+      happened to the loan rather than what was written about it.
 - [ ] For `n ∈ {0, 3, 7, 10, …, 30}`: flag "provisionally recovered" loans per
       portfolio month (DPD ≤ n for the whole 6-month window). Restructuring-
       covered months stay **in** the pool, flagged — not excluded.
