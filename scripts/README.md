@@ -33,16 +33,23 @@ this exists only for December 2025
 `Prodaja&Proschenie_12_2025`); the other months (082025, 102025, 04-06/2026,
 confirmed so far) only exist as this Excel archive.
 
-**Какие файлы читать.** По умолчанию — все `.xlsx`. Для сбора списка прощений
-и списаний нужны только «Приложение №1» — для этого есть `--prilozhenie`
-(фильтр по имени + номер контракта в 1-й колонке). Регулярка ловит все
-варианты написания номера: `№1`, `No1`, `N1`, `#1` и просто `1`.
+### Два режима
 
-**Где искать номер контракта.** Шапка у файлов архива на разных строках, поэтому
-она **ищется**: скрипт сканирует верх листа в поисках ячейки со словом
-«контракт»/«договор»/«займ» и берёт колонку под ней. Не нашлась — откат на
-`--header-row`/`--contract-col`, и это печатается строкой `[INFO]`. Жёстко
-задать значения без поиска — `--no-auto-detect`.
+**`--prilozhenie` — список прощений и списаний.** Читает только
+«Приложение №1 (Credilogic)» за все месяцы 2025–2026. Разметка подтверждённая
+(27.07.2026) и потому зашита, а не подбирается: **шапка — 1-я строка Excel,
+данные со 2-й, номер контракта — 1-я колонка.** Регулярка ловит все написания
+номера (`№1`, `No1`, `N1`, `#1`, просто `1`) и суффиксы вроде
+`_дополнительный список`, но не цепляет «Приложение №2».
+
+**Без флага — весь архив.** Здесь разметка у файлов разная, поэтому шапка
+**ищется**: скрипт сканирует верх листа на ячейку «контракт»/«договор»/«займ» и
+берёт колонку под ней, с откатом на `--header-row`/`--contract-col`.
+
+В обоих режимах, если найденная шапка расходится с заданной, печатается
+`[INFO] header search points at rN/col M` — заданная всё равно применяется
+(она указана, а не угадана), но расхождение видно. Такой файл стоит посмотреть
+через `--inspect`.
 
 ### Usage
 
@@ -52,15 +59,15 @@ pip install pandas openpyxl
 # 1) сначала посмотреть на структуру, ничего не извлекая
 python scripts/writeoff_restoration_scan.py --prilozhenie --inspect
 
-# 2) собрать список прощений/списаний из «Приложение №1»
+# 2) собрать список прощений/списаний
 python scripts/writeoff_restoration_scan.py --prilozhenie
 
-# весь архив целиком (прежнее поведение)
+# весь архив целиком, с поиском шапки
 python scripts/writeoff_restoration_scan.py
 # defaults: base-dir R:\!!!ukr1\списание-восстановление, years 2025 2026,
 # out C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.csv
 
-# ручное задание разметки, если автопоиск не сработал
+# ручное задание разметки
 python scripts/writeoff_restoration_scan.py --header-row 5 --contract-col 0 --no-auto-detect
 ```
 
@@ -76,18 +83,15 @@ the function directly skips argument parsing entirely):
 ```python
 import sys
 sys.path.append(r"..\scripts")   # adjust to wherever scripts/ is from the notebook
-from writeoff_restoration_scan import run_scan, PRILOZHENIE_1
+from writeoff_restoration_scan import run_prilozhenie_scan
 
-# посмотреть структуру
-run_scan(name_pattern=PRILOZHENIE_1, inspect=True)
-
-# собрать список прощений/списаний
-df = run_scan(
-    name_pattern=PRILOZHENIE_1,
-    contract_col=0,
-    out=r"C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.csv",
-)
+run_prilozhenie_scan(inspect=True)      # посмотреть структуру
+df = run_prilozhenie_scan()             # собрать список прощений/списаний
 ```
+
+`run_prilozhenie_scan()` — это `run_scan()` с уже подставленным фильтром имён и
+подтверждённой разметкой; любой аргумент можно перекрыть
+(`run_prilozhenie_scan(years=["2026"], out="only_2026.csv")`).
 
 Prints per-file/per-sheet diagnostics as it goes (files found per year, rows
 extracted per file, warnings for files/sheets it couldn't date or read) — a

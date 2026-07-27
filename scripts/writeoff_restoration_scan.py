@@ -8,24 +8,28 @@ censoring-логики Фазы C (займы, которые продали/с�
 засчитываться как «безопасно вылечились» только потому что пропали из
 портфеля).
 
-КАКИЕ ФАЙЛЫ БРАТЬ. По умолчанию — все .xlsx. Для сбора списка прощений и
-списаний нужен только «Приложение №1»:
+ДВА РЕЖИМА.
 
-    run_scan(name_pattern=PRILOZHENIE_1, contract_col=0)
+1) Список прощений и списаний — только «Приложение №1 (Credilogic)» за все
+   месяцы 2025-2026, из командной строки `--prilozhenie`, из ноутбука:
 
-или из командной строки `--prilozhenie`. Остальные файлы архива
-(SERVICING_tag11_*, «Выборка на списание») тогда не читаются.
+       run_prilozhenie_scan(inspect=True)   # сначала посмотреть структуру
+       df = run_prilozhenie_scan()          # потом извлечь
 
-ГДЕ ИСКАТЬ НОМЕР КОНТРАКТА. Шапка у разных файлов на разной строке, поэтому по
-умолчанию она ИЩЕТСЯ: скрипт сканирует первые строки листа в поисках ячейки со
-словом «контракт»/«договор»/«займ» и берёт колонку под ней. Если такой ячейки
-нет — откат на --header-row/--contract-col. Чтобы всегда использовать заданные
-значения, не полагаясь на поиск, передайте --no-auto-detect. Что именно было
-использовано, печатается по каждому листу, так что молча не промахнёмся.
+   Разметка здесь подтверждённая (27.07.2026) и потому ЗАШИТА, а не
+   подбирается: шапка — 1-я строка Excel, данные со 2-й, номер контракта —
+   1-я колонка. Остальные файлы архива (SERVICING_tag11_*, «Выборка на
+   списание») в этом режиме не читаются.
 
-Не уверены в структуре файла — сначала посмотрите на неё, не извлекая:
+2) Весь архив — без флага. Разметка у файлов разная, поэтому шапка ИЩЕТСЯ:
+   скрипт сканирует верх листа в поисках ячейки со словом
+   «контракт»/«договор»/«займ» и берёт колонку под ней, с откатом на
+   --header-row/--contract-col.
 
-    run_scan(name_pattern=PRILOZHENIE_1, inspect=True)   # или --inspect
+В обоих режимах, если найденная шапка расходится с заданной, печатается
+строка [INFO] — заданная всё равно применяется (она указана, а не угадана),
+но расхождение видно. Такой файл стоит посмотреть через --inspect: он печатает
+верхний левый угол каждого листа и ничего не извлекает.
 
 КАК ОПРЕДЕЛЯЕТСЯ ДАТА. Месяц берём из ПАПКИ (архив разложен как
 \\2025\\12.2025\\...), а имя листа/файла может только уточнить ДЕНЬ внутри
@@ -66,9 +70,18 @@ DEFAULT_OUT = Path(r"C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.c
 DEFAULT_HEADER_ROW = 6
 DEFAULT_CONTRACT_COL = 1
 
-# «Приложение №1», «Приложение No1 (Credilogic)», «Приложение 1_дополнительный список».
+# «Приложение №1», «Приложение No1», «Приложение 1_дополнительный список».
 # The number marker is written every which way in the archive — №, No, N, #, or nothing.
 PRILOZHENIE_1 = r"приложение\s*(?:№|#|no\.?|n\.?)?\s*1"
+# The forgiveness/write-off list itself is the Credilogic annex specifically:
+# «Приложение №1 (Credilogic).xlsx», «...(Credilogic)..xlsx»,
+# «...(Credilogic)_дополнительный список.xlsx».
+PRILOZHENIE_1_CREDILOGIC = PRILOZHENIE_1 + r".*credilogic"
+
+# Confirmed layout of the Credilogic annexes (27.07.2026): header on Excel row 1,
+# data from row 2, contract number in the first column.
+PRILOZHENIE_HEADER_ROW = 0
+PRILOZHENIE_CONTRACT_COL = 0
 
 OUT_COLUMNS = [
     "contract_number", "event_date", "date_precision", "date_source",
@@ -282,15 +295,23 @@ def extract_contracts(
             print(f"  [WARN] could not read sheet '{sheet_name}' in {path.name}: {exc}")
             continue
 
-        found = detect_header_and_column(raw) if auto_detect else None
-        if found:
-            hdr, col = found
+        probe = detect_header_and_column(raw)
+        if auto_detect and probe:
+            hdr, col = probe
             layout = f"auto: header r{hdr + 1}, contract col {col + 1}"
         else:
             hdr, col = header_row, contract_col
             layout = f"configured: header r{hdr + 1}, contract col {col + 1}"
             if auto_detect:
                 print(f"  [INFO] {label}: no «контракт» header found -- using {layout}")
+            elif probe and probe != (hdr, col):
+                # Configured layout wins (it was stated, not guessed) -- but a file that
+                # disagrees is worth seeing rather than parsing quietly under the wrong
+                # assumption. Run --inspect on it if the row count looks off.
+                print(
+                    f"  [INFO] {label}: header search points at r{probe[0] + 1}/col "
+                    f"{probe[1] + 1}, using {layout}"
+                )
 
         if raw.shape[1] <= col:
             print(
@@ -403,21 +424,48 @@ def run_scan(
     return result
 
 
+def run_prilozhenie_scan(**kwargs):
+    """The forgiveness/write-off list: «Приложение №1 (Credilogic)» across the archive.
+
+    Uses the confirmed layout — header on Excel row 1, data from row 2, contract number
+    in the first column — rather than searching for it, so a file that happens to have
+    a «контракт»-looking cell elsewhere can't pull the parse off the stated columns. A
+    file whose layout disagrees is reported as [INFO], not silently re-interpreted.
+
+        from writeoff_restoration_scan import run_prilozhenie_scan
+        run_prilozhenie_scan(inspect=True)      # look first
+        df = run_prilozhenie_scan()             # then extract
+    """
+    params = dict(
+        name_pattern=PRILOZHENIE_1_CREDILOGIC,
+        header_row=PRILOZHENIE_HEADER_ROW,
+        contract_col=PRILOZHENIE_CONTRACT_COL,
+        auto_detect=False,
+    )
+    params.update(kwargs)
+    return run_scan(**params)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-dir", type=Path, default=DEFAULT_BASE_DIR)
     parser.add_argument("--years", nargs="+", default=DEFAULT_YEARS)
-    parser.add_argument("--header-row", type=int, default=DEFAULT_HEADER_ROW,
-                        help="0-indexed fallback header row, used only when auto-detection fails")
-    parser.add_argument("--contract-col", type=int, default=DEFAULT_CONTRACT_COL,
-                        help="0-indexed fallback contract column")
+    parser.add_argument("--header-row", type=int, default=None,
+                        help="0-indexed header row (default 6; 0 under --prilozhenie)")
+    parser.add_argument("--contract-col", type=int, default=None,
+                        help="0-indexed contract column (default 1; 0 under --prilozhenie)")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--name-pattern", default=None,
                         help="only read files whose name matches this regex (case-insensitive)")
     parser.add_argument("--prilozhenie", action="store_true",
-                        help=f"shorthand for --name-pattern '{PRILOZHENIE_1}' --contract-col 0")
-    parser.add_argument("--no-auto-detect", action="store_true",
-                        help="always use --header-row/--contract-col, never search for the header")
+                        help="the forgiveness/write-off list: «Приложение №1 (Credilogic)» "
+                             "files only, header on Excel row 1, contract in column 1")
+    detect = parser.add_mutually_exclusive_group()
+    detect.add_argument("--auto-detect", dest="auto_detect", action="store_true", default=None,
+                        help="search each sheet for the «контракт» header (default off "
+                             "under --prilozhenie, on otherwise)")
+    detect.add_argument("--no-auto-detect", dest="auto_detect", action="store_false", default=None,
+                        help="always use --header-row/--contract-col")
     parser.add_argument("--inspect", action="store_true",
                         help="print each matching sheet's layout instead of extracting")
     # parse_known_args, not parse_args: running this via `%run` in Jupyter leaks
@@ -427,21 +475,25 @@ def main() -> None:
     if unknown:
         print(f"(ignoring unrecognized args, likely from the Jupyter kernel launch: {unknown})")
 
-    name_pattern = args.name_pattern
-    contract_col = args.contract_col
     if args.prilozhenie:
-        name_pattern = name_pattern or PRILOZHENIE_1
-        if "--contract-col" not in " ".join(unknown):
-            contract_col = 0
+        name_pattern = args.name_pattern or PRILOZHENIE_1_CREDILOGIC
+        header_row = PRILOZHENIE_HEADER_ROW if args.header_row is None else args.header_row
+        contract_col = PRILOZHENIE_CONTRACT_COL if args.contract_col is None else args.contract_col
+        auto_detect = False if args.auto_detect is None else args.auto_detect
+    else:
+        name_pattern = args.name_pattern
+        header_row = DEFAULT_HEADER_ROW if args.header_row is None else args.header_row
+        contract_col = DEFAULT_CONTRACT_COL if args.contract_col is None else args.contract_col
+        auto_detect = True if args.auto_detect is None else args.auto_detect
 
     run_scan(
         base_dir=args.base_dir,
         years=args.years,
-        header_row=args.header_row,
+        header_row=header_row,
         contract_col=contract_col,
         out=args.out,
         name_pattern=name_pattern,
-        auto_detect=not args.no_auto_detect,
+        auto_detect=auto_detect,
         inspect=args.inspect,
     )
 
