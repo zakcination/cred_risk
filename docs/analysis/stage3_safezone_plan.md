@@ -181,9 +181,25 @@ counts match before moving to Phase C.
 - [x] **Threshold × cohort matrices built** (`redefault_matrix`) for each K,
       returning rate, denominator and censored-out count together — a rate
       without its base invites reading 100% off two loans.
-- [ ] Split the matrix by restructuring state, reporting the `unknown` share
-      per cell: a split built mostly on `unknown` months is not evidence
-      about restructuring in either direction.
+- [x] **Split the matrix by restructuring state** — built
+      (`redefault_split_matrix`), with the `unknown` share reported per cell
+      (threshold × cohort) and pooled, plus an explicit verdict per threshold.
+      Two things worth stating, because they decide how the output reads:
+      - The loan-level segment follows the same priority as the month-level
+        rule — `restructured` (any confirmed `active` month) > `unknown` (any
+        unanswerable month, **including** a state that was never computed) >
+        `not_restructured` (every observed month confirmed `not_active`). A
+        `NaN` state goes to `unknown`, never to `not_restructured`: that
+        collapse is the exact one the locked methodology forbids.
+      - `UNKNOWN_MATERIALITY = 0.10` is set **before** the numbers are seen, and
+        a cell above it prints `НЕ ПОДДЕРЖАНО` rather than a difference. A thin
+        base (< `MIN_BASE` either side) prints `НЕТ БАЗЫ` instead — deliberately
+        a separate verdict, since thin bases are fixed by accumulating cohorts
+        and `unknown` is fixed only by populating grace dates upstream.
+      Verified on synthetic cohorts: segment priority (including `active` beating
+      `unknown` on the same loan), censored loans leaving the denominator without
+      becoming survivors, `unknown` share measured off the flagged population
+      rather than the pool, and all three verdict branches.
 - [ ] Visualize: re-default % vs. n, one line per report month (or a summary
       band) — pick the threshold at the **elbow** where re-default stops
       being flat and starts climbing, rather than a hard-coded cutoff.
