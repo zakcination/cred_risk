@@ -108,13 +108,36 @@ counts match before moving to Phase C.
 
 ## Phase C — Task #1: find the safe-zone threshold
 
-- [ ] Load `censoring_events.csv` (from `writeoff_restoration_scan.py`, plus
-      December's `Prodaja&Proschenie_12_2025` exported the same way) and mark
-      any loan whose panel exit coincides with a censoring event as
-      **censored**, not re-defaulted/not-re-defaulted — exclude censored
-      exits from the re-default-rate denominator rather than counting them as
-      clean survivors. Confirm coverage for all 12 months first; log (don't
-      silently assume zero events) for any month with no censoring source.
+- [x] Load `censoring_events.csv` and audit its coverage — done in the
+      notebook (`censoring_coverage_report`, `censored_from_month`).
+      Real run 27.07.2026: **22 902 rows, 22 494 distinct contracts** across
+      six months (08/10/12·2025, 04/05/06·2026) from the
+      «Приложение №1 (Credilogic)» annexes.
+- [ ] **Carry the coverage tiers into every Phase C output.** Censoring is
+      *not* uniform across the panel and the results must say so:
+
+      | Tier | Months | What is visible |
+      |---|---|---|
+      | full | 12.2025 | sales **and** write-offs |
+      | partial | 08, 10·2025, 04, 05, 06·2026 | write-offs/forgiveness only |
+      | none | 09, 11·2025, 01, 02, 03, 07·2026 | nothing |
+
+      The gap is not a rounding detail. December is the one month with both
+      sources, and there sales outnumbered write-offs **21 341 to 5 016** —
+      so in the five "partial" months the invisible half is plausibly the
+      larger one. Confirmed 27.07.2026: no sale register exists for any month
+      other than 12.2025, and none is coming.
+      Consequence: for every month outside the "full" tier the re-default
+      rate is a **lower bound**, and must be labelled that way on the chart
+      and in the write-up — never averaged together with 12.2025 into one
+      unqualified number.
+- [ ] ⚠ **Open question — do the annexes also contain restorations?** The
+      archive is «списание-**восстановление**», and 64 contracts appear in two
+      or more months. If restorations are mixed in, some of those 22k loans
+      came back into the portfolio and must **not** be censored. Currently
+      only the contract-number column is read, so the operation type is
+      invisible. Check with `run_prilozhenie_scan(inspect=True)` whether the
+      file carries a type column before Phase C treats every row as an exit.
 - [ ] For `n ∈ {0, 3, 7, 10, …, 30}`: flag "provisionally recovered" loans per
       portfolio month (DPD ≤ n for the whole 6-month window). Restructuring-
       covered months stay **in** the pool, flagged — not excluded.
@@ -186,3 +209,17 @@ counts match before moving to Phase C.
   `censoring_events.csv`) is **censored**, not a clean survivor — excluded
   from the re-default-rate denominator for the months it would otherwise
   have been observed, not counted as "did not re-default."
+- **Censoring starts at M+1, not M.** An event dated month M leaves month M
+  itself observed. Grounded, not stylistic: the December write-off ran on
+  30.12.2025 and those loans are still in the 01.12.2025 snapshot, gone by
+  01.01.2026. Censoring from M would discard one month of genuine
+  observation per censored loan — systematically, one-directionally, across
+  22k+ loans. Archive dates are month-precision only (`date_precision='month'`
+  throughout: the Credilogic annexes carry no date in their filenames), so
+  M+1 is also the finest boundary the data supports.
+- Where a contract has several events, the **first** one sets the boundary.
+- **A month with no censoring source is logged as "НЕТ ИСТОЧНИКА", never as
+  zero events.** The coverage table is built from the panel's month list, not
+  from the CSV's contents, so a missing month appears as a row rather than
+  disappearing. "No events happened" and "we cannot see events" are different
+  claims and only the second is true for 6 of the 12 panel months.
