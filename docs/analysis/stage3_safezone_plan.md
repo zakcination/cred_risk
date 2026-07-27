@@ -124,13 +124,25 @@ counts match before moving to Phase C.
       sources, sales outnumbered write-offs **21 341 to 5 016**, so had sales
       been happening unseen elsewhere, the invisible half would have been the
       larger one.
-- [ ] **Confirm the six write-off-free months** — 09, 11·2025 and 01, 02,
-      03, 07·2026 have no rows in the archive, but no confirmation that no
-      batch ran either, so they stand at `НЕ ПОДТВЕРЖДЕНО`. Once confirmed
-      they go into `WRITEOFF_DID_NOT_OCCUR` and the coverage table reads
-      "полное" across all twelve months — at which point the lower-bound
-      caveat disappears from Phase C entirely. Until then those six months
-      carry it.
+- [x] **Six write-off-free months confirmed — the lower-bound caveat is gone.**
+      09, 11·2025 and 01, 02, 03, 07·2026 have no rows in the Credilogic
+      archive, and БРМ confirmed 27.07.2026 that **no write-off batch ran** in
+      them — "не проводилось", not "файла нет". Recorded as a dated, attributed
+      constant (`WRITEOFF_DID_NOT_OCCUR` + `WRITEOFF_DID_NOT_OCCUR_SOURCE`)
+      alongside the sales equivalent, listed literally by month rather than
+      derived as "whatever the archive lacks" — otherwise a future panel month
+      would inherit a confirmation nobody gave for it.
+      With this, **both** exit types are covered across all twelve months, the
+      coverage table reads `полное` throughout, and Phase C's re-default rate is
+      an exact number rather than a lower bound.
+      Two things to keep in view, since the whole censoring layer now rests on
+      them: the coverage is carried by **two verbal confirmations, not by data**
+      — if either is withdrawn, those months must return to `НЕ ПОДТВЕРЖДЕНО`
+      rather than stay as last computed. And a declaration can go stale in one
+      direction: a later scanner run finding events in a month declared empty.
+      `declared_but_present` raises on exactly that, because the coverage table
+      gives evidence priority and would otherwise read `полное` off the new
+      events while the contradicted confirmation sat unnoticed in the code.
 - [x] **Restorations — the file cannot answer it, so the panel does.**
       Confirmed 27.07.2026 that «Приложение №1» has **no operation-type
       column**: `Контракт · Дни просрочки · КОРЗИНА · Провизии % в LAM ·
@@ -203,9 +215,19 @@ counts match before moving to Phase C.
 - [ ] Visualize: re-default % vs. n, one line per report month (or a summary
       band) — pick the threshold at the **elbow** where re-default stops
       being flat and starts climbing, rather than a hard-coded cutoff.
-      *(Open decision: confirm what "acceptably low" re-default means before
-      this step — a fixed ceiling, e.g. <10%, or the visual elbow — flag for
-      sign-off once the matrix is in front of us.)*
+      **Settled 27.07.2026: the matrix is read first, and the criterion for
+      "acceptably low" is chosen after seeing it** — an explicit call, not an
+      oversight. What that costs is one specific thing, and it should be
+      written into the Phase E methodology rather than left for a reviewer to
+      notice: a threshold selected after the outcome is visible cannot also be
+      presented as a prediction that the data then confirmed. State plainly
+      that `n*` was chosen from this matrix.
+      The cheap mitigation, which costs nothing here because all three horizons
+      are already computed: pick `n*` on the pooled K=6 curve, then check it
+      holds on views not used to pick it — the per-cohort spread and the K=3 /
+      K=9 curves. Agreement there is genuine out-of-sample support for the
+      choice; disagreement means `n*` is an artefact of the view it was read
+      off, and must be quoted with that view attached.
 - [ ] **Decision checkpoint:** lock the DPD safe-zone threshold `n*`.
 
 ## Phase D — Task #2: size the candidate list, pick the rule
@@ -279,3 +301,13 @@ counts match before moving to Phase C.
   that none occurred (`SALES_DID_NOT_OCCUR`, `WRITEOFF_DID_NOT_OCCUR`).
   Anything else is `НЕ ПОДТВЕРЖДЕНО` and makes that month's re-default rate a
   lower bound. An empty month is never silently read as a clean month.
+  As of 27.07.2026 every panel month satisfies one of the two, so no month is
+  `НЕ ПОДТВЕРЖДЕНО` — but the rule stands, and a wider `@LastAsOf` will pull in
+  months that fail it again. The confirmations are scoped to the months named in
+  them, never extended forward.
+- **A confirmation that contradicts the evidence is a stop, not a precedence
+  rule.** If a month declared event-free later shows events in the archive, the
+  run raises (`declared_but_present`) instead of quietly preferring either side.
+  The declaration may have covered a different period, or the archive may have
+  been extended; both are answerable questions, and neither is answered by
+  picking the source that happens to be checked first.
