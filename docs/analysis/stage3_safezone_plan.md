@@ -300,6 +300,18 @@ counts match before moving to Phase C.
 
 ## Locked methodology (do not re-litigate mid-analysis)
 
+- **`category` IS the IFRS stage; `category = '3'` means Stage 3** (Miras,
+  27.07.2026). Every pool in `stage3_safezone_rolling_extract.sql` is built on
+  `category = '3' AND tag <> '11'`, and Phases C and D inherit that population,
+  so this settles what they were already doing rather than changing it.
+  `stage3_cure_analysis.md` had carried the opposite reading — "the delinquency
+  bucket, not the IFRS stage" — as an open decision since 17.07; that entry is
+  now corrected at source, because a stale open question standing next to its
+  answer reads as an unresolved one.
+  Recorded as a methodology call: no confirmation from the owner of
+  `CL_PORTFOLIO_2` is on file. If one is obtained, it belongs in that entry with
+  a date and attribution, like the censoring confirmations.
+
 - Restructuring-covered clean months: **kept in the pool, flagged**
   (`restr_active_pct`) — not excluded.
 - Restructuring coverage is **three-valued**, never boolean: `active` /

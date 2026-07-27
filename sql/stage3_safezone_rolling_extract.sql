@@ -25,9 +25,16 @@
      • Месяцы, покрытые активной реструктуризацией (snap_date ≤ дата окончания
        реструктуры), НЕ исключаются из пула — остаются, но нужно посчитать
        restr_active_pct и сравнить re-default rate реструктурированных vs нет.
-     • re-default = первый ПОСЛЕ пула месяц, где category снова = '3', по
-       ЛЮБОЙ причине (не только dpd≥91) — считается по первому попаданию, без
-       требования подряд идущих месяцев.
+     • re-default = первый ПОСЛЕ пула месяц с dpd >= 91 — по первому попаданию,
+       без требования подряд идущих месяцев (пересмотрено 27.07.2026).
+       Раньше здесь стояло «первый месяц, где category снова = '3'». На этой
+       популяции это вырождается: займы сидят в 3-й стадии на дату наблюдения
+       именно потому, что действующее правило их не выпустило, — значит
+       category остаётся '3' и на M+1, и КАЖДЫЙ помеченный заём засчитался бы
+       сорвавшимся. Вопрос-то контрфактический: если бы мы этот заём оздоровили,
+       вернулся бы он к тяжести 3-й стадии? Порог по dpd отвечает на него, не
+       опираясь на механику оздоровления, которую исследование и пересматривает.
+       Версия по category сохранена как перекрёстная проверка направления.
      • Гипотеза 2 (нисходящий тренд): строго монотонное невозрастание dpd по
        всем 6 месяцам окна (dpd(m-6) ≥ dpd(m-5) ≥ … ≥ dpd(m-1)).
    -----------------------------------------------------------------------------
@@ -148,9 +155,18 @@ JOIN pool_contracts pc ON pc.contract_number = r.loan_id;
 -- * §2's panel is intentionally over-wide (union of all 12 pools' lookback/
 --   lookforward needs) — filter/reshape per portfolio_label in pandas rather
 --   than re-querying per month.
--- * category is numeric-as-text in CL_PORTFOLIO_2 ('3' = Stage 3) — this IS
---   the "any Stage 3 criterion" signal for the re-default definition; no
---   separate DPD≥91 check needed once you're comparing category across months.
+-- * category is numeric-as-text in CL_PORTFOLIO_2 ('3' = Stage 3). Confirmed
+--   as the IFRS stage 27.07.2026 (Miras) — this script had assumed it from the
+--   start while stage3_cure_analysis.md carried the opposite reading as an open
+--   decision; the two now agree, see that file's §Open decisions #1.
+-- * ⚠ That does NOT make category the re-default signal. This note used to say
+--   "no separate DPD≥91 check needed once you're comparing category across
+--   months", and on this population that is degenerate: these loans are IN
+--   Stage 3 at the observation month precisely because the current cure rule
+--   has not released them, so category is still '3' at M+1 and every flagged
+--   loan scores as a re-default. Re-default is DPD >= 91 (revised 27.07.2026);
+--   the category version survives only as a cross-check. See "Locked
+--   methodology" in docs/analysis/stage3_safezone_plan.md.
 -- * §3's restructuring_v2 is an EVENT table — a contract can have multiple
 --   rows (multiple restructurings over time). "Last restructuring as of each
 --   portfolio_asof" is a pandas-side filter (restructuring_date <= asof_date,
