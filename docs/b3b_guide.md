@@ -107,6 +107,38 @@ as confirmation (request to the Operations Department and БЦБ). Final data go
 АФР. The finished B3B file is loaded to history (**RISKDWH → `CL_PORTFOLIO`**)
 for later reconciliations.
 
+### 6.1 «Комментарии/пояснения Банка» — sources-of-repayment comment template
+
+The 2025-cycle submission (25 loans) used a comment style that varied by АБИС
+(source system) — narrated per loan for РС-Банк, boilerplate "documents
+attached" for Кредилоджик/Way4. **2026 cycle: one universal comment covers
+the whole population** — the statements are already collected in a single
+shared folder, so there's no need to vary the wording by source:
+
+> «Документы и запрошенные выписки вложены в папке «выписки»»
+
+Supporting statements for this year's confirmation live at
+`R:\!!!!!!AQR_2026\B3B\на отправку\22.07.2026\выписки`.
+[`sql/b3b_repayment_comment_template.sql`](../sql/b3b_repayment_comment_template.sql)
+applies this to the whole population **except** two kinds of loan that aren't
+genuine repayments and need their own comment instead:
+- **Cancelled agreements** (ДБЗ отменён) — keep the ДБЗ-cancellation formula:
+  *«ДБЗ [ref] был отменён [date] на основании выписки № [ref] от [date][, и
+  поступившие входящие платежи на общую сумму … тенге были возвращены клиенту
+  / Входящих платежей от клиента не было]»*.
+- **Actual write-offs** caught by the `spis_v_ubytok_RS` cross-check (§7.3) —
+  these need their reason corrected to `списание` first, not a statements
+  comment that implies repayment.
+
+> ⚠ **Misroute risk (unrelated to the comment template, still open).** A loan
+> whose ref is `L21…` (Кредилоджик format) but was asked of the wrong team
+> comes back as "not in our system" instead of a real confirmation — this
+> already happened once this cycle (loan `020206601187`, ref
+> `L211204400204` — RS/УАБО correctly said *"не в компетенции УАБО (не
+> относится к RSbank)"* because it's actually a Кредилоджик loan). Route by
+> the loan-ref's source system before requesting anything, not after a
+> department bounces it.
+
 ---
 
 ## 7. Process gaps & lessons learned
@@ -166,7 +198,62 @@ submission and regulator questions.
   activity per `source_system`).
 - **Escalate deadline risk on discovery, not at the deadline.**
 
-### 7.3 Operational notes (2026 cycle)
+### 7.3 2026 cycle — 20 loans mis-marked «полное погашение» found via write-off ledger cross-check ✅ resolved
+
+**What happened.** A manual read of the department comments provided to prove
+the submitted statuses caught **4** loans (`680917300967`, `830301402913`,
+`760513350200`, `501213400735`) whose comment explicitly said "written off to
+loss" / "recognized bankrupt" — directly contradicting the submitted
+**полное погашение** status. Cross-checking the same submission against
+**`spis_v_ubytok_RS`** (the RS write-off-to-loss ledger in `CL_PORTFOLIO`)
+found the real count is **20** — the manual comment read missed **16 of 20**
+(80%) of the actual contradictions.
+
+**Root cause.** Comment text is free-form and inconsistently worded (§8.3)
+— reading it catches only the cases where the filler happened to say the
+right words. A structural cross-check against the write-off ledger catches
+every case where the two data sources disagree, regardless of wording.
+
+**Corrective measures (taken this cycle).** All 20 loans corrected from
+`полное погашение` to `списание`; a corrected `EUB_B3B_v0.xlsx` was sent to
+АФР with the following explanatory note, requesting it replace the
+previously submitted version:
+
+> Добрый день!
+>
+> В ответ на запрос о предоставлении выписок, подтверждающих полное погашение
+> по договорам, сообщаем следующее.
+>
+> При проведении анализа и сверки информации по договорам, указанным в вашем
+> запросе, было установлено, что по 4 договорам ранее ошибочно была отражена
+> причина закрытия «Полное погашение», тогда как фактическим основанием
+> является «Списание».
+>
+> После выявления данного несоответствия нами была проведена дополнительная
+> проверка всех договоров, включенных в шаблон B3B. По результатам проверки
+> были выявлены аналогичные ошибки еще по 16 договорам.
+>
+> Таким образом, всего установлено 20 договоров, по которым причина закрытия
+> была отражена некорректно. По всем указанным договорам информация
+> скорректирована: причина закрытия изменена с «Полное погашение» на
+> «Списание».
+>
+> Во вложении направляем скорректированный файл и просим использовать его
+> взамен ранее представленной версии.
+
+**Prevention (next cycle) — standing QC gate.**
+[`sql/b3b_writeoff_qc_check.sql`](../sql/b3b_writeoff_qc_check.sql) turns this
+into a repeatable check: every loan submitted as `полное погашение` is joined
+against the write-off ledger(s); any match is a contradiction to fix before
+submission, not after. Run it straight after `b3b_comment_mapping.sql`, same
+session, and treat a nonzero count as a submission blocker without a
+documented override. `spis_v_ubytok_RS` only covers the **RS** source — check
+whether CL / Fenix / Cards have an equivalent ledger (the script's §0b sweep
+looks for `spis_v_ubytok_%` siblings) and repeat the cross-check per source
+system found, the same way the six-source split already works in
+`b3b_reconciliation_2025.sql`.
+
+### 7.4 Operational notes (2026 cycle)
 - Working folder: `R:\...\AQR_2026\B3B\<date>\Рабочая папка`; Fenix data recorded
   in `EUB_B3B_v0`.
 - Reminder for fillers: **if you record a repayment or write-off, the date must

@@ -1,0 +1,5298 @@
+/* =============================================================================
+   ПРОСТЫМ ЯЗЫКОМ:
+   Перед тем как строить 12-месячную симуляцию «безопасной зоны» DPD и считать
+   re-default rate, нужно решить, ИЗ КАКОЙ таблицы брать «дата окончания
+   реструктуры» на каждую из 12 отчётных дат. Ваш поиск по ключевым словам
+   (0b в stage3_raw_extract.sql) нашёл НЕСКОЛЬКО кандидатов вместо одного:
+     • KAN_20260601_for_LGD_Fenix          — уже используется (июнь 2026)
+     • KAN_20250301_for_LGD_Fenix_DI_BI    — та же семья, март 2025 (другой суффикс!)
+     • kan_0101_rus / kan_0106_rus         — Restructuring_End_Date, Max_Restructuring_Actual
+     • Реструктуризация_RS$                — RS: журнал событий (FIELD_NAME/FIELD_VALUE)
+     • AQR20xx_B1A/B1B/B3C_* (много копий)  — RESTR_DATE/RESTR_COUNT — это
+       ЗАМОРОЖЕННЫЕ регуляторные выгрузки прошлых циклов AQR, часто с версиями
+       (_v1, _V1_08042026) — НЕ использовать как «сырой» операционный источник:
+       не факт, что совпадает по значениям с текущей CL_PORTFOLIO_2, и не месячные.
+   Ни «период приостановки», ни «отмена реструктуризации» ни в одной таблице
+   пока НЕ найдены. Этот скрипт не считает ничего — только профилирует
+   кандидатов (сколько строк, сколько заполнено, диапазон дат) и ищет
+   suspension/cancellation в RS-журнале событий, чтобы выбрать источник
+   осознанно, а не наугад.
+   -----------------------------------------------------------------------------
+   Disambiguation discovery — profile the restructuring-end-date candidates
+   surfaced by stage3_raw_extract.sql §0b before committing to one for the
+   12-month DPD safe-zone / re-default simulation. No AQR quarterly exports —
+   those are frozen regulatory snapshots, not a live monthly operational feed.
+   T-SQL (Microsoft SQL Server).
+   ============================================================================= */
+
+-------------------------------------------------------------------------------
+-- 1. Enumerate every KAN/kan-named table (both DBs) — is there really one per
+--    month for a trailing 12-month window, or only the two we've spotted?
+-------------------------------------------------------------------------------
+SELECT t.name AS table_name, c.name AS column_name, ty.name AS data_type
+FROM [IFRS9].sys.tables t
+JOIN [IFRS9].sys.columns c ON c.object_id = t.object_id
+JOIN [IFRS9].sys.types   ty ON ty.user_type_id = c.user_type_id
+WHERE t.name LIKE 'KAN[_]%' OR t.name LIKE 'kan[_]%'
+ORDER BY t.name, c.column_id;
+
+SELECT t.name AS table_name, c.name AS column_name, ty.name AS data_type
+FROM [CL_PORTFOLIO].sys.tables t
+JOIN [CL_PORTFOLIO].sys.columns c ON c.object_id = t.object_id
+JOIN [CL_PORTFOLIO].sys.types   ty ON ty.user_type_id = c.user_type_id
+WHERE t.name LIKE 'KAN[_]%' OR t.name LIKE 'kan[_]%'
+ORDER BY t.name, c.column_id;
+/*
+Response : 
+   table_name	column_name	data_type
+KAN_20181101_for_LGD	account_number	nvarchar
+KAN_20181101_for_LGD	FCD	nvarchar
+KAN_20181101_for_LGD	subproduct	nvarchar
+KAN_20181101_for_LGD	default_date	date
+KAN_20181101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20181101_for_LGD	activation_date	date
+KAN_20181101_for_LGD	'01 11 2018'	nvarchar
+KAN_20181101_for_LGD	01 12 2018'	nvarchar
+KAN_20181101_restructura	contract_number	nvarchar
+KAN_20181101_restructura	restructura_date	date
+KAN_20181101_restructura	restructura_date2	date
+KAN_20181101_restructura	restructura_date3	date
+KAN_20181101_restructura	restructura_date4	date
+KAN_20181101_restructura	restructura_date5	date
+KAN_20181101_restructura	restructura_date6	date
+KAN_20181201_for_LGD	account_number	nvarchar
+KAN_20181201_for_LGD	subproduct	nvarchar
+KAN_20181201_for_LGD	activation_date	date
+KAN_20181201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20181201_for_LGD	FCD	nvarchar
+KAN_20181201_for_LGD	default_date	date
+KAN_20181201_restructura	contract_number	nvarchar
+KAN_20181201_restructura	restructura_date	date
+KAN_20181201_restructura	restructura_date2	date
+KAN_20181201_restructura	restructura_date3	date
+KAN_20181201_restructura	restructura_date4	date
+KAN_20181201_restructura	restructura_date5	date
+KAN_20181201_restructura	restructura_date6	date
+KAN_20190101_for_LGD	account_number	nvarchar
+KAN_20190101_for_LGD	subproduct	nvarchar
+KAN_20190101_for_LGD	activation_date	nvarchar
+KAN_20190101_for_LGD	FIRST_PAYMENT_DATE	nvarchar
+KAN_20190101_for_LGD	FCD	nvarchar
+KAN_20190101_for_LGD	default_date	date
+KAN_20190101_for_LGD	health_date2	nvarchar
+KAN_20190101_restructura	contract_number	nvarchar
+KAN_20190101_restructura	restructura_date	date
+KAN_20190101_restructura	restructura_date2	date
+KAN_20190101_restructura	restructura_date3	date
+KAN_20190101_restructura	restructura_date4	date
+KAN_20190101_restructura	restructura_date5	date
+KAN_20190101_restructura	restructura_date6	date
+KAN_20190201_for_LGD	account_number	nvarchar
+KAN_20190201_for_LGD	subproduct	nvarchar
+KAN_20190201_for_LGD	activation_date	date
+KAN_20190201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20190201_for_LGD	FCD	date
+KAN_20190201_for_LGD	default_date	date
+KAN_20190201_for_LGD	health_date2	date
+KAN_20190201_for_LGD	default_date_old_20190201	date
+KAN_20190201_for_LGD	dead	date
+KAN_20190201_for_LGD	convict	date
+KAN_20190201_for_LGD	default_date_dpd	date
+KAN_20190201_restructura	contract_number	nvarchar
+KAN_20190201_restructura	restructura_date	date
+KAN_20190201_restructura	restructura_date2	date
+KAN_20190201_restructura	restructura_date3	date
+KAN_20190201_restructura	restructura_date4	date
+KAN_20190201_restructura	restructura_date5	date
+KAN_20190201_restructura	restructura_date6	date
+KAN_20190301_for_LGD	account_number	nvarchar
+KAN_20190301_for_LGD	subproduct	nvarchar
+KAN_20190301_for_LGD	activation_date	date
+KAN_20190301_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20190301_for_LGD	FCD	date
+KAN_20190301_for_LGD	default_date	date
+KAN_20190301_for_LGD	health_date2	date
+KAN_20190301_for_LGD	default_date_old_20190201	date
+KAN_20190301_for_LGD	dead	date
+KAN_20190301_for_LGD	convict	date
+KAN_20190301_for_LGD	default_date_dpd	date
+KAN_20190301_for_LGD	restructura_date_1	date
+KAN_20190301_for_LGD	restructura_date_max	date
+KAN_20190301_restructura	contract_number	nvarchar
+KAN_20190301_restructura	restructura_date	date
+KAN_20190301_restructura	restructura_date2	date
+KAN_20190301_restructura	restructura_date3	date
+KAN_20190301_restructura	restructura_date4	date
+KAN_20190301_restructura	restructura_date5	date
+KAN_20190301_restructura	restructura_date6	date
+KAN_20190401_for_LGD	account_number	nvarchar
+KAN_20190401_for_LGD	subproduct	nvarchar
+KAN_20190401_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20190401_for_LGD	activation_date	date
+KAN_20190401_for_LGD	FCD	date
+KAN_20190401_for_LGD	default_date	date
+KAN_20190401_for_LGD	health_date2	date
+KAN_20190401_for_LGD	default_date_old_20190201	date
+KAN_20190401_for_LGD	мин	date
+KAN_20190401_for_LGD	макс	date
+KAN_20190401_restructura	contract_number	nvarchar
+KAN_20190401_restructura	restructura_date	date
+KAN_20190401_restructura	restructura_date2	date
+KAN_20190401_restructura	restructura_date3	date
+KAN_20190401_restructura	restructura_date4	date
+KAN_20190401_restructura	restructura_date5	date
+KAN_20190401_restructura	restructura_date6	date
+KAN_20190501_for_LGD	account_number	nvarchar
+KAN_20190501_for_LGD	subproduct	nvarchar
+KAN_20190501_for_LGD	activation_date	date
+KAN_20190501_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20190501_for_LGD	FCD	date
+KAN_20190501_for_LGD	default_date	date
+KAN_20190501_for_LGD	health_date2	date
+KAN_20190501_for_LGD	default_date_old_20190201	date
+KAN_20190501_for_LGD	мин	date
+KAN_20190501_for_LGD	макс	date
+KAN_20190501_for_LGD_KASKO	account_number	nvarchar
+KAN_20190501_for_LGD_KASKO	subproduct	nvarchar
+KAN_20190501_for_LGD_KASKO	activation_date	nvarchar
+KAN_20190501_for_LGD_KASKO	FIRST_PAYMENT_DATE	nvarchar
+KAN_20190501_for_LGD_KASKO	FCD	nvarchar
+KAN_20190501_for_LGD_KASKO	default_date	date
+KAN_20190501_for_LGD_KASKO	default_date_old	nvarchar
+KAN_20190501_for_LGD_KASKO	health_date2	nvarchar
+KAN_20190501_for_LGD_KASKO	default_date_old_20190201	nvarchar
+KAN_20190501_for_LGD_KASKO	мин	nvarchar
+KAN_20190501_for_LGD_KASKO	макс	nvarchar
+KAN_20190501_for_LGD_KASKO	default_date_KASKO	nvarchar
+KAN_20190501_restructura	contract_number	nvarchar
+KAN_20190501_restructura	restructura_date	date
+KAN_20190501_restructura	restructura_date2	date
+KAN_20190501_restructura	restructura_date3	date
+KAN_20190501_restructura	restructura_date4	date
+KAN_20190501_restructura	restructura_date5	date
+KAN_20190501_restructura	restructura_date6	date
+KAN_20190601_for_LGD	account_number	nvarchar
+KAN_20190601_for_LGD	subproduct	nvarchar
+KAN_20190601_for_LGD	activation_date	date
+KAN_20190601_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20190601_for_LGD	FCD	date
+KAN_20190601_for_LGD	default_date	date
+KAN_20190601_for_LGD	health_date	date
+KAN_20190601_for_LGD	default_date_old_20190201	date
+KAN_20190601_for_LGD	мин	date
+KAN_20190601_for_LGD	макс	date
+KAN_20190601_restructura	contract_number	nvarchar
+KAN_20190601_restructura	restructura_date	date
+KAN_20190601_restructura	restructura_date2	date
+KAN_20190601_restructura	restructura_date3	date
+KAN_20190601_restructura	restructura_date4	date
+KAN_20190601_restructura	restructura_date5	date
+KAN_20190601_restructura	restructura_date6	date
+KAN_20190701_for_LGD	account_number	nvarchar
+KAN_20190701_for_LGD	FCD	date
+KAN_20190701_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20190701_for_LGD	subproduct	nvarchar
+KAN_20190701_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20190701_for_LGD	activation_date	date
+KAN_20190701_for_LGD	default_date	date
+KAN_20190701_for_LGD	health_date2	date
+KAN_20190701_for_LGD	default_date_old	date
+KAN_20190701_for_LGD	default_date_old_20190601	date
+KAN_20190701_for_LGD	мин	date
+KAN_20190701_for_LGD	макс	date
+KAN_20190701_for_LGD	Изменен или нет	nvarchar
+KAN_20190701_for_LGD_old	account_number	nvarchar
+KAN_20190701_for_LGD_old	FCD	date
+KAN_20190701_for_LGD_old	FACT_CLOSE_DATE_b4	date
+KAN_20190701_for_LGD_old	subproduct	nvarchar
+KAN_20190701_for_LGD_old	FIRST_PAYMENT_DATE	date
+KAN_20190701_for_LGD_old	activation_date	date
+KAN_20190701_for_LGD_old	default_date	date
+KAN_20190701_for_LGD_old	health_date2	date
+KAN_20190701_for_LGD_old	default_date_old	date
+KAN_20190701_for_LGD_old	default_date_old_20190601	date
+KAN_20190701_for_LGD_old	мин	date
+KAN_20190701_for_LGD_old	макс	date
+KAN_20190701_restructura	contract_number	nvarchar
+KAN_20190701_restructura	restructura_date	date
+KAN_20190701_restructura	restructura_date2	date
+KAN_20190701_restructura	restructura_date3	date
+KAN_20190701_restructura	restructura_date4	date
+KAN_20190701_restructura	restructura_date5	date
+KAN_20190701_restructura	restructura_date6	date
+KAN_20190801_for_LGD	account_number	nvarchar
+KAN_20190801_for_LGD	default_date	date
+KAN_20190801_restructura	contract_number	nvarchar
+KAN_20190801_restructura	restructura_date	date
+KAN_20190801_restructura	restructura_date2	date
+KAN_20190801_restructura	restructura_date3	date
+KAN_20190801_restructura	restructura_date4	date
+KAN_20190801_restructura	restructura_date5	date
+KAN_20190801_restructura	restructura_date6	date
+KAN_20190901_for_LGD	account_number	nvarchar
+KAN_20190901_for_LGD	FACT_CLOSE_DATE_b4	nvarchar
+KAN_20190901_for_LGD	subproduct	nvarchar
+KAN_20190901_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20190901_for_LGD	activation_date	date
+KAN_20190901_for_LGD	default_date	date
+KAN_20190901_for_LGD	health_date2	date
+KAN_20190901_for_LGD	default_date_old	date
+KAN_20190901_for_LGD	проверено	nvarchar
+KAN_20190901_for_LGD	dead_convict	nvarchar
+KAN_20190901_for_LGD	marcer	nvarchar
+KAN_20190901_for_LGD	restructura_date_1	nvarchar
+KAN_20190901_for_LGD	restructura_date_2	nvarchar
+KAN_20190901_for_LGD	restructura_date_3	nvarchar
+KAN_20190901_for_LGD	restructura_date_4	nvarchar
+KAN_20190901_for_LGD	restructura_date_5	nvarchar
+KAN_20190901_for_LGD	restructura_date_6	nvarchar
+KAN_20190901_for_LGD	default_date_dpd	nvarchar
+KAN_20190901_for_LGD	health_date	nvarchar
+KAN_20190901_for_LGD	new_default_date	nvarchar
+KAN_20190901_for_LGD	new_health_date	nvarchar
+KAN_20190901_for_LGD_KASKO	account_number	nvarchar
+KAN_20190901_for_LGD_KASKO	FACT_CLOSE_DATE_b4	nvarchar
+KAN_20190901_for_LGD_KASKO	subproduct	nvarchar
+KAN_20190901_for_LGD_KASKO	FIRST_PAYMENT_DATE	nvarchar
+KAN_20190901_for_LGD_KASKO	activation_date	nvarchar
+KAN_20190901_for_LGD_KASKO	default_date	date
+KAN_20190901_for_LGD_KASKO	health_date2	nvarchar
+KAN_20190901_for_LGD_KASKO	health_date2_KASKO	nvarchar
+KAN_20190901_for_LGD_KASKO	default_date_old	nvarchar
+KAN_20190901_for_LGD_KASKO	проверено	nvarchar
+KAN_20190901_for_LGD_KASKO	default_date_KASKO	nvarchar
+KAN_20190901_for_LGD_KASKO	dead_convict	nvarchar
+KAN_20190901_for_LGD_KASKO	marcer	nvarchar
+KAN_20190901_for_LGD_KASKO	restructura_date_1	nvarchar
+KAN_20190901_for_LGD_KASKO	restructura_date_2	nvarchar
+KAN_20190901_for_LGD_KASKO	restructura_date_3	nvarchar
+KAN_20190901_for_LGD_KASKO	restructura_date_4	nvarchar
+KAN_20190901_for_LGD_KASKO	restructura_date_5	nvarchar
+KAN_20190901_for_LGD_KASKO	restructura_date_6	nvarchar
+KAN_20190901_for_LGD_KASKO	default_date_DPD	nvarchar
+KAN_20190901_restructura	contract_number	nvarchar
+KAN_20190901_restructura	restructura_date	date
+KAN_20190901_restructura	restructura_date2	date
+KAN_20190901_restructura	restructura_date3	date
+KAN_20190901_restructura	restructura_date4	date
+KAN_20190901_restructura	restructura_date5	date
+KAN_20190901_restructura	restructura_date6	date
+KAN_20191001_for_LGD	account_number	nvarchar
+KAN_20191001_for_LGD	FACT_CLOSE_DATE_b4	nvarchar
+KAN_20191001_for_LGD	subproduct	nvarchar
+KAN_20191001_for_LGD	FIRST_PAYMENT_DATE	nvarchar
+KAN_20191001_for_LGD	activation_date	nvarchar
+KAN_20191001_for_LGD	default_date	date
+KAN_20191001_for_LGD	health_date2	nvarchar
+KAN_20191001_for_LGD	default_date_old	nvarchar
+KAN_20191001_for_LGD	проверено	nvarchar
+KAN_20191001_for_LGD	dead_convict	nvarchar
+KAN_20191001_for_LGD	marcer	nvarchar
+KAN_20191001_for_LGD	restructura_date_1	nvarchar
+KAN_20191001_for_LGD	restructura_date_2	nvarchar
+KAN_20191001_for_LGD	restructura_date_3	nvarchar
+KAN_20191001_for_LGD	restructura_date_4	nvarchar
+KAN_20191001_for_LGD	restructura_date_5	nvarchar
+KAN_20191001_for_LGD	default_date_dpd	nvarchar
+KAN_20191001_for_LGD	health_date	nvarchar
+KAN_20191001_for_LGD	new_default_date	nvarchar
+KAN_20191001_for_LGD	new_health_date	nvarchar
+KAN_20191001_for_LGD	fact_close_date	nvarchar
+KAN_20191001_restructura	contract_number	nvarchar
+KAN_20191001_restructura	restructura_date	date
+KAN_20191001_restructura	restructura_date2	date
+KAN_20191001_restructura	restructura_date3	date
+KAN_20191001_restructura	restructura_date4	date
+KAN_20191001_restructura	restructura_date5	date
+KAN_20191001_restructura	restructura_date6	date
+KAN_20191101_for_LGD	account_number	nvarchar
+KAN_20191101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20191101_for_LGD	subproduct	nvarchar
+KAN_20191101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20191101_for_LGD	activation_date	date
+KAN_20191101_for_LGD	dead_convict	date
+KAN_20191101_for_LGD	marcer	nvarchar
+KAN_20191101_for_LGD	default_date	date
+KAN_20191101_for_LGD	health_date2	date
+KAN_20191101_for_LGD	default_date_old	date
+KAN_20191101_for_LGD	restructura_date_1	date
+KAN_20191101_for_LGD	restructura_date_2	date
+KAN_20191101_for_LGD	restructura_date_3	date
+KAN_20191101_for_LGD	restructura_date_4	date
+KAN_20191101_for_LGD	restructura_date_5	date
+KAN_20191101_for_LGD	restructura_date_6	date
+KAN_20191101_for_LGD	default_date_dpd	date
+KAN_20191101_for_LGD	health_date_dpd	date
+KAN_20191101_for_LGD	new_default_date_dpd	date
+KAN_20191101_for_LGD	new_health_date_dpd	date
+KAN_20191101_restructura	contract_number	nvarchar
+KAN_20191101_restructura	restructura_date	date
+KAN_20191101_restructura	restructura_date2	date
+KAN_20191101_restructura	restructura_date3	date
+KAN_20191101_restructura	restructura_date4	date
+KAN_20191101_restructura	restructura_date5	date
+KAN_20191101_restructura	restructura_date6	date
+KAN_20191201_for_LGD	account_number	nvarchar
+KAN_20191201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20191201_for_LGD	status	nvarchar
+KAN_20191201_for_LGD	subproduct	nvarchar
+KAN_20191201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20191201_for_LGD	activation_date	date
+KAN_20191201_for_LGD	dead_convict	date
+KAN_20191201_for_LGD	marcer	nvarchar
+KAN_20191201_for_LGD	default_date	date
+KAN_20191201_for_LGD	health_date2	date
+KAN_20191201_for_LGD	default_date_old	date
+KAN_20191201_for_LGD	restructura_date_1	date
+KAN_20191201_for_LGD	restructura_date_2	date
+KAN_20191201_for_LGD	restructura_date_3	date
+KAN_20191201_for_LGD	restructura_date_4	date
+KAN_20191201_for_LGD	restructura_date_5	date
+KAN_20191201_for_LGD	restructura_date_6	date
+KAN_20191201_for_LGD	default_date_DPD	date
+KAN_20191201_for_LGD	health_date	date
+KAN_20191201_for_LGD	new_default_date	date
+KAN_20191201_for_LGD	new_health_date	date
+KAN_20191201_for_LGD	fact_close_date	date
+KAN_20191201_restructura	contract_number	nvarchar
+KAN_20191201_restructura	restructura_date	date
+KAN_20191201_restructura	restructura_date2	date
+KAN_20191201_restructura	restructura_date3	date
+KAN_20191201_restructura	restructura_date4	date
+KAN_20191201_restructura	restructura_date5	date
+KAN_20191201_restructura	restructura_date6	date
+KAN_20200101_for_LGD	account_number	nvarchar
+KAN_20200101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200101_for_LGD	status	nvarchar
+KAN_20200101_for_LGD	subproduct	nvarchar
+KAN_20200101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200101_for_LGD	activation_date	date
+KAN_20200101_for_LGD	dead_convict	date
+KAN_20200101_for_LGD	marcer	nvarchar
+KAN_20200101_for_LGD	default_date	date
+KAN_20200101_for_LGD	health_date2	date
+KAN_20200101_for_LGD	default_date_old	date
+KAN_20200101_for_LGD	restructura_date_1	date
+KAN_20200101_for_LGD	restructura_date_2	date
+KAN_20200101_for_LGD	restructura_date_3	date
+KAN_20200101_for_LGD	restructura_date_4	date
+KAN_20200101_for_LGD	restructura_date_5	date
+KAN_20200101_for_LGD	restructura_date_6	date
+KAN_20200101_for_LGD	default_date_DPD	date
+KAN_20200101_for_LGD	health_date	date
+KAN_20200101_for_LGD	new_default_date	date
+KAN_20200101_for_LGD	new_health_date	date
+KAN_20200101_for_LGD	fact_close_date	date
+KAN_20200101_restructura	contract_number	nvarchar
+KAN_20200101_restructura	restructura_date	date
+KAN_20200101_restructura	restructura_date2	date
+KAN_20200101_restructura	restructura_date3	date
+KAN_20200101_restructura	restructura_date4	date
+KAN_20200101_restructura	restructura_date5	date
+KAN_20200101_restructura	restructura_date6	date
+KAN_20200201_for_LGD	account_number	nvarchar
+KAN_20200201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200201_for_LGD	status	nvarchar
+KAN_20200201_for_LGD	subproduct	nvarchar
+KAN_20200201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200201_for_LGD	activation_date	date
+KAN_20200201_for_LGD	dead_convict	date
+KAN_20200201_for_LGD	marcer	nvarchar
+KAN_20200201_for_LGD	default_date	date
+KAN_20200201_for_LGD	health_date2	date
+KAN_20200201_for_LGD	default_date_old	date
+KAN_20200201_for_LGD	restructura_date_1	date
+KAN_20200201_for_LGD	restructura_date_2	date
+KAN_20200201_for_LGD	restructura_date_3	date
+KAN_20200201_for_LGD	restructura_date_4	date
+KAN_20200201_for_LGD	restructura_date_5	date
+KAN_20200201_for_LGD	restructura_date_6	date
+KAN_20200201_for_LGD	default_date_DPD	date
+KAN_20200201_for_LGD	health_date	date
+KAN_20200201_for_LGD	new_default_date	date
+KAN_20200201_for_LGD	new_health_date	date
+KAN_20200201_for_LGD	fact_close_date	date
+KAN_20200201_restructura	contract_number	varchar
+KAN_20200201_restructura	restructura_date	date
+KAN_20200201_restructura	restructura_date2	date
+KAN_20200201_restructura	restructura_date3	date
+KAN_20200201_restructura	restructura_date4	date
+KAN_20200201_restructura	restructura_date5	date
+KAN_20200201_restructura	restructura_date6	date
+KAN_20200301_for_LGD	account_number	nvarchar
+KAN_20200301_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200301_for_LGD	status	nvarchar
+KAN_20200301_for_LGD	subproduct	nvarchar
+KAN_20200301_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200301_for_LGD	activation_date	date
+KAN_20200301_for_LGD	dead_convict	date
+KAN_20200301_for_LGD	marcer	nvarchar
+KAN_20200301_for_LGD	default_date	date
+KAN_20200301_for_LGD	health_date2	date
+KAN_20200301_for_LGD	default_date_old	date
+KAN_20200301_for_LGD	restructura_date_1	date
+KAN_20200301_for_LGD	restructura_date_2	date
+KAN_20200301_for_LGD	restructura_date_3	date
+KAN_20200301_for_LGD	restructura_date_4	date
+KAN_20200301_for_LGD	restructura_date_5	date
+KAN_20200301_for_LGD	restructura_date_6	date
+KAN_20200301_for_LGD	default_date_DPD	date
+KAN_20200301_for_LGD	health_date	date
+KAN_20200301_for_LGD	new_default_date	date
+KAN_20200301_for_LGD	new_health_date	date
+KAN_20200301_restructura	contract_number	nvarchar
+KAN_20200301_restructura	restructura_date	date
+KAN_20200301_restructura	restructura_date2	date
+KAN_20200301_restructura	restructura_date3	date
+KAN_20200301_restructura	restructura_date4	date
+KAN_20200301_restructura	restructura_date5	date
+KAN_20200301_restructura	restructura_date6	date
+KAN_20200301_restructura	Столбец 7	nvarchar
+KAN_20200301_restructura	Столбец 8	nvarchar
+KAN_20200401_for_LGD	account_number	nvarchar
+KAN_20200401_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200401_for_LGD	status	nvarchar
+KAN_20200401_for_LGD	subproduct	nvarchar
+KAN_20200401_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200401_for_LGD	activation_date	date
+KAN_20200401_for_LGD	dead_convict	date
+KAN_20200401_for_LGD	marcer	nvarchar
+KAN_20200401_for_LGD	default_date	date
+KAN_20200401_for_LGD	health_date2	date
+KAN_20200401_for_LGD	default_date_old	date
+KAN_20200401_for_LGD	restructura_date_1	date
+KAN_20200401_for_LGD	restructura_date_2	date
+KAN_20200401_for_LGD	restructura_date_3	date
+KAN_20200401_for_LGD	restructura_date_4	date
+KAN_20200401_for_LGD	restructura_date_5	numeric
+KAN_20200401_for_LGD	restructura_date_6	date
+KAN_20200401_for_LGD	default_date_DPD	date
+KAN_20200401_for_LGD	health_date	date
+KAN_20200401_for_LGD	new_default_date	date
+KAN_20200401_for_LGD	new_health_date	date
+KAN_20200401_restructura	contract_number	nvarchar
+KAN_20200401_restructura	restructura_date	date
+KAN_20200401_restructura	restructura_date2	date
+KAN_20200401_restructura	restructura_date3	date
+KAN_20200401_restructura	restructura_date4	date
+KAN_20200401_restructura	restructura_date5	date
+KAN_20200401_restructura	restructura_date6	date
+KAN_20200501_for_LGD	account_number	nvarchar
+KAN_20200501_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200501_for_LGD	status	nvarchar
+KAN_20200501_for_LGD	subproduct	nvarchar
+KAN_20200501_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200501_for_LGD	activation_date	date
+KAN_20200501_for_LGD	dead_convict	date
+KAN_20200501_for_LGD	marcer	nvarchar
+KAN_20200501_for_LGD	default_date	date
+KAN_20200501_for_LGD	health_date2	date
+KAN_20200501_for_LGD	default_date_old	date
+KAN_20200501_for_LGD	restructura_date_1	date
+KAN_20200501_for_LGD	restructura_date_2	date
+KAN_20200501_for_LGD	restructura_date_3	date
+KAN_20200501_for_LGD	restructura_date_4	date
+KAN_20200501_for_LGD	restructura_date_5	date
+KAN_20200501_for_LGD	restructura_date_6	date
+KAN_20200501_for_LGD	default_date_DPD	date
+KAN_20200501_for_LGD	health_date	date
+KAN_20200501_for_LGD	new_default_date	date
+KAN_20200501_for_LGD	new_health_date	date
+KAN_20200501_for_LGD	Столбец 21	nvarchar
+KAN_20200501_restructura	contract_number	nvarchar
+KAN_20200501_restructura	restructura_date	date
+KAN_20200501_restructura	restructura_date2	date
+KAN_20200501_restructura	restructura_date3	date
+KAN_20200501_restructura	restructura_date4	date
+KAN_20200501_restructura	restructura_date5	date
+KAN_20200501_restructura	restructura_date6	date
+KAN_20200501_restructura	Столбец 7	nvarchar
+KAN_20200601_for_LGD	account_number	nvarchar
+KAN_20200601_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200601_for_LGD	status	nvarchar
+KAN_20200601_for_LGD	subproduct	nvarchar
+KAN_20200601_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200601_for_LGD	activation_date	date
+KAN_20200601_for_LGD	dead_convict	date
+KAN_20200601_for_LGD	marcer	nvarchar
+KAN_20200601_for_LGD	default_date	date
+KAN_20200601_for_LGD	health_date2	date
+KAN_20200601_for_LGD	default_date_old	date
+KAN_20200601_for_LGD	restructura_date_1	date
+KAN_20200601_for_LGD	restructura_date_2	date
+KAN_20200601_for_LGD	restructura_date_3	date
+KAN_20200601_for_LGD	restructura_date_4	date
+KAN_20200601_for_LGD	restructura_date_5	date
+KAN_20200601_for_LGD	restructura_date_6	date
+KAN_20200601_for_LGD	default_date_DPD	date
+KAN_20200601_for_LGD	health_date	date
+KAN_20200601_for_LGD	new_default_date	date
+KAN_20200601_for_LGD	new_health_date	date
+KAN_20200601_for_LGD	fact_close_date	date
+KAN_20200601_restructura	contract_number	nvarchar
+KAN_20200601_restructura	restructura_date	date
+KAN_20200601_restructura	restructura_date2	date
+KAN_20200601_restructura	restructura_date3	date
+KAN_20200601_restructura	restructura_date4	date
+KAN_20200601_restructura	restructura_date5	date
+KAN_20200601_restructura	restructura_date6	date
+KAN_20200601_restructura	Столбец 7	nvarchar
+KAN_20200601_restructura	Столбец 8	nvarchar
+KAN_20200701_for_LGD	account_number	nvarchar
+KAN_20200701_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200701_for_LGD	status	nvarchar
+KAN_20200701_for_LGD	subproduct	nvarchar
+KAN_20200701_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200701_for_LGD	activation_date	date
+KAN_20200701_for_LGD	dead_convict	date
+KAN_20200701_for_LGD	marcer	nvarchar
+KAN_20200701_for_LGD	default_date	date
+KAN_20200701_for_LGD	health_date2	date
+KAN_20200701_for_LGD	default_date_old	date
+KAN_20200701_for_LGD	restructura_date_1	date
+KAN_20200701_for_LGD	restructura_date_2	date
+KAN_20200701_for_LGD	restructura_date_3	date
+KAN_20200701_for_LGD	restructura_date_4	date
+KAN_20200701_for_LGD	restructura_date_5	date
+KAN_20200701_for_LGD	restructura_date_6	date
+KAN_20200701_for_LGD	default_date_DPD	date
+KAN_20200701_for_LGD	health_date	date
+KAN_20200701_for_LGD	new_default_date	date
+KAN_20200701_for_LGD	new_health_date	date
+KAN_20200701_for_LGD	fact_close_date	date
+KAN_20200701_restructura	contract_number	nvarchar
+KAN_20200701_restructura	restructura_date	date
+KAN_20200701_restructura	restructura_date2	date
+KAN_20200701_restructura	restructura_date3	date
+KAN_20200701_restructura	restructura_date4	date
+KAN_20200701_restructura	restructura_date5	date
+KAN_20200701_restructura	restructura_date6	date
+KAN_20200701_restructura	Столбец 7	nvarchar
+KAN_20200701_restructura	Столбец 8	nvarchar
+KAN_20200801_for_LGD	account_number	nvarchar
+KAN_20200801_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200801_for_LGD	status	nvarchar
+KAN_20200801_for_LGD	subproduct	nvarchar
+KAN_20200801_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200801_for_LGD	activation_date	date
+KAN_20200801_for_LGD	dead_convict	date
+KAN_20200801_for_LGD	marcer	nvarchar
+KAN_20200801_for_LGD	default_date	date
+KAN_20200801_for_LGD	health_date2	date
+KAN_20200801_for_LGD	default_date_old	date
+KAN_20200801_for_LGD	restructura_date_1	date
+KAN_20200801_for_LGD	restructura_date_2	date
+KAN_20200801_for_LGD	restructura_date_3	date
+KAN_20200801_for_LGD	restructura_date_4	date
+KAN_20200801_for_LGD	restructura_date_5	date
+KAN_20200801_for_LGD	restructura_date_6	date
+KAN_20200801_for_LGD	default_date_DPD	date
+KAN_20200801_for_LGD	health_date	date
+KAN_20200801_for_LGD	new_default_date	date
+KAN_20200801_for_LGD	new_health_date	date
+KAN_20200801_for_LGD	Столбец 21	nvarchar
+KAN_20200801_restructura	contract_number	nvarchar
+KAN_20200801_restructura	restructura_date	date
+KAN_20200801_restructura	restructura_date2	date
+KAN_20200801_restructura	restructura_date3	date
+KAN_20200801_restructura	restructura_date4	date
+KAN_20200801_restructura	restructura_date5	date
+KAN_20200801_restructura	restructura_date6	date
+KAN_20200801_restructura	Столбец 7	nvarchar
+KAN_20200901_for_LGD	account_number	nvarchar
+KAN_20200901_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20200901_for_LGD	status	nvarchar
+KAN_20200901_for_LGD	subproduct	nvarchar
+KAN_20200901_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20200901_for_LGD	activation_date	date
+KAN_20200901_for_LGD	dead_convict	date
+KAN_20200901_for_LGD	marcer	nvarchar
+KAN_20200901_for_LGD	default_date	date
+KAN_20200901_for_LGD	health_date2	date
+KAN_20200901_for_LGD	default_date_old	date
+KAN_20200901_for_LGD	restructura_date_1	date
+KAN_20200901_for_LGD	restructura_date_2	date
+KAN_20200901_for_LGD	restructura_date_3	date
+KAN_20200901_for_LGD	restructura_date_4	date
+KAN_20200901_for_LGD	restructura_date_5	date
+KAN_20200901_for_LGD	restructura_date_6	date
+KAN_20200901_for_LGD	default_date_DPD	date
+KAN_20200901_for_LGD	health_date	date
+KAN_20200901_for_LGD	new_default_date	date
+KAN_20200901_for_LGD	new_health_date	date
+KAN_20200901_for_LGD	Столбец 21	date
+KAN_20200901_restructura	contract_number	nvarchar
+KAN_20200901_restructura	restructura_date	date
+KAN_20200901_restructura	restructura_date2	date
+KAN_20200901_restructura	restructura_date3	date
+KAN_20200901_restructura	restructura_date4	date
+KAN_20200901_restructura	restructura_date5	date
+KAN_20200901_restructura	restructura_date6	date
+KAN_20200901_restructura	Столбец 7	nvarchar
+KAN_20201001_for_LGD	account_number	nvarchar
+KAN_20201001_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20201001_for_LGD	status	nvarchar
+KAN_20201001_for_LGD	subproduct	nvarchar
+KAN_20201001_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20201001_for_LGD	activation_date	date
+KAN_20201001_for_LGD	dead_convict	date
+KAN_20201001_for_LGD	marcer	nvarchar
+KAN_20201001_for_LGD	default_date	date
+KAN_20201001_for_LGD	health_date2	date
+KAN_20201001_for_LGD	default_date_old	date
+KAN_20201001_for_LGD	restructura_date_1	date
+KAN_20201001_for_LGD	restructura_date_2	date
+KAN_20201001_for_LGD	restructura_date_3	date
+KAN_20201001_for_LGD	restructura_date_4	date
+KAN_20201001_for_LGD	restructura_date_5	date
+KAN_20201001_for_LGD	restructura_date_6	date
+KAN_20201001_for_LGD	restructura_date_7	date
+KAN_20201001_for_LGD	default_date_DPD	date
+KAN_20201001_for_LGD	health_date	date
+KAN_20201001_for_LGD	new_default_date	date
+KAN_20201001_for_LGD	new_health_date	date
+KAN_20201001_for_LGD	fact_close_date	date
+KAN_20201001_restructura	contract_number	nvarchar
+KAN_20201001_restructura	restructura_date	date
+KAN_20201001_restructura	restructura_date2	date
+KAN_20201001_restructura	restructura_date3	date
+KAN_20201001_restructura	restructura_date4	date
+KAN_20201001_restructura	restructura_date5	date
+KAN_20201001_restructura	restructura_date6	date
+KAN_20201001_restructura	restructura_date7	date
+KAN_20201101_for_LGD	account_number	nvarchar
+KAN_20201101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20201101_for_LGD	status	nvarchar
+KAN_20201101_for_LGD	subproduct	nvarchar
+KAN_20201101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20201101_for_LGD	activation_date	date
+KAN_20201101_for_LGD	dead_convict	date
+KAN_20201101_for_LGD	marcer	nvarchar
+KAN_20201101_for_LGD	default_date	date
+KAN_20201101_for_LGD	health_date2	date
+KAN_20201101_for_LGD	default_date_old	date
+KAN_20201101_for_LGD	restructura_date_1	date
+KAN_20201101_for_LGD	restructura_date_2	date
+KAN_20201101_for_LGD	restructura_date_3	date
+KAN_20201101_for_LGD	restructura_date_4	date
+KAN_20201101_for_LGD	restructura_date_5	date
+KAN_20201101_for_LGD	restructura_date_6	date
+KAN_20201101_for_LGD	restructura_date_7	date
+KAN_20201101_for_LGD	default_date_DPD	date
+KAN_20201101_for_LGD	health_date	date
+KAN_20201101_for_LGD	new_default_date	date
+KAN_20201101_for_LGD	new_health_date	date
+KAN_20201101_for_LGD	Столбец 22	nvarchar
+KAN_20201101_restructura	contract_number	nvarchar
+KAN_20201101_restructura	restructura_date	date
+KAN_20201101_restructura	restructura_date2	date
+KAN_20201101_restructura	restructura_date3	date
+KAN_20201101_restructura	restructura_date4	date
+KAN_20201101_restructura	restructura_date5	date
+KAN_20201101_restructura	restructura_date6	date
+KAN_20201101_restructura	restructura_date7	date
+KAN_20201101_restructura	Столбец 8	nvarchar
+KAN_20201101_restructura	Столбец 9	nvarchar
+KAN_20201101_restructura	Столбец 10	nvarchar
+KAN_20201101_restructura	Столбец 11	nvarchar
+KAN_20201101_restructura	Столбец 12	nvarchar
+KAN_20201201_for_LGD	account_number	nvarchar
+KAN_20201201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20201201_for_LGD	status	nvarchar
+KAN_20201201_for_LGD	subproduct	nvarchar
+KAN_20201201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20201201_for_LGD	activation_date	date
+KAN_20201201_for_LGD	dead_convict	date
+KAN_20201201_for_LGD	marcer	nvarchar
+KAN_20201201_for_LGD	default_date	date
+KAN_20201201_for_LGD	health_date2	date
+KAN_20201201_for_LGD	default_date_old	date
+KAN_20201201_for_LGD	restructura_date_1	date
+KAN_20201201_for_LGD	restructura_date_2	date
+KAN_20201201_for_LGD	restructura_date_3	date
+KAN_20201201_for_LGD	restructura_date_4	date
+KAN_20201201_for_LGD	restructura_date_5	date
+KAN_20201201_for_LGD	restructura_date_6	date
+KAN_20201201_for_LGD	restructura_date_7	date
+KAN_20201201_for_LGD	default_date_DPD	date
+KAN_20201201_for_LGD	health_date	date
+KAN_20201201_for_LGD	new_default_date	date
+KAN_20201201_for_LGD	new_health_date	date
+KAN_20201201_for_LGD	Столбец 22	nvarchar
+KAN_20201201_restructura	contract_number	nvarchar
+KAN_20201201_restructura	restructura_date	date
+KAN_20201201_restructura	restructura_date2	date
+KAN_20201201_restructura	restructura_date3	date
+KAN_20201201_restructura	restructura_date4	date
+KAN_20201201_restructura	restructura_date5	date
+KAN_20201201_restructura	restructura_date6	date
+KAN_20201201_restructura	restructura_date7	date
+KAN_20201201_restructura	Столбец 8	nvarchar
+KAN_20201201_restructura	Столбец 9	nvarchar
+KAN_20201201_restructura	Столбец 10	nvarchar
+KAN_20201201_restructura	Столбец 11	nvarchar
+KAN_20201201_restructura	Столбец 12	nvarchar
+KAN_20210101_for_LGD	account_number	nvarchar
+KAN_20210101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210101_for_LGD	status	nvarchar
+KAN_20210101_for_LGD	subproduct	nvarchar
+KAN_20210101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210101_for_LGD	activation_date	date
+KAN_20210101_for_LGD	dead_convict	date
+KAN_20210101_for_LGD	marcer	nvarchar
+KAN_20210101_for_LGD	default_date	date
+KAN_20210101_for_LGD	health_date2	date
+KAN_20210101_for_LGD	default_date_old	date
+KAN_20210101_for_LGD	restructura_date_1	date
+KAN_20210101_for_LGD	restructura_date_2	date
+KAN_20210101_for_LGD	restructura_date_3	date
+KAN_20210101_for_LGD	restructura_date_4	date
+KAN_20210101_for_LGD	restructura_date_5	date
+KAN_20210101_for_LGD	restructura_date_6	date
+KAN_20210101_for_LGD	restructura_date_7	date
+KAN_20210101_for_LGD	default_date_DPD	date
+KAN_20210101_for_LGD	health_date	date
+KAN_20210101_for_LGD	new_default_date	date
+KAN_20210101_for_LGD	new_health_date	date
+KAN_20210101_for_LGD	fact_close_date	date
+KAN_20210101_for_LGD	Столбец 23	nvarchar
+KAN_20210101_for_LGD	Столбец 24	nvarchar
+KAN_20210101_for_LGD	Столбец 25	nvarchar
+KAN_20210101_for_LGD	Столбец 26	nvarchar
+KAN_20210101_for_LGD	Столбец 27	nvarchar
+KAN_20210101_for_LGD	Столбец 28	nvarchar
+KAN_20210101_for_LGD	Столбец 29	nvarchar
+KAN_20210101_for_LGD	Столбец 30	nvarchar
+KAN_20210101_for_LGD	Столбец 31	nvarchar
+KAN_20210101_for_LGD	Столбец 32	nvarchar
+KAN_20210101_for_LGD	Столбец 33	nvarchar
+KAN_20210101_for_LGD	Столбец 34	nvarchar
+KAN_20210101_for_LGD	Столбец 35	nvarchar
+KAN_20210101_for_LGD	Столбец 36	nvarchar
+KAN_20210101_for_LGD	Столбец 37	nvarchar
+KAN_20210101_for_LGD	Столбец 38	nvarchar
+KAN_20210101_for_LGD	Столбец 39	nvarchar
+KAN_20210101_for_LGD	Столбец 40	nvarchar
+KAN_20210101_for_LGD	Столбец 41	nvarchar
+KAN_20210101_for_LGD	Столбец 42	nvarchar
+KAN_20210101_for_LGD	Столбец 43	nvarchar
+KAN_20210101_for_LGD	Столбец 44	nvarchar
+KAN_20210101_for_LGD	Столбец 45	nvarchar
+KAN_20210101_for_LGD	Столбец 46	nvarchar
+KAN_20210101_for_LGD	Столбец 47	nvarchar
+KAN_20210101_for_LGD	Столбец 48	nvarchar
+KAN_20210101_for_LGD	Столбец 49	nvarchar
+KAN_20210101_for_LGD	Столбец 50	nvarchar
+KAN_20210101_for_LGD	Столбец 51	nvarchar
+KAN_20210101_for_LGD	Столбец 52	nvarchar
+KAN_20210101_for_LGD	Столбец 53	nvarchar
+KAN_20210101_for_LGD	Столбец 54	nvarchar
+KAN_20210101_for_LGD	Столбец 55	nvarchar
+KAN_20210101_for_LGD	Столбец 56	nvarchar
+KAN_20210101_for_LGD	Столбец 57	nvarchar
+KAN_20210101_for_LGD	Столбец 58	nvarchar
+KAN_20210101_for_LGD	Столбец 59	nvarchar
+KAN_20210101_for_LGD	Столбец 60	nvarchar
+KAN_20210101_for_LGD	Столбец 61	nvarchar
+KAN_20210101_for_LGD	Столбец 62	nvarchar
+KAN_20210101_for_LGD	Столбец 63	nvarchar
+KAN_20210101_for_LGD	Столбец 64	nvarchar
+KAN_20210101_for_LGD	Столбец 65	nvarchar
+KAN_20210101_for_LGD	Столбец 66	nvarchar
+KAN_20210101_for_LGD	Столбец 67	nvarchar
+KAN_20210101_for_LGD	Столбец 68	nvarchar
+KAN_20210101_for_LGD	Столбец 69	nvarchar
+KAN_20210101_for_LGD	Столбец 70	nvarchar
+KAN_20210101_for_LGD	Столбец 71	nvarchar
+KAN_20210101_for_LGD	Столбец 72	nvarchar
+KAN_20210101_for_LGD	Столбец 73	nvarchar
+KAN_20210101_for_LGD	Столбец 74	nvarchar
+KAN_20210101_for_LGD	Столбец 75	nvarchar
+KAN_20210101_for_LGD	Столбец 76	nvarchar
+KAN_20210101_for_LGD	Столбец 77	nvarchar
+KAN_20210101_for_LGD	Столбец 78	nvarchar
+KAN_20210101_for_LGD	Столбец 79	nvarchar
+KAN_20210101_for_LGD	Столбец 80	nvarchar
+KAN_20210101_for_LGD	Столбец 81	nvarchar
+KAN_20210101_for_LGD	Столбец 82	nvarchar
+KAN_20210101_for_LGD	Столбец 83	nvarchar
+KAN_20210101_for_LGD	Столбец 84	nvarchar
+KAN_20210101_for_LGD	Столбец 85	nvarchar
+KAN_20210101_for_LGD	Столбец 86	nvarchar
+KAN_20210101_for_LGD	Столбец 87	nvarchar
+KAN_20210101_for_LGD	Столбец 88	nvarchar
+KAN_20210101_for_LGD	Столбец 89	nvarchar
+KAN_20210101_for_LGD	Столбец 90	nvarchar
+KAN_20210101_for_LGD	Столбец 91	nvarchar
+KAN_20210101_for_LGD	Столбец 92	nvarchar
+KAN_20210101_for_LGD	Столбец 93	nvarchar
+KAN_20210101_for_LGD	Столбец 94	nvarchar
+KAN_20210101_for_LGD	Столбец 95	nvarchar
+KAN_20210101_for_LGD	Столбец 96	nvarchar
+KAN_20210101_for_LGD	Столбец 97	nvarchar
+KAN_20210101_for_LGD	Столбец 98	nvarchar
+KAN_20210101_for_LGD	Столбец 99	nvarchar
+KAN_20210101_for_LGD	Столбец 100	nvarchar
+KAN_20210101_for_LGD	Столбец 101	nvarchar
+KAN_20210101_for_LGD	Столбец 102	nvarchar
+KAN_20210101_for_LGD	Столбец 103	nvarchar
+KAN_20210101_for_LGD	Столбец 104	nvarchar
+KAN_20210101_for_LGD	Столбец 105	nvarchar
+KAN_20210101_for_LGD	Столбец 106	nvarchar
+KAN_20210101_for_LGD	Столбец 107	nvarchar
+KAN_20210101_for_LGD	Столбец 108	nvarchar
+KAN_20210101_for_LGD	Столбец 109	nvarchar
+KAN_20210101_for_LGD	Столбец 110	nvarchar
+KAN_20210101_for_LGD	Столбец 111	nvarchar
+KAN_20210101_for_LGD	Столбец 112	nvarchar
+KAN_20210101_for_LGD	Столбец 113	nvarchar
+KAN_20210101_for_LGD	Столбец 114	nvarchar
+KAN_20210101_for_LGD	Столбец 115	nvarchar
+KAN_20210101_for_LGD	Столбец 116	nvarchar
+KAN_20210101_for_LGD	Столбец 117	nvarchar
+KAN_20210101_for_LGD	Столбец 118	nvarchar
+KAN_20210101_for_LGD	Столбец 119	nvarchar
+KAN_20210101_for_LGD	Столбец 120	nvarchar
+KAN_20210101_for_LGD	Столбец 121	nvarchar
+KAN_20210101_for_LGD	Столбец 122	nvarchar
+KAN_20210101_for_LGD	Столбец 123	nvarchar
+KAN_20210101_for_LGD	Столбец 124	nvarchar
+KAN_20210101_for_LGD	Столбец 125	nvarchar
+KAN_20210101_for_LGD	Столбец 126	nvarchar
+KAN_20210101_for_LGD	Столбец 127	nvarchar
+KAN_20210101_for_LGD	Столбец 128	nvarchar
+KAN_20210101_for_LGD	Столбец 129	nvarchar
+KAN_20210101_for_LGD	Столбец 130	nvarchar
+KAN_20210101_restructura	contract_number	nvarchar
+KAN_20210101_restructura	restructura_date	date
+KAN_20210101_restructura	restructura_date2	date
+KAN_20210101_restructura	restructura_date3	date
+KAN_20210101_restructura	restructura_date4	date
+KAN_20210101_restructura	restructura_date5	date
+KAN_20210101_restructura	restructura_date6	date
+KAN_20210101_restructura	restructura_date7	date
+KAN_20210101_restructura	Столбец 8	nvarchar
+KAN_20210101_restructura	Столбец 9	nvarchar
+KAN_20210101_restructura	Столбец 10	nvarchar
+KAN_20210101_restructura	Столбец 11	nvarchar
+KAN_20210101_restructura	Столбец 12	nvarchar
+KAN_20210201_for_LGD	account_number	nvarchar
+KAN_20210201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210201_for_LGD	status	nvarchar
+KAN_20210201_for_LGD	subproduct	nvarchar
+KAN_20210201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210201_for_LGD	activation_date	date
+KAN_20210201_for_LGD	dead_convict	date
+KAN_20210201_for_LGD	marcer	nvarchar
+KAN_20210201_for_LGD	default_date	date
+KAN_20210201_for_LGD	health_date2	date
+KAN_20210201_for_LGD	default_date_old	date
+KAN_20210201_for_LGD	restructura_date_1	date
+KAN_20210201_for_LGD	restructura_date_2	date
+KAN_20210201_for_LGD	restructura_date_3	date
+KAN_20210201_for_LGD	restructura_date_4	date
+KAN_20210201_for_LGD	restructura_date_5	date
+KAN_20210201_for_LGD	restructura_date_6	date
+KAN_20210201_for_LGD	restructura_date_7	date
+KAN_20210201_for_LGD	default_date_DPD	date
+KAN_20210201_for_LGD	health_date	date
+KAN_20210201_for_LGD	new_default_date	date
+KAN_20210201_for_LGD	new_health_date	date
+KAN_20210201_for_LGD	Столбец 22	nvarchar
+KAN_20210201_restructura	contract_number	nvarchar
+KAN_20210201_restructura	restructura_date	date
+KAN_20210201_restructura	restructura_date2	date
+KAN_20210201_restructura	restructura_date3	date
+KAN_20210201_restructura	restructura_date4	date
+KAN_20210201_restructura	restructura_date5	date
+KAN_20210201_restructura	restructura_date6	date
+KAN_20210201_restructura	restructura_date7	date
+KAN_20210201_restructura	Столбец 8	nvarchar
+KAN_20210201_restructura	Столбец 9	nvarchar
+KAN_20210201_restructura	Столбец 10	nvarchar
+KAN_20210201_restructura	Столбец 11	nvarchar
+KAN_20210201_restructura	Столбец 12	nvarchar
+KAN_20210301_for_LGD	account_number	nvarchar
+KAN_20210301_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210301_for_LGD	status	nvarchar
+KAN_20210301_for_LGD	subproduct	nvarchar
+KAN_20210301_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210301_for_LGD	activation_date	date
+KAN_20210301_for_LGD	dead_convict	date
+KAN_20210301_for_LGD	marcer	nvarchar
+KAN_20210301_for_LGD	default_date	date
+KAN_20210301_for_LGD	health_date2	date
+KAN_20210301_for_LGD	default_date_old	date
+KAN_20210301_for_LGD	restructura_date_1	date
+KAN_20210301_for_LGD	restructura_date_2	date
+KAN_20210301_for_LGD	restructura_date_3	date
+KAN_20210301_for_LGD	restructura_date_4	date
+KAN_20210301_for_LGD	restructura_date_5	date
+KAN_20210301_for_LGD	restructura_date_6	date
+KAN_20210301_for_LGD	restructura_date_7	date
+KAN_20210301_for_LGD	default_date_DPD	date
+KAN_20210301_for_LGD	health_date	date
+KAN_20210301_for_LGD	new_default_date	date
+KAN_20210301_for_LGD	new_health_date	date
+KAN_20210301_for_LGD	Столбец 22	nvarchar
+KAN_20210301_restructura	contract_number	nvarchar
+KAN_20210301_restructura	restructura_date	date
+KAN_20210301_restructura	restructura_date2	date
+KAN_20210301_restructura	restructura_date3	date
+KAN_20210301_restructura	restructura_date4	date
+KAN_20210301_restructura	restructura_date5	date
+KAN_20210301_restructura	restructura_date6	date
+KAN_20210301_restructura	restructura_date7	date
+KAN_20210301_restructura	Столбец 8	nvarchar
+KAN_20210301_restructura	Столбец 9	nvarchar
+KAN_20210301_restructura	Столбец 10	nvarchar
+KAN_20210301_restructura	Столбец 11	nvarchar
+KAN_20210301_restructura	Столбец 12	nvarchar
+KAN_20210401_for_LGD	account_number	nvarchar
+KAN_20210401_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210401_for_LGD	status	nvarchar
+KAN_20210401_for_LGD	subproduct	nvarchar
+KAN_20210401_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210401_for_LGD	activation_date	date
+KAN_20210401_for_LGD	dead_convict	date
+KAN_20210401_for_LGD	marcer	nvarchar
+KAN_20210401_for_LGD	default_date	date
+KAN_20210401_for_LGD	health_date2	date
+KAN_20210401_for_LGD	default_date_old	date
+KAN_20210401_for_LGD	restructura_date_1	date
+KAN_20210401_for_LGD	restructura_date_2	date
+KAN_20210401_for_LGD	restructura_date_3	date
+KAN_20210401_for_LGD	restructura_date_4	date
+KAN_20210401_for_LGD	restructura_date_5	date
+KAN_20210401_for_LGD	restructura_date_6	date
+KAN_20210401_for_LGD	restructura_date_7	date
+KAN_20210401_for_LGD	default_date_DPD	date
+KAN_20210401_for_LGD	health_date	date
+KAN_20210401_for_LGD	new_default_date	date
+KAN_20210401_for_LGD	new_health_date	date
+KAN_20210401_for_LGD	fact_close_date	date
+KAN_20210401_for_LGD	Столбец 23	nvarchar
+KAN_20210401_for_LGD	Столбец 24	nvarchar
+KAN_20210401_for_LGD	Столбец 25	nvarchar
+KAN_20210401_for_LGD	Столбец 26	nvarchar
+KAN_20210401_for_LGD	Столбец 27	nvarchar
+KAN_20210401_for_LGD	Столбец 28	nvarchar
+KAN_20210401_for_LGD	Столбец 29	nvarchar
+KAN_20210401_for_LGD	Столбец 30	nvarchar
+KAN_20210401_for_LGD	Столбец 31	nvarchar
+KAN_20210401_for_LGD	Столбец 32	nvarchar
+KAN_20210401_for_LGD	Столбец 33	nvarchar
+KAN_20210401_for_LGD	Столбец 34	nvarchar
+KAN_20210401_for_LGD	Столбец 35	nvarchar
+KAN_20210401_for_LGD	Столбец 36	nvarchar
+KAN_20210401_for_LGD	Столбец 37	nvarchar
+KAN_20210401_for_LGD	Столбец 38	nvarchar
+KAN_20210401_for_LGD	Столбец 39	nvarchar
+KAN_20210401_for_LGD	Столбец 40	nvarchar
+KAN_20210401_for_LGD	Столбец 41	nvarchar
+KAN_20210401_for_LGD	Столбец 42	nvarchar
+KAN_20210401_for_LGD	Столбец 43	nvarchar
+KAN_20210401_for_LGD	Столбец 44	nvarchar
+KAN_20210401_for_LGD	Столбец 45	nvarchar
+KAN_20210401_for_LGD	Столбец 46	nvarchar
+KAN_20210401_for_LGD	Столбец 47	nvarchar
+KAN_20210401_for_LGD	Столбец 48	nvarchar
+KAN_20210401_for_LGD	Столбец 49	nvarchar
+KAN_20210401_for_LGD	Столбец 50	nvarchar
+KAN_20210401_for_LGD	Столбец 51	nvarchar
+KAN_20210401_for_LGD	Столбец 52	nvarchar
+KAN_20210401_for_LGD	Столбец 53	nvarchar
+KAN_20210401_for_LGD	Столбец 54	nvarchar
+KAN_20210401_for_LGD	Столбец 55	nvarchar
+KAN_20210401_for_LGD	Столбец 56	nvarchar
+KAN_20210401_for_LGD	Столбец 57	nvarchar
+KAN_20210401_for_LGD	Столбец 58	nvarchar
+KAN_20210401_for_LGD	Столбец 59	nvarchar
+KAN_20210401_for_LGD	Столбец 60	nvarchar
+KAN_20210401_for_LGD	Столбец 61	nvarchar
+KAN_20210401_for_LGD	Столбец 62	nvarchar
+KAN_20210401_for_LGD	Столбец 63	nvarchar
+KAN_20210401_for_LGD	Столбец 64	nvarchar
+KAN_20210401_for_LGD	Столбец 65	nvarchar
+KAN_20210401_for_LGD	Столбец 66	nvarchar
+KAN_20210401_for_LGD	Столбец 67	nvarchar
+KAN_20210401_for_LGD	Столбец 68	nvarchar
+KAN_20210401_for_LGD	Столбец 69	nvarchar
+KAN_20210401_for_LGD	Столбец 70	nvarchar
+KAN_20210401_for_LGD	Столбец 71	nvarchar
+KAN_20210401_for_LGD	Столбец 72	nvarchar
+KAN_20210401_for_LGD	Столбец 73	nvarchar
+KAN_20210401_for_LGD	Столбец 74	nvarchar
+KAN_20210401_for_LGD	Столбец 75	nvarchar
+KAN_20210401_for_LGD	Столбец 76	nvarchar
+KAN_20210401_for_LGD	Столбец 77	nvarchar
+KAN_20210401_for_LGD	Столбец 78	nvarchar
+KAN_20210401_for_LGD	Столбец 79	nvarchar
+KAN_20210401_for_LGD	Столбец 80	nvarchar
+KAN_20210401_for_LGD	Столбец 81	nvarchar
+KAN_20210401_for_LGD	Столбец 82	nvarchar
+KAN_20210401_for_LGD	Столбец 83	nvarchar
+KAN_20210401_for_LGD	Столбец 84	nvarchar
+KAN_20210401_for_LGD	Столбец 85	nvarchar
+KAN_20210401_for_LGD	Столбец 86	nvarchar
+KAN_20210401_for_LGD	Столбец 87	nvarchar
+KAN_20210401_for_LGD	Столбец 88	nvarchar
+KAN_20210401_for_LGD	Столбец 89	nvarchar
+KAN_20210401_for_LGD	Столбец 90	nvarchar
+KAN_20210401_for_LGD	Столбец 91	nvarchar
+KAN_20210401_for_LGD	Столбец 92	nvarchar
+KAN_20210401_for_LGD	Столбец 93	nvarchar
+KAN_20210401_for_LGD	Столбец 94	nvarchar
+KAN_20210401_for_LGD	Столбец 95	nvarchar
+KAN_20210401_for_LGD	Столбец 96	nvarchar
+KAN_20210401_for_LGD	Столбец 97	nvarchar
+KAN_20210401_for_LGD	Столбец 98	nvarchar
+KAN_20210401_for_LGD	Столбец 99	nvarchar
+KAN_20210401_for_LGD	Столбец 100	nvarchar
+KAN_20210401_for_LGD	Столбец 101	nvarchar
+KAN_20210401_for_LGD	Столбец 102	nvarchar
+KAN_20210401_for_LGD	Столбец 103	nvarchar
+KAN_20210401_for_LGD	Столбец 104	nvarchar
+KAN_20210401_for_LGD	Столбец 105	nvarchar
+KAN_20210401_for_LGD	Столбец 106	nvarchar
+KAN_20210401_for_LGD	Столбец 107	nvarchar
+KAN_20210401_for_LGD	Столбец 108	nvarchar
+KAN_20210401_for_LGD	Столбец 109	nvarchar
+KAN_20210401_for_LGD	Столбец 110	nvarchar
+KAN_20210401_for_LGD	Столбец 111	nvarchar
+KAN_20210401_for_LGD	Столбец 112	nvarchar
+KAN_20210401_for_LGD	Столбец 113	nvarchar
+KAN_20210401_for_LGD	Столбец 114	nvarchar
+KAN_20210401_for_LGD	Столбец 115	nvarchar
+KAN_20210401_for_LGD	Столбец 116	nvarchar
+KAN_20210401_for_LGD	Столбец 117	nvarchar
+KAN_20210401_for_LGD	Столбец 118	nvarchar
+KAN_20210401_for_LGD	Столбец 119	nvarchar
+KAN_20210401_for_LGD	Столбец 120	nvarchar
+KAN_20210401_for_LGD	Столбец 121	nvarchar
+KAN_20210401_for_LGD	Столбец 122	nvarchar
+KAN_20210401_for_LGD	Столбец 123	nvarchar
+KAN_20210401_for_LGD	Столбец 124	nvarchar
+KAN_20210401_for_LGD	Столбец 125	nvarchar
+KAN_20210401_for_LGD	Столбец 126	nvarchar
+KAN_20210401_for_LGD	Столбец 127	nvarchar
+KAN_20210401_for_LGD	Столбец 128	nvarchar
+KAN_20210401_for_LGD	Столбец 129	nvarchar
+KAN_20210401_for_LGD	Столбец 130	nvarchar
+KAN_20210401_for_LGD	Столбец 131	nvarchar
+KAN_20210401_for_LGD	Столбец 132	nvarchar
+KAN_20210401_for_LGD	Столбец 133	nvarchar
+KAN_20210401_restructura	contract_number	nvarchar
+KAN_20210401_restructura	restructura_date	date
+KAN_20210401_restructura	restructura_date2	date
+KAN_20210401_restructura	restructura_date3	date
+KAN_20210401_restructura	restructura_date4	date
+KAN_20210401_restructura	restructura_date5	date
+KAN_20210401_restructura	restructura_date6	date
+KAN_20210401_restructura	restructura_date7	date
+KAN_20210401_restructura	Столбец 8	nvarchar
+KAN_20210401_restructura	Столбец 9	nvarchar
+KAN_20210401_restructura	Столбец 10	nvarchar
+KAN_20210401_restructura	Столбец 11	nvarchar
+KAN_20210401_restructura	Столбец 12	nvarchar
+KAN_20210501_for_LGD	account_number	nvarchar
+KAN_20210501_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210501_for_LGD	status	nvarchar
+KAN_20210501_for_LGD	subproduct	nvarchar
+KAN_20210501_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210501_for_LGD	activation_date	date
+KAN_20210501_for_LGD	dead_convict	date
+KAN_20210501_for_LGD	marcer	nvarchar
+KAN_20210501_for_LGD	default_date	date
+KAN_20210501_for_LGD	health_date2	date
+KAN_20210501_for_LGD	default_date_old	date
+KAN_20210501_for_LGD	restructura_date_1	date
+KAN_20210501_for_LGD	restructura_date_2	date
+KAN_20210501_for_LGD	restructura_date_3	date
+KAN_20210501_for_LGD	restructura_date_4	date
+KAN_20210501_for_LGD	restructura_date_5	date
+KAN_20210501_for_LGD	restructura_date_6	date
+KAN_20210501_for_LGD	restructura_date_7	date
+KAN_20210501_for_LGD	restructura_date_8	date
+KAN_20210501_for_LGD	default_date_DPD	date
+KAN_20210501_for_LGD	health_date	date
+KAN_20210501_for_LGD	new_default_date	date
+KAN_20210501_for_LGD	new_health_date	date
+KAN_20210501_for_LGD	fact_close_date	date
+KAN_20210501_restructura	contract_number	nvarchar
+KAN_20210501_restructura	restructura_date	date
+KAN_20210501_restructura	restructura_date2	date
+KAN_20210501_restructura	restructura_date3	date
+KAN_20210501_restructura	restructura_date4	date
+KAN_20210501_restructura	restructura_date5	date
+KAN_20210501_restructura	restructura_date6	date
+KAN_20210501_restructura	restructura_date7	date
+KAN_20210501_restructura	restructura_date8	date
+KAN_20210501_restructura	Столбец 9	nvarchar
+KAN_20210601_for_LGD	account_number	nvarchar
+KAN_20210601_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210601_for_LGD	status	nvarchar
+KAN_20210601_for_LGD	subproduct	nvarchar
+KAN_20210601_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210601_for_LGD	activation_date	date
+KAN_20210601_for_LGD	dead_convict	date
+KAN_20210601_for_LGD	marcer	nvarchar
+KAN_20210601_for_LGD	default_date	date
+KAN_20210601_for_LGD	health_date2	date
+KAN_20210601_for_LGD	default_date_old	date
+KAN_20210601_for_LGD	restructura_date_1	date
+KAN_20210601_for_LGD	restructura_date_2	date
+KAN_20210601_for_LGD	restructura_date_3	date
+KAN_20210601_for_LGD	restructura_date_4	date
+KAN_20210601_for_LGD	restructura_date_5	date
+KAN_20210601_for_LGD	restructura_date_6	date
+KAN_20210601_for_LGD	restructura_date_7	date
+KAN_20210601_for_LGD	restructura_date_8	date
+KAN_20210601_for_LGD	default_date_DPD	date
+KAN_20210601_for_LGD	health_date	date
+KAN_20210601_for_LGD	new_default_date	date
+KAN_20210601_for_LGD	new_health_date	date
+KAN_20210601_for_LGD	fact_close_date	date
+KAN_20210601_for_LGD	Столбец 24	nvarchar
+KAN_20210601_for_LGD	Столбец 25	nvarchar
+KAN_20210601_for_LGD	Столбец 26	nvarchar
+KAN_20210601_for_LGD	Столбец 27	nvarchar
+KAN_20210601_for_LGD	Столбец 28	nvarchar
+KAN_20210601_for_LGD	Столбец 29	nvarchar
+KAN_20210601_for_LGD	Столбец 30	nvarchar
+KAN_20210601_for_LGD	Столбец 31	nvarchar
+KAN_20210601_for_LGD	Столбец 32	nvarchar
+KAN_20210601_for_LGD	Столбец 33	nvarchar
+KAN_20210601_for_LGD	Столбец 34	nvarchar
+KAN_20210601_for_LGD	Столбец 35	nvarchar
+KAN_20210601_for_LGD	Столбец 36	nvarchar
+KAN_20210601_for_LGD	Столбец 37	nvarchar
+KAN_20210601_for_LGD	Столбец 38	nvarchar
+KAN_20210601_for_LGD	Столбец 39	nvarchar
+KAN_20210601_for_LGD	Столбец 40	nvarchar
+KAN_20210601_for_LGD	Столбец 41	nvarchar
+KAN_20210601_for_LGD	Столбец 42	nvarchar
+KAN_20210601_for_LGD	Столбец 43	nvarchar
+KAN_20210601_for_LGD	Столбец 44	nvarchar
+KAN_20210601_for_LGD	Столбец 45	nvarchar
+KAN_20210601_for_LGD	Столбец 46	nvarchar
+KAN_20210601_for_LGD	Столбец 47	nvarchar
+KAN_20210601_for_LGD	Столбец 48	nvarchar
+KAN_20210601_for_LGD	Столбец 49	nvarchar
+KAN_20210601_for_LGD	Столбец 50	nvarchar
+KAN_20210601_for_LGD	Столбец 51	nvarchar
+KAN_20210601_for_LGD	Столбец 52	nvarchar
+KAN_20210601_for_LGD	Столбец 53	nvarchar
+KAN_20210601_for_LGD	Столбец 54	nvarchar
+KAN_20210601_for_LGD	Столбец 55	nvarchar
+KAN_20210601_for_LGD	Столбец 56	nvarchar
+KAN_20210601_for_LGD	Столбец 57	nvarchar
+KAN_20210601_for_LGD	Столбец 58	nvarchar
+KAN_20210601_for_LGD	Столбец 59	nvarchar
+KAN_20210601_for_LGD	Столбец 60	nvarchar
+KAN_20210601_for_LGD	Столбец 61	nvarchar
+KAN_20210601_for_LGD	Столбец 62	nvarchar
+KAN_20210601_for_LGD	Столбец 63	nvarchar
+KAN_20210601_for_LGD	Столбец 64	nvarchar
+KAN_20210601_for_LGD	Столбец 65	nvarchar
+KAN_20210601_for_LGD	Столбец 66	nvarchar
+KAN_20210601_for_LGD	Столбец 67	nvarchar
+KAN_20210601_for_LGD	Столбец 68	nvarchar
+KAN_20210601_for_LGD	Столбец 69	nvarchar
+KAN_20210601_for_LGD	Столбец 70	nvarchar
+KAN_20210601_for_LGD	Столбец 71	nvarchar
+KAN_20210601_for_LGD	Столбец 72	nvarchar
+KAN_20210601_for_LGD	Столбец 73	nvarchar
+KAN_20210601_for_LGD	Столбец 74	nvarchar
+KAN_20210601_for_LGD	Столбец 75	nvarchar
+KAN_20210601_for_LGD	Столбец 76	nvarchar
+KAN_20210601_for_LGD	Столбец 77	nvarchar
+KAN_20210601_for_LGD	Столбец 78	nvarchar
+KAN_20210601_for_LGD	Столбец 79	nvarchar
+KAN_20210601_for_LGD	Столбец 80	nvarchar
+KAN_20210601_for_LGD	Столбец 81	nvarchar
+KAN_20210601_for_LGD	Столбец 82	nvarchar
+KAN_20210601_for_LGD	Столбец 83	nvarchar
+KAN_20210601_for_LGD	Столбец 84	nvarchar
+KAN_20210601_for_LGD	Столбец 85	nvarchar
+KAN_20210601_for_LGD	Столбец 86	nvarchar
+KAN_20210601_for_LGD	Столбец 87	nvarchar
+KAN_20210601_for_LGD	Столбец 88	nvarchar
+KAN_20210601_for_LGD	Столбец 89	nvarchar
+KAN_20210601_for_LGD	Столбец 90	nvarchar
+KAN_20210601_for_LGD	Столбец 91	nvarchar
+KAN_20210601_for_LGD	Столбец 92	nvarchar
+KAN_20210601_for_LGD	Столбец 93	nvarchar
+KAN_20210601_for_LGD	Столбец 94	nvarchar
+KAN_20210601_for_LGD	Столбец 95	nvarchar
+KAN_20210601_for_LGD	Столбец 96	nvarchar
+KAN_20210601_for_LGD	Столбец 97	nvarchar
+KAN_20210601_for_LGD	Столбец 98	nvarchar
+KAN_20210601_for_LGD	Столбец 99	nvarchar
+KAN_20210601_for_LGD	Столбец 100	nvarchar
+KAN_20210601_for_LGD	Столбец 101	nvarchar
+KAN_20210601_for_LGD	Столбец 102	nvarchar
+KAN_20210601_for_LGD	Столбец 103	nvarchar
+KAN_20210601_for_LGD	Столбец 104	nvarchar
+KAN_20210601_for_LGD	Столбец 105	nvarchar
+KAN_20210601_for_LGD	Столбец 106	nvarchar
+KAN_20210601_for_LGD	Столбец 107	nvarchar
+KAN_20210601_for_LGD	Столбец 108	nvarchar
+KAN_20210601_for_LGD	Столбец 109	nvarchar
+KAN_20210601_for_LGD	Столбец 110	nvarchar
+KAN_20210601_for_LGD	Столбец 111	nvarchar
+KAN_20210601_for_LGD	Столбец 112	nvarchar
+KAN_20210601_for_LGD	Столбец 113	nvarchar
+KAN_20210601_for_LGD	Столбец 114	nvarchar
+KAN_20210601_for_LGD	Столбец 115	nvarchar
+KAN_20210601_for_LGD	Столбец 116	nvarchar
+KAN_20210601_for_LGD	Столбец 117	nvarchar
+KAN_20210601_for_LGD	Столбец 118	nvarchar
+KAN_20210601_for_LGD	Столбец 119	nvarchar
+KAN_20210601_for_LGD	Столбец 120	nvarchar
+KAN_20210601_for_LGD	Столбец 121	nvarchar
+KAN_20210601_for_LGD	Столбец 122	nvarchar
+KAN_20210601_for_LGD	Столбец 123	nvarchar
+KAN_20210601_for_LGD	Столбец 124	nvarchar
+KAN_20210601_for_LGD	Столбец 125	nvarchar
+KAN_20210601_for_LGD	Столбец 126	nvarchar
+KAN_20210601_for_LGD	Столбец 127	nvarchar
+KAN_20210601_for_LGD	Столбец 128	nvarchar
+KAN_20210601_for_LGD	Столбец 129	nvarchar
+KAN_20210601_for_LGD	Столбец 130	nvarchar
+KAN_20210601_for_LGD	Столбец 131	nvarchar
+KAN_20210601_for_LGD	Столбец 132	nvarchar
+KAN_20210601_for_LGD	Столбец 133	nvarchar
+KAN_20210601_for_LGD	Столбец 134	nvarchar
+KAN_20210601_for_LGD	Столбец 135	nvarchar
+KAN_20210601_for_LGD	Столбец 136	nvarchar
+KAN_20210601_restructura	contract_number	nvarchar
+KAN_20210601_restructura	restructura_date	date
+KAN_20210601_restructura	restructura_date2	date
+KAN_20210601_restructura	restructura_date3	date
+KAN_20210601_restructura	restructura_date4	date
+KAN_20210601_restructura	restructura_date5	date
+KAN_20210601_restructura	restructura_date6	date
+KAN_20210601_restructura	restructura_date7	date
+KAN_20210601_restructura	restructura_date8	date
+KAN_20210601_restructura	Столбец 9	nvarchar
+KAN_20210701_for_LGD	account_number	nvarchar
+KAN_20210701_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210701_for_LGD	status	nvarchar
+KAN_20210701_for_LGD	subproduct	nvarchar
+KAN_20210701_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210701_for_LGD	activation_date	date
+KAN_20210701_for_LGD	dead_convict	date
+KAN_20210701_for_LGD	marcer	nvarchar
+KAN_20210701_for_LGD	default_date	date
+KAN_20210701_for_LGD	health_date2	date
+KAN_20210701_for_LGD	default_date_old	date
+KAN_20210701_for_LGD	restructura_date_1	date
+KAN_20210701_for_LGD	restructura_date_2	date
+KAN_20210701_for_LGD	restructura_date_3	date
+KAN_20210701_for_LGD	restructura_date_4	date
+KAN_20210701_for_LGD	restructura_date_5	date
+KAN_20210701_for_LGD	restructura_date_6	date
+KAN_20210701_for_LGD	restructura_date_7	date
+KAN_20210701_for_LGD	restructura_date_8	date
+KAN_20210701_for_LGD	default_date_DPD	date
+KAN_20210701_for_LGD	health_date	date
+KAN_20210701_for_LGD	new_default_date	date
+KAN_20210701_for_LGD	new_health_date	date
+KAN_20210701_for_LGD	fact_close_date	date
+KAN_20210701_restructura	contract_number	nvarchar
+KAN_20210701_restructura	restructura_date	date
+KAN_20210701_restructura	restructura_date2	date
+KAN_20210701_restructura	restructura_date3	date
+KAN_20210701_restructura	restructura_date4	date
+KAN_20210701_restructura	restructura_date5	date
+KAN_20210701_restructura	restructura_date6	date
+KAN_20210701_restructura	restructura_date7	date
+KAN_20210701_restructura	restructura_date8	date
+KAN_20210701_restructura	Столбец 9	nvarchar
+KAN_20210801_for_LGD	account_number	nvarchar
+KAN_20210801_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210801_for_LGD	status	nvarchar
+KAN_20210801_for_LGD	subproduct	nvarchar
+KAN_20210801_for_LGD	TARIFF	nvarchar
+KAN_20210801_for_LGD	DURATION	nvarchar
+KAN_20210801_for_LGD	CAR_PRICE	nvarchar
+KAN_20210801_for_LGD	downPayment	nvarchar
+KAN_20210801_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20210801_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210801_for_LGD	activation_date	date
+KAN_20210801_for_LGD	dead_convict	date
+KAN_20210801_for_LGD	marcer	nvarchar
+KAN_20210801_for_LGD	default_date	smalldatetime
+KAN_20210801_for_LGD	health_date2	date
+KAN_20210801_for_LGD	default_date_old	date
+KAN_20210801_for_LGD	restructura_date_1	date
+KAN_20210801_for_LGD	restructura_date_2	date
+KAN_20210801_for_LGD	restructura_date_3	date
+KAN_20210801_for_LGD	restructura_date_4	date
+KAN_20210801_for_LGD	restructura_date_5	date
+KAN_20210801_for_LGD	restructura_date_6	date
+KAN_20210801_for_LGD	restructura_date_7	date
+KAN_20210801_for_LGD	restructura_date_8	date
+KAN_20210801_for_LGD	default_date_DPD	date
+KAN_20210801_for_LGD	health_date	date
+KAN_20210801_for_LGD	new_default_date	date
+KAN_20210801_for_LGD	new_health_date	date
+KAN_20210801_for_LGD	fact_close_date	date
+KAN_20210801_for_LGD_validation	account_number	nvarchar
+KAN_20210801_for_LGD_validation	FACT_CLOSE_DATE_b4	date
+KAN_20210801_for_LGD_validation	status	nvarchar
+KAN_20210801_for_LGD_validation	subproduct	nvarchar
+KAN_20210801_for_LGD_validation	TARIFF	nvarchar
+KAN_20210801_for_LGD_validation	DURATION	nvarchar
+KAN_20210801_for_LGD_validation	CAR_PRICE	nvarchar
+KAN_20210801_for_LGD_validation	downPayment	nvarchar
+KAN_20210801_for_LGD_validation	LOAN_AMOUNT	nvarchar
+KAN_20210801_for_LGD_validation	FIRST_PAYMENT_DATE	date
+KAN_20210801_for_LGD_validation	activation_date	date
+KAN_20210801_for_LGD_validation	dead_convict	date
+KAN_20210801_for_LGD_validation	marcer	nvarchar
+KAN_20210801_for_LGD_validation	default_date	date
+KAN_20210801_for_LGD_validation	health_date2	date
+KAN_20210801_for_LGD_validation	default_date_old	date
+KAN_20210801_for_LGD_validation	restructura_date_1	date
+KAN_20210801_for_LGD_validation	restructura_date_2	date
+KAN_20210801_for_LGD_validation	restructura_date_3	date
+KAN_20210801_for_LGD_validation	restructura_date_4	date
+KAN_20210801_for_LGD_validation	restructura_date_5	date
+KAN_20210801_for_LGD_validation	restructura_date_6	date
+KAN_20210801_for_LGD_validation	restructura_date_7	date
+KAN_20210801_for_LGD_validation	restructura_date_8	date
+KAN_20210801_for_LGD_validation	default_date_DPD	date
+KAN_20210801_for_LGD_validation	health_date	date
+KAN_20210801_for_LGD_validation	new_default_date	date
+KAN_20210801_for_LGD_validation	new_health_date	date
+KAN_20210801_for_LGD_validation	fact_close_date	date
+KAN_20210801_for_LGD_validation_new	account_number	nvarchar
+KAN_20210801_for_LGD_validation_new	FACT_CLOSE_DATE_b4	date
+KAN_20210801_for_LGD_validation_new	status	nvarchar
+KAN_20210801_for_LGD_validation_new	subproduct	nvarchar
+KAN_20210801_for_LGD_validation_new	TARIFF	nvarchar
+KAN_20210801_for_LGD_validation_new	DURATION	nvarchar
+KAN_20210801_for_LGD_validation_new	CAR_PRICE	nvarchar
+KAN_20210801_for_LGD_validation_new	downPayment	nvarchar
+KAN_20210801_for_LGD_validation_new	LOAN_AMOUNT	nvarchar
+KAN_20210801_for_LGD_validation_new	FIRST_PAYMENT_DATE	date
+KAN_20210801_for_LGD_validation_new	activation_date	date
+KAN_20210801_for_LGD_validation_new	dead_convict	date
+KAN_20210801_for_LGD_validation_new	marcer	nvarchar
+KAN_20210801_for_LGD_validation_new	default_date	date
+KAN_20210801_for_LGD_validation_new	health_date2	date
+KAN_20210801_for_LGD_validation_new	default_date_old	date
+KAN_20210801_for_LGD_validation_new	restructura_date_1	date
+KAN_20210801_for_LGD_validation_new	restructura_date_2	date
+KAN_20210801_for_LGD_validation_new	restructura_date_3	date
+KAN_20210801_for_LGD_validation_new	restructura_date_4	date
+KAN_20210801_for_LGD_validation_new	restructura_date_5	date
+KAN_20210801_for_LGD_validation_new	restructura_date_6	date
+KAN_20210801_for_LGD_validation_new	restructura_date_7	date
+KAN_20210801_for_LGD_validation_new	restructura_date_8	date
+KAN_20210801_for_LGD_validation_new	default_date_DPD	date
+KAN_20210801_for_LGD_validation_new	health_date	date
+KAN_20210801_for_LGD_validation_new	new_default_date	date
+KAN_20210801_for_LGD_validation_new	new_health_date	date
+KAN_20210801_for_LGD_validation_new	fact_close_date	date
+KAN_20210801_for_LGD_validation_new2	account_number	nvarchar
+KAN_20210801_for_LGD_validation_new2	FACT_CLOSE_DATE_b4	date
+KAN_20210801_for_LGD_validation_new2	status	nvarchar
+KAN_20210801_for_LGD_validation_new2	subproduct	nvarchar
+KAN_20210801_for_LGD_validation_new2	TARIFF	nvarchar
+KAN_20210801_for_LGD_validation_new2	DURATION	nvarchar
+KAN_20210801_for_LGD_validation_new2	CAR_PRICE	nvarchar
+KAN_20210801_for_LGD_validation_new2	downPayment	nvarchar
+KAN_20210801_for_LGD_validation_new2	LOAN_AMOUNT	nvarchar
+KAN_20210801_for_LGD_validation_new2	FIRST_PAYMENT_DATE	date
+KAN_20210801_for_LGD_validation_new2	activation_date	date
+KAN_20210801_for_LGD_validation_new2	dead_convict	date
+KAN_20210801_for_LGD_validation_new2	marcer	nvarchar
+KAN_20210801_for_LGD_validation_new2	default_date	date
+KAN_20210801_for_LGD_validation_new2	health_date2	date
+KAN_20210801_for_LGD_validation_new2	default_date_old	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_1	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_2	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_3	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_4	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_5	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_6	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_7	date
+KAN_20210801_for_LGD_validation_new2	restructura_date_8	date
+KAN_20210801_for_LGD_validation_new2	default_date_DPD	date
+KAN_20210801_for_LGD_validation_new2	health_date	date
+KAN_20210801_for_LGD_validation_new2	new_default_date	date
+KAN_20210801_for_LGD_validation_new2	new_health_date	date
+KAN_20210801_for_LGD_validation_new2	fact_close_date	date
+KAN_20210801_for_LGD_validation_new3	account_number	nvarchar
+KAN_20210801_for_LGD_validation_new3	FACT_CLOSE_DATE_b4	date
+KAN_20210801_for_LGD_validation_new3	status	nvarchar
+KAN_20210801_for_LGD_validation_new3	subproduct	nvarchar
+KAN_20210801_for_LGD_validation_new3	TARIFF	nvarchar
+KAN_20210801_for_LGD_validation_new3	DURATION	nvarchar
+KAN_20210801_for_LGD_validation_new3	CAR_PRICE	nvarchar
+KAN_20210801_for_LGD_validation_new3	downPayment	nvarchar
+KAN_20210801_for_LGD_validation_new3	LOAN_AMOUNT	nvarchar
+KAN_20210801_for_LGD_validation_new3	FIRST_PAYMENT_DATE	date
+KAN_20210801_for_LGD_validation_new3	activation_date	date
+KAN_20210801_for_LGD_validation_new3	dead_convict	date
+KAN_20210801_for_LGD_validation_new3	marcer	nvarchar
+KAN_20210801_for_LGD_validation_new3	default_date	date
+KAN_20210801_for_LGD_validation_new3	health_date2	date
+KAN_20210801_for_LGD_validation_new3	default_date_old	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_1	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_2	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_3	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_4	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_5	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_6	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_7	date
+KAN_20210801_for_LGD_validation_new3	restructura_date_8	date
+KAN_20210801_for_LGD_validation_new3	default_date_DPD	date
+KAN_20210801_for_LGD_validation_new3	health_date	date
+KAN_20210801_for_LGD_validation_new3	new_default_date	date
+KAN_20210801_for_LGD_validation_new3	new_health_date	date
+KAN_20210801_for_LGD_validation_new3	fact_close_date	date
+KAN_20210801_restructura	contract_number	nvarchar
+KAN_20210801_restructura	restructura_date	date
+KAN_20210801_restructura	restructura_date2	date
+KAN_20210801_restructura	restructura_date3	date
+KAN_20210801_restructura	restructura_date4	date
+KAN_20210801_restructura	restructura_date5	date
+KAN_20210801_restructura	restructura_date6	date
+KAN_20210801_restructura	restructura_date7	date
+KAN_20210801_restructura	restructura_date8	date
+KAN_20210901_for_LGD	account_number	nvarchar
+KAN_20210901_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20210901_for_LGD	status	nvarchar
+KAN_20210901_for_LGD	subproduct	nvarchar
+KAN_20210901_for_LGD	TARIFF	nvarchar
+KAN_20210901_for_LGD	DURATION	nvarchar
+KAN_20210901_for_LGD	CAR_PRICE	nvarchar
+KAN_20210901_for_LGD	downPayment	nvarchar
+KAN_20210901_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20210901_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20210901_for_LGD	activation_date	date
+KAN_20210901_for_LGD	dead_convict	date
+KAN_20210901_for_LGD	marcer	nvarchar
+KAN_20210901_for_LGD	default_date	date
+KAN_20210901_for_LGD	health_date2	date
+KAN_20210901_for_LGD	default_date_old	date
+KAN_20210901_for_LGD	restructura_date_1	date
+KAN_20210901_for_LGD	restructura_date_2	date
+KAN_20210901_for_LGD	restructura_date_3	date
+KAN_20210901_for_LGD	restructura_date_4	date
+KAN_20210901_for_LGD	restructura_date_5	date
+KAN_20210901_for_LGD	restructura_date_6	date
+KAN_20210901_for_LGD	restructura_date_7	date
+KAN_20210901_for_LGD	restructura_date_8	date
+KAN_20210901_for_LGD	default_date_DPD	date
+KAN_20210901_for_LGD	health_date	date
+KAN_20210901_for_LGD	new_default_date	date
+KAN_20210901_for_LGD	new_health_date	date
+KAN_20210901_for_LGD	fact_close_date	date
+KAN_20210901_for_LGD	Столбец 29	nvarchar
+KAN_20210901_for_LGD	Столбец 30	nvarchar
+KAN_20210901_for_LGD	Столбец 31	nvarchar
+KAN_20210901_for_LGD	Столбец 32	nvarchar
+KAN_20210901_for_LGD	Столбец 33	nvarchar
+KAN_20210901_for_LGD	Столбец 34	nvarchar
+KAN_20210901_for_LGD	Столбец 35	nvarchar
+KAN_20210901_for_LGD	Столбец 36	nvarchar
+KAN_20210901_for_LGD	Столбец 37	nvarchar
+KAN_20210901_for_LGD	Столбец 38	nvarchar
+KAN_20210901_for_LGD	Столбец 39	nvarchar
+KAN_20210901_for_LGD	Столбец 40	nvarchar
+KAN_20210901_for_LGD	Столбец 41	nvarchar
+KAN_20210901_for_LGD	Столбец 42	nvarchar
+KAN_20210901_for_LGD	Столбец 43	nvarchar
+KAN_20210901_for_LGD	Столбец 44	nvarchar
+KAN_20210901_for_LGD	Столбец 45	nvarchar
+KAN_20210901_for_LGD	Столбец 46	nvarchar
+KAN_20210901_for_LGD	Столбец 47	nvarchar
+KAN_20210901_for_LGD	Столбец 48	nvarchar
+KAN_20210901_for_LGD	Столбец 49	nvarchar
+KAN_20210901_for_LGD	Столбец 50	nvarchar
+KAN_20210901_for_LGD	Столбец 51	nvarchar
+KAN_20210901_for_LGD	Столбец 52	nvarchar
+KAN_20210901_for_LGD	Столбец 53	nvarchar
+KAN_20210901_for_LGD	Столбец 54	nvarchar
+KAN_20210901_for_LGD	Столбец 55	nvarchar
+KAN_20210901_for_LGD	Столбец 56	nvarchar
+KAN_20210901_for_LGD	Столбец 57	nvarchar
+KAN_20210901_for_LGD	Столбец 58	nvarchar
+KAN_20210901_for_LGD	Столбец 59	nvarchar
+KAN_20210901_for_LGD	Столбец 60	nvarchar
+KAN_20210901_for_LGD	Столбец 61	nvarchar
+KAN_20210901_for_LGD	Столбец 62	nvarchar
+KAN_20210901_for_LGD	Столбец 63	nvarchar
+KAN_20210901_for_LGD	Столбец 64	nvarchar
+KAN_20210901_for_LGD	Столбец 65	nvarchar
+KAN_20210901_for_LGD	Столбец 66	nvarchar
+KAN_20210901_for_LGD	Столбец 67	nvarchar
+KAN_20210901_for_LGD	Столбец 68	nvarchar
+KAN_20210901_for_LGD	Столбец 69	nvarchar
+KAN_20210901_for_LGD	Столбец 70	nvarchar
+KAN_20210901_for_LGD	Столбец 71	nvarchar
+KAN_20210901_for_LGD	Столбец 72	nvarchar
+KAN_20210901_for_LGD	Столбец 73	nvarchar
+KAN_20210901_for_LGD	Столбец 74	nvarchar
+KAN_20210901_for_LGD	Столбец 75	nvarchar
+KAN_20210901_for_LGD	Столбец 76	nvarchar
+KAN_20210901_for_LGD	Столбец 77	nvarchar
+KAN_20210901_for_LGD	Столбец 78	nvarchar
+KAN_20210901_for_LGD	Столбец 79	nvarchar
+KAN_20210901_for_LGD	Столбец 80	nvarchar
+KAN_20210901_for_LGD	Столбец 81	nvarchar
+KAN_20210901_for_LGD	Столбец 82	nvarchar
+KAN_20210901_for_LGD	Столбец 83	nvarchar
+KAN_20210901_for_LGD	Столбец 84	nvarchar
+KAN_20210901_for_LGD	Столбец 85	nvarchar
+KAN_20210901_for_LGD	Столбец 86	nvarchar
+KAN_20210901_for_LGD	Столбец 87	nvarchar
+KAN_20210901_for_LGD	Столбец 88	nvarchar
+KAN_20210901_for_LGD	Столбец 89	nvarchar
+KAN_20210901_for_LGD	Столбец 90	nvarchar
+KAN_20210901_for_LGD	Столбец 91	nvarchar
+KAN_20210901_for_LGD	Столбец 92	nvarchar
+KAN_20210901_for_LGD	Столбец 93	nvarchar
+KAN_20210901_for_LGD	Столбец 94	nvarchar
+KAN_20210901_for_LGD	Столбец 95	nvarchar
+KAN_20210901_for_LGD	Столбец 96	nvarchar
+KAN_20210901_for_LGD	Столбец 97	nvarchar
+KAN_20210901_for_LGD	Столбец 98	nvarchar
+KAN_20210901_for_LGD	Столбец 99	nvarchar
+KAN_20210901_for_LGD	Столбец 100	nvarchar
+KAN_20210901_for_LGD	Столбец 101	nvarchar
+KAN_20210901_for_LGD	Столбец 102	nvarchar
+KAN_20210901_for_LGD	Столбец 103	nvarchar
+KAN_20210901_for_LGD	Столбец 104	nvarchar
+KAN_20210901_for_LGD	Столбец 105	nvarchar
+KAN_20210901_for_LGD	Столбец 106	nvarchar
+KAN_20210901_for_LGD	Столбец 107	nvarchar
+KAN_20210901_for_LGD	Столбец 108	nvarchar
+KAN_20210901_for_LGD	Столбец 109	nvarchar
+KAN_20210901_for_LGD	Столбец 110	nvarchar
+KAN_20210901_for_LGD	Столбец 111	nvarchar
+KAN_20210901_for_LGD	Столбец 112	nvarchar
+KAN_20210901_for_LGD	Столбец 113	nvarchar
+KAN_20210901_for_LGD	Столбец 114	nvarchar
+KAN_20210901_for_LGD	Столбец 115	nvarchar
+KAN_20210901_for_LGD	Столбец 116	nvarchar
+KAN_20210901_for_LGD	Столбец 117	nvarchar
+KAN_20210901_for_LGD	Столбец 118	nvarchar
+KAN_20210901_for_LGD	Столбец 119	nvarchar
+KAN_20210901_for_LGD	Столбец 120	nvarchar
+KAN_20210901_for_LGD	Столбец 121	nvarchar
+KAN_20210901_for_LGD	Столбец 122	nvarchar
+KAN_20210901_for_LGD	Столбец 123	nvarchar
+KAN_20210901_for_LGD	Столбец 124	nvarchar
+KAN_20210901_for_LGD	Столбец 125	nvarchar
+KAN_20210901_for_LGD	Столбец 126	nvarchar
+KAN_20210901_for_LGD	Столбец 127	nvarchar
+KAN_20210901_for_LGD	Столбец 128	nvarchar
+KAN_20210901_for_LGD	Столбец 129	nvarchar
+KAN_20210901_for_LGD	Столбец 130	nvarchar
+KAN_20210901_for_LGD	Столбец 131	nvarchar
+KAN_20210901_for_LGD	Столбец 132	nvarchar
+KAN_20210901_for_LGD	Столбец 133	nvarchar
+KAN_20210901_for_LGD	Столбец 134	nvarchar
+KAN_20210901_for_LGD	Столбец 135	nvarchar
+KAN_20210901_for_LGD	Столбец 136	nvarchar
+KAN_20210901_for_LGD	Столбец 137	nvarchar
+KAN_20210901_for_LGD	Столбец 138	nvarchar
+KAN_20210901_for_LGD	Столбец 139	nvarchar
+KAN_20210901_for_LGD	Столбец 140	nvarchar
+KAN_20210901_for_LGD	Столбец 141	nvarchar
+KAN_20210901_for_LGD	Столбец 142	nvarchar
+KAN_20210901_for_LGD	Столбец 143	nvarchar
+KAN_20210901_for_LGD	Столбец 144	nvarchar
+KAN_20210901_for_LGD_validation	account_number	nvarchar
+KAN_20210901_for_LGD_validation	FACT_CLOSE_DATE_b4	date
+KAN_20210901_for_LGD_validation	status	nvarchar
+KAN_20210901_for_LGD_validation	subproduct	nvarchar
+KAN_20210901_for_LGD_validation	TARIFF	nvarchar
+KAN_20210901_for_LGD_validation	DURATION	nvarchar
+KAN_20210901_for_LGD_validation	CAR_PRICE	nvarchar
+KAN_20210901_for_LGD_validation	downPayment	nvarchar
+KAN_20210901_for_LGD_validation	LOAN_AMOUNT	nvarchar
+KAN_20210901_for_LGD_validation	FIRST_PAYMENT_DATE	date
+KAN_20210901_for_LGD_validation	activation_date	date
+KAN_20210901_for_LGD_validation	dead_convict	date
+KAN_20210901_for_LGD_validation	marcer	nvarchar
+KAN_20210901_for_LGD_validation	default_date	date
+KAN_20210901_for_LGD_validation	health_date2	date
+KAN_20210901_for_LGD_validation	default_date_old	date
+KAN_20210901_for_LGD_validation	restructura_date_1	date
+KAN_20210901_for_LGD_validation	restructura_date_2	date
+KAN_20210901_for_LGD_validation	restructura_date_3	date
+KAN_20210901_for_LGD_validation	restructura_date_4	date
+KAN_20210901_for_LGD_validation	restructura_date_5	date
+KAN_20210901_for_LGD_validation	restructura_date_6	date
+KAN_20210901_for_LGD_validation	restructura_date_7	date
+KAN_20210901_for_LGD_validation	restructura_date_8	date
+KAN_20210901_for_LGD_validation	default_date_DPD	date
+KAN_20210901_for_LGD_validation	health_date	date
+KAN_20210901_for_LGD_validation	new_default_date	date
+KAN_20210901_for_LGD_validation	new_health_date	date
+KAN_20210901_for_LGD_validation	fact_close_date	date
+KAN_20210901_restructura	contract_number	nvarchar
+KAN_20210901_restructura	restructura_date	date
+KAN_20210901_restructura	restructura_date2	date
+KAN_20210901_restructura	restructura_date3	date
+KAN_20210901_restructura	restructura_date4	date
+KAN_20210901_restructura	restructura_date5	date
+KAN_20210901_restructura	restructura_date6	date
+KAN_20210901_restructura	restructura_date7	date
+KAN_20210901_restructura	restructura_date8	date
+KAN_20210901_restructura	Столбец 9	nvarchar
+KAN_20211001_for_LGD	account_number	nvarchar
+KAN_20211001_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20211001_for_LGD	status	nvarchar
+KAN_20211001_for_LGD	subproduct	nvarchar
+KAN_20211001_for_LGD	TARIFF	nvarchar
+KAN_20211001_for_LGD	DURATION	nvarchar
+KAN_20211001_for_LGD	CAR_PRICE	nvarchar
+KAN_20211001_for_LGD	downPayment	nvarchar
+KAN_20211001_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20211001_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20211001_for_LGD	activation_date	date
+KAN_20211001_for_LGD	dead_convict	date
+KAN_20211001_for_LGD	marcer	nvarchar
+KAN_20211001_for_LGD	default_date	date
+KAN_20211001_for_LGD	health_date2	date
+KAN_20211001_for_LGD	default_date_old	date
+KAN_20211001_for_LGD	restructura_date_1	date
+KAN_20211001_for_LGD	restructura_date_2	date
+KAN_20211001_for_LGD	restructura_date_3	date
+KAN_20211001_for_LGD	restructura_date_4	date
+KAN_20211001_for_LGD	restructura_date_5	date
+KAN_20211001_for_LGD	restructura_date_6	date
+KAN_20211001_for_LGD	restructura_date_7	date
+KAN_20211001_for_LGD	restructura_date_8	date
+KAN_20211001_for_LGD	Отсрочка платежа	date
+KAN_20211001_for_LGD	default_date_DPD	date
+KAN_20211001_for_LGD	health_date	date
+KAN_20211001_for_LGD	new_default_date	date
+KAN_20211001_for_LGD	new_health_date	date
+KAN_20211001_for_LGD	fact_close_date	date
+KAN_20211001_restructura	contract_number	nvarchar
+KAN_20211001_restructura	restructura_date	date
+KAN_20211001_restructura	restructura_date2	date
+KAN_20211001_restructura	restructura_date3	date
+KAN_20211001_restructura	restructura_date4	date
+KAN_20211001_restructura	restructura_date5	date
+KAN_20211001_restructura	restructura_date6	date
+KAN_20211001_restructura	restructura_date7	date
+KAN_20211001_restructura	restructura_date8	date
+KAN_20211001_restructura	Столбец 9	nvarchar
+KAN_20211101_for_LGD	account_number	nvarchar
+KAN_20211101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20211101_for_LGD	status	nvarchar
+KAN_20211101_for_LGD	subproduct	nvarchar
+KAN_20211101_for_LGD	TARIFF	nvarchar
+KAN_20211101_for_LGD	DURATION	nvarchar
+KAN_20211101_for_LGD	CAR_PRICE	nvarchar
+KAN_20211101_for_LGD	downPayment	nvarchar
+KAN_20211101_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20211101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20211101_for_LGD	activation_date	date
+KAN_20211101_for_LGD	dead_convict	date
+KAN_20211101_for_LGD	marcer	nvarchar
+KAN_20211101_for_LGD	default_date	date
+KAN_20211101_for_LGD	health_date2	date
+KAN_20211101_for_LGD	default_date_old	date
+KAN_20211101_for_LGD	restructura_date_1	date
+KAN_20211101_for_LGD	restructura_date_2	date
+KAN_20211101_for_LGD	restructura_date_3	date
+KAN_20211101_for_LGD	restructura_date_4	date
+KAN_20211101_for_LGD	restructura_date_5	date
+KAN_20211101_for_LGD	restructura_date_6	date
+KAN_20211101_for_LGD	restructura_date_7	date
+KAN_20211101_for_LGD	restructura_date_8	date
+KAN_20211101_for_LGD	default_date_DPD	date
+KAN_20211101_for_LGD	health_date	date
+KAN_20211101_for_LGD	new_default_date	date
+KAN_20211101_for_LGD	new_health_date	date
+KAN_20211101_for_LGD	fact_close_date	date
+KAN_20211101_restructura	contract_number	nvarchar
+KAN_20211101_restructura	restructura_date	date
+KAN_20211101_restructura	restructura_date2	date
+KAN_20211101_restructura	restructura_date3	date
+KAN_20211101_restructura	restructura_date4	date
+KAN_20211101_restructura	restructura_date5	date
+KAN_20211101_restructura	restructura_date6	date
+KAN_20211101_restructura	restructura_date7	date
+KAN_20211101_restructura	restructura_date8	date
+KAN_20211101_restructura	Столбец 9	nvarchar
+KAN_20211201_for_LGD	account_number	nvarchar
+KAN_20211201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20211201_for_LGD	status	nvarchar
+KAN_20211201_for_LGD	subproduct	nvarchar
+KAN_20211201_for_LGD	TARIFF	nvarchar
+KAN_20211201_for_LGD	DURATION	nvarchar
+KAN_20211201_for_LGD	CAR_PRICE	nvarchar
+KAN_20211201_for_LGD	downPayment	nvarchar
+KAN_20211201_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20211201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20211201_for_LGD	activation_date	date
+KAN_20211201_for_LGD	dead_convict	date
+KAN_20211201_for_LGD	marcer	nchar
+KAN_20211201_for_LGD	default_date	date
+KAN_20211201_for_LGD	health_date2	date
+KAN_20211201_for_LGD	default_date_old	date
+KAN_20211201_for_LGD	restructura_date_1	date
+KAN_20211201_for_LGD	restructura_date_2	date
+KAN_20211201_for_LGD	restructura_date_3	date
+KAN_20211201_for_LGD	restructura_date_4	date
+KAN_20211201_for_LGD	restructura_date_5	date
+KAN_20211201_for_LGD	restructura_date_6	date
+KAN_20211201_for_LGD	restructura_date_7	date
+KAN_20211201_for_LGD	restructura_date_8	date
+KAN_20211201_for_LGD	default_date_DPD	date
+KAN_20211201_for_LGD	health_date	date
+KAN_20211201_for_LGD	new_default_date	date
+KAN_20211201_for_LGD	new_health_date	date
+KAN_20211201_for_LGD	fact_close_date	date
+KAN_20211201_for_LGD	Столбец 29	nvarchar
+KAN_20211201_for_LGD	Столбец 30	nvarchar
+KAN_20211201_for_LGD	Столбец 31	nvarchar
+KAN_20211201_for_LGD	Столбец 32	nvarchar
+KAN_20211201_for_LGD	Столбец 33	nvarchar
+KAN_20211201_for_LGD	Столбец 34	nvarchar
+KAN_20211201_for_LGD	Столбец 35	nvarchar
+KAN_20211201_for_LGD	Столбец 36	nvarchar
+KAN_20211201_for_LGD	Столбец 37	nvarchar
+KAN_20211201_for_LGD	Столбец 38	nvarchar
+KAN_20211201_for_LGD	Столбец 39	nvarchar
+KAN_20211201_for_LGD	Столбец 40	nvarchar
+KAN_20211201_for_LGD	Столбец 41	nvarchar
+KAN_20211201_for_LGD	Столбец 42	nvarchar
+KAN_20211201_for_LGD	Столбец 43	nvarchar
+KAN_20211201_for_LGD	Столбец 44	nvarchar
+KAN_20211201_for_LGD	Столбец 45	nvarchar
+KAN_20211201_for_LGD	Столбец 46	nvarchar
+KAN_20211201_for_LGD	Столбец 47	nvarchar
+KAN_20211201_for_LGD	Столбец 48	nvarchar
+KAN_20211201_for_LGD	Столбец 49	nvarchar
+KAN_20211201_for_LGD	Столбец 50	nvarchar
+KAN_20211201_for_LGD	Столбец 51	nvarchar
+KAN_20211201_for_LGD	Столбец 52	nvarchar
+KAN_20211201_for_LGD	Столбец 53	nvarchar
+KAN_20211201_for_LGD	Столбец 54	nvarchar
+KAN_20211201_for_LGD	Столбец 55	nvarchar
+KAN_20211201_for_LGD	Столбец 56	nvarchar
+KAN_20211201_for_LGD	Столбец 57	nvarchar
+KAN_20211201_for_LGD	Столбец 58	nvarchar
+KAN_20211201_for_LGD	Столбец 59	nvarchar
+KAN_20211201_for_LGD	Столбец 60	nvarchar
+KAN_20211201_for_LGD	Столбец 61	nvarchar
+KAN_20211201_for_LGD	Столбец 62	nvarchar
+KAN_20211201_for_LGD	Столбец 63	nvarchar
+KAN_20211201_for_LGD	Столбец 64	nvarchar
+KAN_20211201_for_LGD	Столбец 65	nvarchar
+KAN_20211201_for_LGD	Столбец 66	nvarchar
+KAN_20211201_for_LGD	Столбец 67	nvarchar
+KAN_20211201_for_LGD	Столбец 68	nvarchar
+KAN_20211201_for_LGD	Столбец 69	nvarchar
+KAN_20211201_for_LGD	Столбец 70	nvarchar
+KAN_20211201_for_LGD	Столбец 71	nvarchar
+KAN_20211201_for_LGD	Столбец 72	nvarchar
+KAN_20211201_for_LGD	Столбец 73	nvarchar
+KAN_20211201_for_LGD	Столбец 74	nvarchar
+KAN_20211201_for_LGD	Столбец 75	nvarchar
+KAN_20211201_for_LGD	Столбец 76	nvarchar
+KAN_20211201_for_LGD	Столбец 77	nvarchar
+KAN_20211201_for_LGD	Столбец 78	nvarchar
+KAN_20211201_for_LGD	Столбец 79	nvarchar
+KAN_20211201_for_LGD	Столбец 80	nvarchar
+KAN_20211201_for_LGD	Столбец 81	nvarchar
+KAN_20211201_for_LGD	Столбец 82	nvarchar
+KAN_20211201_for_LGD	Столбец 83	nvarchar
+KAN_20211201_for_LGD	Столбец 84	nvarchar
+KAN_20211201_for_LGD	Столбец 85	nvarchar
+KAN_20211201_for_LGD	Столбец 86	nvarchar
+KAN_20211201_for_LGD	Столбец 87	nvarchar
+KAN_20211201_for_LGD	Столбец 88	nvarchar
+KAN_20211201_for_LGD	Столбец 89	nvarchar
+KAN_20211201_for_LGD	Столбец 90	nvarchar
+KAN_20211201_for_LGD	Столбец 91	nvarchar
+KAN_20211201_for_LGD	Столбец 92	nvarchar
+KAN_20211201_for_LGD	Столбец 93	nvarchar
+KAN_20211201_for_LGD	Столбец 94	nvarchar
+KAN_20211201_for_LGD	Столбец 95	nvarchar
+KAN_20211201_for_LGD	Столбец 96	nvarchar
+KAN_20211201_for_LGD	Столбец 97	nvarchar
+KAN_20211201_for_LGD	Столбец 98	nvarchar
+KAN_20211201_for_LGD	Столбец 99	nvarchar
+KAN_20211201_for_LGD	Столбец 100	nvarchar
+KAN_20211201_for_LGD	Столбец 101	nvarchar
+KAN_20211201_for_LGD	Столбец 102	nvarchar
+KAN_20211201_for_LGD	Столбец 103	nvarchar
+KAN_20211201_for_LGD	Столбец 104	nvarchar
+KAN_20211201_for_LGD	Столбец 105	nvarchar
+KAN_20211201_for_LGD	Столбец 106	nvarchar
+KAN_20211201_for_LGD	Столбец 107	nvarchar
+KAN_20211201_for_LGD	Столбец 108	nvarchar
+KAN_20211201_for_LGD	Столбец 109	nvarchar
+KAN_20211201_for_LGD	Столбец 110	nvarchar
+KAN_20211201_for_LGD	Столбец 111	nvarchar
+KAN_20211201_for_LGD	Столбец 112	nvarchar
+KAN_20211201_for_LGD	Столбец 113	nvarchar
+KAN_20211201_for_LGD	Столбец 114	nvarchar
+KAN_20211201_for_LGD	Столбец 115	nvarchar
+KAN_20211201_for_LGD	Столбец 116	nvarchar
+KAN_20211201_for_LGD	Столбец 117	nvarchar
+KAN_20211201_for_LGD	Столбец 118	nvarchar
+KAN_20211201_for_LGD	Столбец 119	nvarchar
+KAN_20211201_for_LGD	Столбец 120	nvarchar
+KAN_20211201_for_LGD	Столбец 121	nvarchar
+KAN_20211201_for_LGD	Столбец 122	nvarchar
+KAN_20211201_for_LGD	Столбец 123	nvarchar
+KAN_20211201_for_LGD	Столбец 124	nvarchar
+KAN_20211201_for_LGD	Столбец 125	nvarchar
+KAN_20211201_for_LGD	Столбец 126	nvarchar
+KAN_20211201_for_LGD	Столбец 127	nvarchar
+KAN_20211201_for_LGD	Столбец 128	nvarchar
+KAN_20211201_for_LGD	Столбец 129	nvarchar
+KAN_20211201_for_LGD	Столбец 130	nvarchar
+KAN_20211201_for_LGD	Столбец 131	nvarchar
+KAN_20211201_for_LGD	Столбец 132	nvarchar
+KAN_20211201_for_LGD	Столбец 133	nvarchar
+KAN_20211201_for_LGD	Столбец 134	nvarchar
+KAN_20211201_for_LGD	Столбец 135	nvarchar
+KAN_20211201_for_LGD	Столбец 136	nvarchar
+KAN_20211201_for_LGD	Столбец 137	nvarchar
+KAN_20211201_for_LGD	Столбец 138	nvarchar
+KAN_20211201_for_LGD	Столбец 139	nvarchar
+KAN_20211201_for_LGD	Столбец 140	nvarchar
+KAN_20211201_for_LGD	Столбец 141	nvarchar
+KAN_20211201_for_LGD	Столбец 142	nvarchar
+KAN_20211201_for_LGD	Столбец 143	nvarchar
+KAN_20211201_for_LGD	Столбец 144	nvarchar
+KAN_20211201_for_LGD	Столбец 145	nvarchar
+KAN_20211201_for_LGD	Столбец 146	nvarchar
+KAN_20211201_for_LGD	Столбец 147	nvarchar
+KAN_20211201_restructura	contract_number	nvarchar
+KAN_20211201_restructura	restructura_date	date
+KAN_20211201_restructura	restructura_date2	date
+KAN_20211201_restructura	restructura_date3	date
+KAN_20211201_restructura	restructura_date4	date
+KAN_20211201_restructura	restructura_date5	date
+KAN_20211201_restructura	restructura_date6	date
+KAN_20211201_restructura	restructura_date7	date
+KAN_20211201_restructura	restructura_date8	date
+KAN_20211201_restructura	Столбец 9	nvarchar
+KAN_20220101_for_LGD	account_number	nvarchar
+KAN_20220101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220101_for_LGD	status	nvarchar
+KAN_20220101_for_LGD	subproduct	nvarchar
+KAN_20220101_for_LGD	TARIFF	nvarchar
+KAN_20220101_for_LGD	DURATION	nvarchar
+KAN_20220101_for_LGD	CAR_PRICE	nvarchar
+KAN_20220101_for_LGD	downPayment	nvarchar
+KAN_20220101_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220101_for_LGD	activation_date	date
+KAN_20220101_for_LGD	dead_convict	date
+KAN_20220101_for_LGD	marcer	nvarchar
+KAN_20220101_for_LGD	default_date	date
+KAN_20220101_for_LGD	health_date2	date
+KAN_20220101_for_LGD	default_date_old	date
+KAN_20220101_for_LGD	restructura_date_1	date
+KAN_20220101_for_LGD	restructura_date_2	date
+KAN_20220101_for_LGD	restructura_date_3	date
+KAN_20220101_for_LGD	restructura_date_4	date
+KAN_20220101_for_LGD	restructura_date_5	date
+KAN_20220101_for_LGD	restructura_date_6	date
+KAN_20220101_for_LGD	restructura_date_7	date
+KAN_20220101_for_LGD	restructura_date_8	date
+KAN_20220101_for_LGD	default_date_DPD	date
+KAN_20220101_for_LGD	health_date	date
+KAN_20220101_for_LGD	new_default_date	date
+KAN_20220101_for_LGD	new_health_date	date
+KAN_20220101_for_LGD	fact_close_date	date
+KAN_20220101_for_LGD	Столбец 29	nvarchar
+KAN_20220101_for_LGD	Столбец 30	nvarchar
+KAN_20220101_for_LGD	Столбец 31	nvarchar
+KAN_20220101_for_LGD	Столбец 32	nvarchar
+KAN_20220101_for_LGD	Столбец 33	nvarchar
+KAN_20220101_for_LGD	Столбец 34	nvarchar
+KAN_20220101_for_LGD	Столбец 35	nvarchar
+KAN_20220101_for_LGD	Столбец 36	nvarchar
+KAN_20220101_for_LGD	Столбец 37	nvarchar
+KAN_20220101_for_LGD	Столбец 38	nvarchar
+KAN_20220101_for_LGD	Столбец 39	nvarchar
+KAN_20220101_for_LGD	Столбец 40	nvarchar
+KAN_20220101_for_LGD	Столбец 41	nvarchar
+KAN_20220101_for_LGD	Столбец 42	nvarchar
+KAN_20220101_for_LGD	Столбец 43	nvarchar
+KAN_20220101_for_LGD	Столбец 44	nvarchar
+KAN_20220101_for_LGD	Столбец 45	nvarchar
+KAN_20220101_for_LGD	Столбец 46	nvarchar
+KAN_20220101_for_LGD	Столбец 47	nvarchar
+KAN_20220101_for_LGD	Столбец 48	nvarchar
+KAN_20220101_for_LGD	Столбец 49	nvarchar
+KAN_20220101_for_LGD	Столбец 50	nvarchar
+KAN_20220101_for_LGD	Столбец 51	nvarchar
+KAN_20220101_for_LGD	Столбец 52	nvarchar
+KAN_20220101_for_LGD	Столбец 53	nvarchar
+KAN_20220101_for_LGD	Столбец 54	nvarchar
+KAN_20220101_for_LGD	Столбец 55	nvarchar
+KAN_20220101_for_LGD	Столбец 56	nvarchar
+KAN_20220101_for_LGD	Столбец 57	nvarchar
+KAN_20220101_for_LGD	Столбец 58	nvarchar
+KAN_20220101_for_LGD	Столбец 59	nvarchar
+KAN_20220101_for_LGD	Столбец 60	nvarchar
+KAN_20220101_for_LGD	Столбец 61	nvarchar
+KAN_20220101_for_LGD	Столбец 62	nvarchar
+KAN_20220101_for_LGD	Столбец 63	nvarchar
+KAN_20220101_for_LGD	Столбец 64	nvarchar
+KAN_20220101_for_LGD	Столбец 65	nvarchar
+KAN_20220101_for_LGD	Столбец 66	nvarchar
+KAN_20220101_for_LGD	Столбец 67	nvarchar
+KAN_20220101_for_LGD	Столбец 68	nvarchar
+KAN_20220101_for_LGD	Столбец 69	nvarchar
+KAN_20220101_for_LGD	Столбец 70	nvarchar
+KAN_20220101_for_LGD	Столбец 71	nvarchar
+KAN_20220101_for_LGD	Столбец 72	nvarchar
+KAN_20220101_for_LGD	Столбец 73	nvarchar
+KAN_20220101_for_LGD	Столбец 74	nvarchar
+KAN_20220101_for_LGD	Столбец 75	nvarchar
+KAN_20220101_for_LGD	Столбец 76	nvarchar
+KAN_20220101_for_LGD	Столбец 77	nvarchar
+KAN_20220101_for_LGD	Столбец 78	nvarchar
+KAN_20220101_for_LGD	Столбец 79	nvarchar
+KAN_20220101_for_LGD	Столбец 80	nvarchar
+KAN_20220101_for_LGD	Столбец 81	nvarchar
+KAN_20220101_for_LGD	Столбец 82	nvarchar
+KAN_20220101_for_LGD	Столбец 83	nvarchar
+KAN_20220101_for_LGD	Столбец 84	nvarchar
+KAN_20220101_for_LGD	Столбец 85	nvarchar
+KAN_20220101_for_LGD	Столбец 86	nvarchar
+KAN_20220101_for_LGD	Столбец 87	nvarchar
+KAN_20220101_for_LGD	Столбец 88	nvarchar
+KAN_20220101_for_LGD	Столбец 89	nvarchar
+KAN_20220101_for_LGD	Столбец 90	nvarchar
+KAN_20220101_for_LGD	Столбец 91	nvarchar
+KAN_20220101_for_LGD	Столбец 92	nvarchar
+KAN_20220101_for_LGD	Столбец 93	nvarchar
+KAN_20220101_for_LGD	Столбец 94	nvarchar
+KAN_20220101_for_LGD	Столбец 95	nvarchar
+KAN_20220101_for_LGD	Столбец 96	nvarchar
+KAN_20220101_for_LGD	Столбец 97	nvarchar
+KAN_20220101_for_LGD	Столбец 98	nvarchar
+KAN_20220101_for_LGD	Столбец 99	nvarchar
+KAN_20220101_for_LGD	Столбец 100	nvarchar
+KAN_20220101_for_LGD	Столбец 101	nvarchar
+KAN_20220101_for_LGD	Столбец 102	nvarchar
+KAN_20220101_for_LGD	Столбец 103	nvarchar
+KAN_20220101_for_LGD	Столбец 104	nvarchar
+KAN_20220101_for_LGD	Столбец 105	nvarchar
+KAN_20220101_for_LGD	Столбец 106	nvarchar
+KAN_20220101_for_LGD	Столбец 107	nvarchar
+KAN_20220101_for_LGD	Столбец 108	nvarchar
+KAN_20220101_for_LGD	Столбец 109	nvarchar
+KAN_20220101_for_LGD	Столбец 110	nvarchar
+KAN_20220101_for_LGD	Столбец 111	nvarchar
+KAN_20220101_for_LGD	Столбец 112	nvarchar
+KAN_20220101_for_LGD	Столбец 113	nvarchar
+KAN_20220101_for_LGD	Столбец 114	nvarchar
+KAN_20220101_for_LGD	Столбец 115	nvarchar
+KAN_20220101_for_LGD	Столбец 116	nvarchar
+KAN_20220101_for_LGD	Столбец 117	nvarchar
+KAN_20220101_for_LGD	Столбец 118	nvarchar
+KAN_20220101_for_LGD	Столбец 119	nvarchar
+KAN_20220101_for_LGD	Столбец 120	nvarchar
+KAN_20220101_for_LGD	Столбец 121	nvarchar
+KAN_20220101_for_LGD	Столбец 122	nvarchar
+KAN_20220101_for_LGD	Столбец 123	nvarchar
+KAN_20220101_for_LGD	Столбец 124	nvarchar
+KAN_20220101_for_LGD	Столбец 125	nvarchar
+KAN_20220101_for_LGD	Столбец 126	nvarchar
+KAN_20220101_for_LGD	Столбец 127	nvarchar
+KAN_20220101_for_LGD	Столбец 128	nvarchar
+KAN_20220101_for_LGD	Столбец 129	nvarchar
+KAN_20220101_for_LGD	Столбец 130	nvarchar
+KAN_20220101_for_LGD	Столбец 131	nvarchar
+KAN_20220101_for_LGD	Столбец 132	nvarchar
+KAN_20220101_for_LGD	Столбец 133	nvarchar
+KAN_20220101_for_LGD	Столбец 134	nvarchar
+KAN_20220101_for_LGD	Столбец 135	nvarchar
+KAN_20220101_for_LGD	Столбец 136	nvarchar
+KAN_20220101_for_LGD	Столбец 137	nvarchar
+KAN_20220101_for_LGD	Столбец 138	nvarchar
+KAN_20220101_for_LGD	Столбец 139	nvarchar
+KAN_20220101_for_LGD	Столбец 140	nvarchar
+KAN_20220101_for_LGD	Столбец 141	nvarchar
+KAN_20220101_for_LGD	Столбец 142	nvarchar
+KAN_20220101_for_LGD	Столбец 143	nvarchar
+KAN_20220101_for_LGD	Столбец 144	nvarchar
+KAN_20220101_for_LGD	Столбец 145	nvarchar
+KAN_20220101_for_LGD	Столбец 146	nvarchar
+KAN_20220101_for_LGD	Столбец 147	nvarchar
+KAN_20220101_for_LGD	Столбец 148	nvarchar
+KAN_20220101_restructura	contract_number	nvarchar
+KAN_20220101_restructura	restructura_date	date
+KAN_20220101_restructura	restructura_date2	date
+KAN_20220101_restructura	restructura_date3	date
+KAN_20220101_restructura	restructura_date4	date
+KAN_20220101_restructura	restructura_date5	date
+KAN_20220101_restructura	restructura_date6	date
+KAN_20220101_restructura	restructura_date7	date
+KAN_20220101_restructura	restructura_date8	date
+KAN_20220101_restructura	Столбец 9	nvarchar
+KAN_20220201_for_LGD	account_number	nvarchar
+KAN_20220201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220201_for_LGD	status	nvarchar
+KAN_20220201_for_LGD	subproduct	nvarchar
+KAN_20220201_for_LGD	TARIFF	nvarchar
+KAN_20220201_for_LGD	DURATION	nvarchar
+KAN_20220201_for_LGD	CAR_PRICE	nvarchar
+KAN_20220201_for_LGD	downPayment	nvarchar
+KAN_20220201_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220201_for_LGD	activation_date	date
+KAN_20220201_for_LGD	dead_convict	date
+KAN_20220201_for_LGD	marcer	nvarchar
+KAN_20220201_for_LGD	default_date	date
+KAN_20220201_for_LGD	health_date2	date
+KAN_20220201_for_LGD	default_date_old	date
+KAN_20220201_for_LGD	restructura_date_1	date
+KAN_20220201_for_LGD	restructura_date_2	date
+KAN_20220201_for_LGD	restructura_date_3	date
+KAN_20220201_for_LGD	restructura_date_4	date
+KAN_20220201_for_LGD	restructura_date_5	date
+KAN_20220201_for_LGD	restructura_date_6	date
+KAN_20220201_for_LGD	restructura_date_7	date
+KAN_20220201_for_LGD	restructura_date_8	date
+KAN_20220201_for_LGD	default_date_DPD	date
+KAN_20220201_for_LGD	health_date	date
+KAN_20220201_for_LGD	new_default_date	date
+KAN_20220201_for_LGD	new_health_date	date
+KAN_20220201_for_LGD	fact_close_date	date
+KAN_20220201_restructura	contract_number	nvarchar
+KAN_20220201_restructura	restructura_date	date
+KAN_20220201_restructura	restructura_date2	date
+KAN_20220201_restructura	restructura_date3	date
+KAN_20220201_restructura	restructura_date4	date
+KAN_20220201_restructura	restructura_date5	date
+KAN_20220201_restructura	restructura_date6	date
+KAN_20220201_restructura	restructura_date7	date
+KAN_20220201_restructura	restructura_date8	date
+KAN_20220201_restructura	Столбец 9	nvarchar
+KAN_20220301_for_LGD	account_number	nvarchar
+KAN_20220301_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220301_for_LGD	status	nvarchar
+KAN_20220301_for_LGD	subproduct	nvarchar
+KAN_20220301_for_LGD	TARIFF	nvarchar
+KAN_20220301_for_LGD	DURATION	nvarchar
+KAN_20220301_for_LGD	CAR_PRICE	nvarchar
+KAN_20220301_for_LGD	downPayment	nvarchar
+KAN_20220301_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220301_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220301_for_LGD	activation_date	date
+KAN_20220301_for_LGD	dead_convict	date
+KAN_20220301_for_LGD	marcer	nvarchar
+KAN_20220301_for_LGD	default_date	date
+KAN_20220301_for_LGD	health_date2	date
+KAN_20220301_for_LGD	default_date_old	date
+KAN_20220301_for_LGD	restructura_date_1	date
+KAN_20220301_for_LGD	restructura_date_2	date
+KAN_20220301_for_LGD	restructura_date_3	date
+KAN_20220301_for_LGD	restructura_date_4	date
+KAN_20220301_for_LGD	restructura_date_5	date
+KAN_20220301_for_LGD	restructura_date_6	numeric
+KAN_20220301_for_LGD	restructura_date_7	date
+KAN_20220301_for_LGD	restructura_date_8	date
+KAN_20220301_for_LGD	default_date_DPD	date
+KAN_20220301_for_LGD	health_date	date
+KAN_20220301_for_LGD	new_default_date	date
+KAN_20220301_for_LGD	new_health_date	date
+KAN_20220301_for_LGD	fact_close_date	date
+KAN_20220301_restructura	contract_number	nvarchar
+KAN_20220301_restructura	restructura_date	date
+KAN_20220301_restructura	restructura_date2	date
+KAN_20220301_restructura	restructura_date3	date
+KAN_20220301_restructura	restructura_date4	date
+KAN_20220301_restructura	restructura_date5	date
+KAN_20220301_restructura	restructura_date6	date
+KAN_20220301_restructura	restructura_date7	date
+KAN_20220301_restructura	restructura_date8	date
+KAN_20220301_restructura	Столбец 9	nvarchar
+KAN_20220401_for_LGD	account_number	nvarchar
+KAN_20220401_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220401_for_LGD	status	nvarchar
+KAN_20220401_for_LGD	subproduct	nvarchar
+KAN_20220401_for_LGD	TARIFF	nvarchar
+KAN_20220401_for_LGD	DURATION	nvarchar
+KAN_20220401_for_LGD	CAR_PRICE	nvarchar
+KAN_20220401_for_LGD	downPayment	nvarchar
+KAN_20220401_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220401_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220401_for_LGD	activation_date	date
+KAN_20220401_for_LGD	dead_convict	date
+KAN_20220401_for_LGD	marcer	nvarchar
+KAN_20220401_for_LGD	default_date	date
+KAN_20220401_for_LGD	health_date2	date
+KAN_20220401_for_LGD	default_date_old	date
+KAN_20220401_for_LGD	restructura_date_1	date
+KAN_20220401_for_LGD	restructura_date_2	date
+KAN_20220401_for_LGD	restructura_date_3	date
+KAN_20220401_for_LGD	restructura_date_4	date
+KAN_20220401_for_LGD	restructura_date_5	date
+KAN_20220401_for_LGD	restructura_date_6	date
+KAN_20220401_for_LGD	restructura_date_7	date
+KAN_20220401_for_LGD	restructura_date_8	date
+KAN_20220401_for_LGD	default_date_DPD	date
+KAN_20220401_for_LGD	health_date	date
+KAN_20220401_for_LGD	new_default_date	date
+KAN_20220401_for_LGD	new_health_date	date
+KAN_20220401_for_LGD	fact_close_date	date
+KAN_20220401_for_LGD	Столбец 29	nvarchar
+KAN_20220401_for_LGD	Столбец 30	nvarchar
+KAN_20220401_for_LGD	Столбец 31	nvarchar
+KAN_20220401_for_LGD	Столбец 32	nvarchar
+KAN_20220401_for_LGD	Столбец 33	nvarchar
+KAN_20220401_for_LGD	Столбец 34	nvarchar
+KAN_20220401_for_LGD	Столбец 35	nvarchar
+KAN_20220401_for_LGD	Столбец 36	nvarchar
+KAN_20220401_for_LGD	Столбец 37	nvarchar
+KAN_20220401_for_LGD	Столбец 38	nvarchar
+KAN_20220401_for_LGD	Столбец 39	nvarchar
+KAN_20220401_for_LGD	Столбец 40	nvarchar
+KAN_20220401_for_LGD	Столбец 41	nvarchar
+KAN_20220401_for_LGD	Столбец 42	nvarchar
+KAN_20220401_for_LGD	Столбец 43	nvarchar
+KAN_20220401_for_LGD	Столбец 44	nvarchar
+KAN_20220401_for_LGD	Столбец 45	nvarchar
+KAN_20220401_for_LGD	Столбец 46	nvarchar
+KAN_20220401_for_LGD	Столбец 47	nvarchar
+KAN_20220401_for_LGD	Столбец 48	nvarchar
+KAN_20220401_for_LGD	Столбец 49	nvarchar
+KAN_20220401_for_LGD	Столбец 50	nvarchar
+KAN_20220401_for_LGD	Столбец 51	nvarchar
+KAN_20220401_for_LGD	Столбец 52	nvarchar
+KAN_20220401_for_LGD	Столбец 53	nvarchar
+KAN_20220401_for_LGD	Столбец 54	nvarchar
+KAN_20220401_for_LGD	Столбец 55	nvarchar
+KAN_20220401_for_LGD	Столбец 56	nvarchar
+KAN_20220401_for_LGD	Столбец 57	nvarchar
+KAN_20220401_for_LGD	Столбец 58	nvarchar
+KAN_20220401_for_LGD	Столбец 59	nvarchar
+KAN_20220401_for_LGD	Столбец 60	nvarchar
+KAN_20220401_for_LGD	Столбец 61	nvarchar
+KAN_20220401_for_LGD	Столбец 62	nvarchar
+KAN_20220401_for_LGD	Столбец 63	nvarchar
+KAN_20220401_for_LGD	Столбец 64	nvarchar
+KAN_20220401_for_LGD	Столбец 65	nvarchar
+KAN_20220401_for_LGD	Столбец 66	nvarchar
+KAN_20220401_for_LGD	Столбец 67	nvarchar
+KAN_20220401_for_LGD	Столбец 68	nvarchar
+KAN_20220401_for_LGD	Столбец 69	nvarchar
+KAN_20220401_for_LGD	Столбец 70	nvarchar
+KAN_20220401_for_LGD	Столбец 71	nvarchar
+KAN_20220401_for_LGD	Столбец 72	nvarchar
+KAN_20220401_for_LGD	Столбец 73	nvarchar
+KAN_20220401_for_LGD	Столбец 74	nvarchar
+KAN_20220401_for_LGD	Столбец 75	nvarchar
+KAN_20220401_for_LGD	Столбец 76	nvarchar
+KAN_20220401_for_LGD	Столбец 77	nvarchar
+KAN_20220401_for_LGD	Столбец 78	nvarchar
+KAN_20220401_for_LGD	Столбец 79	nvarchar
+KAN_20220401_for_LGD	Столбец 80	nvarchar
+KAN_20220401_for_LGD	Столбец 81	nvarchar
+KAN_20220401_for_LGD	Столбец 82	nvarchar
+KAN_20220401_for_LGD	Столбец 83	nvarchar
+KAN_20220401_for_LGD	Столбец 84	nvarchar
+KAN_20220401_for_LGD	Столбец 85	nvarchar
+KAN_20220401_for_LGD	Столбец 86	nvarchar
+KAN_20220401_for_LGD	Столбец 87	nvarchar
+KAN_20220401_for_LGD	Столбец 88	nvarchar
+KAN_20220401_for_LGD	Столбец 89	nvarchar
+KAN_20220401_for_LGD	Столбец 90	nvarchar
+KAN_20220401_for_LGD	Столбец 91	nvarchar
+KAN_20220401_for_LGD	Столбец 92	nvarchar
+KAN_20220401_for_LGD	Столбец 93	nvarchar
+KAN_20220401_for_LGD	Столбец 94	nvarchar
+KAN_20220401_for_LGD	Столбец 95	nvarchar
+KAN_20220401_for_LGD	Столбец 96	nvarchar
+KAN_20220401_for_LGD	Столбец 97	nvarchar
+KAN_20220401_for_LGD	Столбец 98	nvarchar
+KAN_20220401_for_LGD	Столбец 99	nvarchar
+KAN_20220401_for_LGD	Столбец 100	nvarchar
+KAN_20220401_for_LGD	Столбец 101	nvarchar
+KAN_20220401_for_LGD	Столбец 102	nvarchar
+KAN_20220401_for_LGD	Столбец 103	nvarchar
+KAN_20220401_for_LGD	Столбец 104	nvarchar
+KAN_20220401_for_LGD	Столбец 105	nvarchar
+KAN_20220401_for_LGD	Столбец 106	nvarchar
+KAN_20220401_for_LGD	Столбец 107	nvarchar
+KAN_20220401_for_LGD	Столбец 108	nvarchar
+KAN_20220401_for_LGD	Столбец 109	nvarchar
+KAN_20220401_for_LGD	Столбец 110	nvarchar
+KAN_20220401_for_LGD	Столбец 111	nvarchar
+KAN_20220401_for_LGD	Столбец 112	nvarchar
+KAN_20220401_for_LGD	Столбец 113	nvarchar
+KAN_20220401_for_LGD	Столбец 114	nvarchar
+KAN_20220401_for_LGD	Столбец 115	nvarchar
+KAN_20220401_for_LGD	Столбец 116	nvarchar
+KAN_20220401_for_LGD	Столбец 117	nvarchar
+KAN_20220401_for_LGD	Столбец 118	nvarchar
+KAN_20220401_for_LGD	Столбец 119	nvarchar
+KAN_20220401_for_LGD	Столбец 120	nvarchar
+KAN_20220401_for_LGD	Столбец 121	nvarchar
+KAN_20220401_for_LGD	Столбец 122	nvarchar
+KAN_20220401_for_LGD	Столбец 123	nvarchar
+KAN_20220401_for_LGD	Столбец 124	nvarchar
+KAN_20220401_for_LGD	Столбец 125	nvarchar
+KAN_20220401_for_LGD	Столбец 126	nvarchar
+KAN_20220401_for_LGD	Столбец 127	nvarchar
+KAN_20220401_for_LGD	Столбец 128	nvarchar
+KAN_20220401_for_LGD	Столбец 129	nvarchar
+KAN_20220401_for_LGD	Столбец 130	nvarchar
+KAN_20220401_for_LGD	Столбец 131	nvarchar
+KAN_20220401_for_LGD	Столбец 132	nvarchar
+KAN_20220401_for_LGD	Столбец 133	nvarchar
+KAN_20220401_for_LGD	Столбец 134	nvarchar
+KAN_20220401_for_LGD	Столбец 135	nvarchar
+KAN_20220401_for_LGD	Столбец 136	nvarchar
+KAN_20220401_for_LGD	Столбец 137	nvarchar
+KAN_20220401_for_LGD	Столбец 138	nvarchar
+KAN_20220401_for_LGD	Столбец 139	nvarchar
+KAN_20220401_for_LGD	Столбец 140	nvarchar
+KAN_20220401_for_LGD	Столбец 141	nvarchar
+KAN_20220401_for_LGD	Столбец 142	nvarchar
+KAN_20220401_for_LGD	Столбец 143	nvarchar
+KAN_20220401_for_LGD	Столбец 144	nvarchar
+KAN_20220401_for_LGD	Столбец 145	nvarchar
+KAN_20220401_for_LGD	Столбец 146	nvarchar
+KAN_20220401_for_LGD	Столбец 147	nvarchar
+KAN_20220401_for_LGD	Столбец 148	nvarchar
+KAN_20220401_for_LGD	Столбец 149	nvarchar
+KAN_20220401_for_LGD	Столбец 150	nvarchar
+KAN_20220401_restructura	contract_number	nvarchar
+KAN_20220401_restructura	restructura_date	date
+KAN_20220401_restructura	restructura_date2	date
+KAN_20220401_restructura	restructura_date3	date
+KAN_20220401_restructura	restructura_date4	date
+KAN_20220401_restructura	restructura_date5	date
+KAN_20220401_restructura	restructura_date6	date
+KAN_20220401_restructura	restructura_date7	date
+KAN_20220401_restructura	restructura_date8	date
+KAN_20220501_for_LGD	account_number	nvarchar
+KAN_20220501_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220501_for_LGD	status	nvarchar
+KAN_20220501_for_LGD	subproduct	nvarchar
+KAN_20220501_for_LGD	TARIFF	nvarchar
+KAN_20220501_for_LGD	DURATION	nvarchar
+KAN_20220501_for_LGD	CAR_PRICE	nvarchar
+KAN_20220501_for_LGD	downPayment	nvarchar
+KAN_20220501_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220501_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220501_for_LGD	activation_date	date
+KAN_20220501_for_LGD	dead_convict	date
+KAN_20220501_for_LGD	marcer	nvarchar
+KAN_20220501_for_LGD	default_date	date
+KAN_20220501_for_LGD	health_date2	date
+KAN_20220501_for_LGD	default_date_old	date
+KAN_20220501_for_LGD	restructura_date_1	date
+KAN_20220501_for_LGD	restructura_date_2	date
+KAN_20220501_for_LGD	restructura_date_3	date
+KAN_20220501_for_LGD	restructura_date_4	date
+KAN_20220501_for_LGD	restructura_date_5	date
+KAN_20220501_for_LGD	restructura_date_6	date
+KAN_20220501_for_LGD	restructura_date_7	date
+KAN_20220501_for_LGD	restructura_date_8	date
+KAN_20220501_for_LGD	дата окончания отсрочки	date
+KAN_20220501_for_LGD	default_date_DPD	date
+KAN_20220501_for_LGD	health_date	date
+KAN_20220501_for_LGD	new_default_date	date
+KAN_20220501_for_LGD	new_health_date	date
+KAN_20220501_for_LGD	fact_close_date	date
+KAN_20220501_restructura	contract_number	nvarchar
+KAN_20220501_restructura	restructura_date	date
+KAN_20220501_restructura	restructura_date2	date
+KAN_20220501_restructura	restructura_date3	date
+KAN_20220501_restructura	restructura_date4	date
+KAN_20220501_restructura	restructura_date5	date
+KAN_20220501_restructura	restructura_date6	date
+KAN_20220501_restructura	restructura_date7	date
+KAN_20220501_restructura	restructura_date8	date
+KAN_20220601_for_LGD	account_number	nvarchar
+KAN_20220601_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220601_for_LGD	status	nvarchar
+KAN_20220601_for_LGD	subproduct	nvarchar
+KAN_20220601_for_LGD	TARIFF	nvarchar
+KAN_20220601_for_LGD	DURATION	nvarchar
+KAN_20220601_for_LGD	CAR_PRICE	nvarchar
+KAN_20220601_for_LGD	downPayment	nvarchar
+KAN_20220601_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220601_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220601_for_LGD	activation_date	date
+KAN_20220601_for_LGD	dead_convict	date
+KAN_20220601_for_LGD	marcer	nvarchar
+KAN_20220601_for_LGD	default_date	date
+KAN_20220601_for_LGD	health_date2	date
+KAN_20220601_for_LGD	default_date_old	date
+KAN_20220601_for_LGD	restructura_date_1	date
+KAN_20220601_for_LGD	restructura_date_2	date
+KAN_20220601_for_LGD	restructura_date_3	date
+KAN_20220601_for_LGD	restructura_date_4	date
+KAN_20220601_for_LGD	restructura_date_5	date
+KAN_20220601_for_LGD	restructura_date_6	date
+KAN_20220601_for_LGD	restructura_date_7	date
+KAN_20220601_for_LGD	restructura_date_8	date
+KAN_20220601_for_LGD	дата окончания отсрочки	date
+KAN_20220601_for_LGD	default_date_DPD	date
+KAN_20220601_for_LGD	health_date	date
+KAN_20220601_for_LGD	new_default_date	date
+KAN_20220601_for_LGD	new_health_date	date
+KAN_20220601_for_LGD	fact_close_date	date
+KAN_20220601_restructura	contract_number	nvarchar
+KAN_20220601_restructura	restructura_date	date
+KAN_20220601_restructura	restructura_date2	date
+KAN_20220601_restructura	restructura_date3	date
+KAN_20220601_restructura	restructura_date4	date
+KAN_20220601_restructura	restructura_date5	date
+KAN_20220601_restructura	restructura_date6	date
+KAN_20220601_restructura	restructura_date7	date
+KAN_20220601_restructura	restructura_date8	date
+KAN_20220701_for_LGD	account_number	nvarchar
+KAN_20220701_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220701_for_LGD	status	nvarchar
+KAN_20220701_for_LGD	subproduct	nvarchar
+KAN_20220701_for_LGD	TARIFF	nvarchar
+KAN_20220701_for_LGD	DURATION	nvarchar
+KAN_20220701_for_LGD	CAR_PRICE	nvarchar
+KAN_20220701_for_LGD	downPayment	nvarchar
+KAN_20220701_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220701_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220701_for_LGD	activation_date	date
+KAN_20220701_for_LGD	dead_convict	date
+KAN_20220701_for_LGD	marcer	nvarchar
+KAN_20220701_for_LGD	default_date	date
+KAN_20220701_for_LGD	health_date2	date
+KAN_20220701_for_LGD	default_date_old	date
+KAN_20220701_for_LGD	restructura_date_1	date
+KAN_20220701_for_LGD	restructura_date_2	date
+KAN_20220701_for_LGD	restructura_date_3	date
+KAN_20220701_for_LGD	restructura_date_4	date
+KAN_20220701_for_LGD	restructura_date_5	date
+KAN_20220701_for_LGD	restructura_date_6	date
+KAN_20220701_for_LGD	restructura_date_7	date
+KAN_20220701_for_LGD	restructura_date_8	date
+KAN_20220701_for_LGD	дата окончания отсрочки	date
+KAN_20220701_for_LGD	default_date_dpd	date
+KAN_20220701_for_LGD	health_date	date
+KAN_20220701_for_LGD	new_default_date	date
+KAN_20220701_for_LGD	new_health_date	date
+KAN_20220701_for_LGD	fact_close_date	date
+KAN_20220701_restructura	contract_number	nvarchar
+KAN_20220701_restructura	restructura_date	date
+KAN_20220701_restructura	restructura_date2	date
+KAN_20220701_restructura	restructura_date3	date
+KAN_20220701_restructura	restructura_date4	date
+KAN_20220701_restructura	restructura_date5	date
+KAN_20220701_restructura	restructura_date6	date
+KAN_20220701_restructura	restructura_date7	date
+KAN_20220701_restructura	restructura_date8	date
+KAN_20220801_for_LGD	account_number	nvarchar
+KAN_20220801_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220801_for_LGD	status	nvarchar
+KAN_20220801_for_LGD	subproduct	nvarchar
+KAN_20220801_for_LGD	TARIFF	nvarchar
+KAN_20220801_for_LGD	DURATION	nvarchar
+KAN_20220801_for_LGD	CAR_PRICE	nvarchar
+KAN_20220801_for_LGD	downPayment	nvarchar
+KAN_20220801_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220801_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220801_for_LGD	activation_date	date
+KAN_20220801_for_LGD	dead_convict	date
+KAN_20220801_for_LGD	marcer	nvarchar
+KAN_20220801_for_LGD	default_date	date
+KAN_20220801_for_LGD	health_date2	date
+KAN_20220801_for_LGD	default_date_old	date
+KAN_20220801_for_LGD	restructura_date_1	date
+KAN_20220801_for_LGD	restructura_date_2	date
+KAN_20220801_for_LGD	restructura_date_3	date
+KAN_20220801_for_LGD	restructura_date_4	date
+KAN_20220801_for_LGD	restructura_date_5	date
+KAN_20220801_for_LGD	restructura_date_6	date
+KAN_20220801_for_LGD	restructura_date_7	date
+KAN_20220801_for_LGD	restructura_date_8	date
+KAN_20220801_for_LGD	дата окончания отсрочки	date
+KAN_20220801_for_LGD	default_date_dpd	date
+KAN_20220801_for_LGD	health_date	date
+KAN_20220801_for_LGD	new_default_date	date
+KAN_20220801_for_LGD	new_health_date	date
+KAN_20220801_for_LGD	fact_close_date	date
+KAN_20220801_restructura	contract_number	nvarchar
+KAN_20220801_restructura	restructura_date	date
+KAN_20220801_restructura	restructura_date2	date
+KAN_20220801_restructura	restructura_date3	date
+KAN_20220801_restructura	restructura_date4	date
+KAN_20220801_restructura	restructura_date5	date
+KAN_20220801_restructura	restructura_date6	date
+KAN_20220801_restructura	restructura_date7	date
+KAN_20220801_restructura	restructura_date8	date
+KAN_20220901_for_LGD	account_number	nvarchar
+KAN_20220901_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20220901_for_LGD	status	nvarchar
+KAN_20220901_for_LGD	subproduct	nvarchar
+KAN_20220901_for_LGD	TARIFF	nvarchar
+KAN_20220901_for_LGD	DURATION	int
+KAN_20220901_for_LGD	CAR_PRICE	nvarchar
+KAN_20220901_for_LGD	downPayment	nvarchar
+KAN_20220901_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20220901_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20220901_for_LGD	activation_date	date
+KAN_20220901_for_LGD	dead_convict	date
+KAN_20220901_for_LGD	marcer	nvarchar
+KAN_20220901_for_LGD	default_date	date
+KAN_20220901_for_LGD	health_date2	date
+KAN_20220901_for_LGD	default_date_old	date
+KAN_20220901_for_LGD	restructura_date_1	date
+KAN_20220901_for_LGD	restructura_date_2	date
+KAN_20220901_for_LGD	restructura_date_3	date
+KAN_20220901_for_LGD	restructura_date_4	date
+KAN_20220901_for_LGD	restructura_date_5	date
+KAN_20220901_for_LGD	restructura_date_6	date
+KAN_20220901_for_LGD	restructura_date_7	date
+KAN_20220901_for_LGD	restructura_date_8	date
+KAN_20220901_for_LGD	дата_окончания_отсрочки	date
+KAN_20220901_for_LGD	default_date2	date
+KAN_20220901_for_LGD	health_date	date
+KAN_20220901_for_LGD	new_default_date	date
+KAN_20220901_for_LGD	new_health_date	date
+KAN_20220901_for_LGD	fact_close_date	date
+KAN_20220901_restructura	contract_number	nvarchar
+KAN_20220901_restructura	restructura_date	date
+KAN_20220901_restructura	restructura_date2	date
+KAN_20220901_restructura	restructura_date3	date
+KAN_20220901_restructura	restructura_date4	date
+KAN_20220901_restructura	restructura_date5	date
+KAN_20220901_restructura	restructura_date6	date
+KAN_20220901_restructura	restructura_date7	date
+KAN_20220901_restructura	restructura_date8	date
+KAN_20221001_for_LGD	account_number	varchar
+KAN_20221001_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20221001_for_LGD	status	varchar
+KAN_20221001_for_LGD	subproduct	varchar
+KAN_20221001_for_LGD	TARIFF	varchar
+KAN_20221001_for_LGD	DURATION	varchar
+KAN_20221001_for_LGD	CAR_PRICE	varchar
+KAN_20221001_for_LGD	downPayment	varchar
+KAN_20221001_for_LGD	LOAN_AMOUNT	varchar
+KAN_20221001_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20221001_for_LGD	activation_date	date
+KAN_20221001_for_LGD	dead_convict	date
+KAN_20221001_for_LGD	marcer	varchar
+KAN_20221001_for_LGD	default_date	date
+KAN_20221001_for_LGD	health_date2	date
+KAN_20221001_for_LGD	default_date_old	date
+KAN_20221001_for_LGD	restructura_date_1	date
+KAN_20221001_for_LGD	restructura_date_2	date
+KAN_20221001_for_LGD	restructura_date_3	date
+KAN_20221001_for_LGD	restructura_date_4	date
+KAN_20221001_for_LGD	restructura_date_5	date
+KAN_20221001_for_LGD	restructura_date_6	date
+KAN_20221001_for_LGD	restructura_date_7	date
+KAN_20221001_for_LGD	restructura_date_8	date
+KAN_20221001_for_LGD	дата окончания отсрочки	date
+KAN_20221001_for_LGD	default_date_dpd	date
+KAN_20221001_for_LGD	health_date	date
+KAN_20221001_for_LGD	new_default_date	date
+KAN_20221001_for_LGD	new_health_date	date
+KAN_20221001_for_LGD	fact_close_date	date
+KAN_20221001_restructura	contract_number	nvarchar
+KAN_20221001_restructura	restructura_date	date
+KAN_20221001_restructura	restructura_date2	date
+KAN_20221001_restructura	restructura_date3	date
+KAN_20221001_restructura	restructura_date4	date
+KAN_20221001_restructura	restructura_date5	date
+KAN_20221001_restructura	restructura_date6	date
+KAN_20221001_restructura	restructura_date7	date
+KAN_20221001_restructura	restructura_date8	date
+KAN_20221101_for_LGD	account_number	nvarchar
+KAN_20221101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20221101_for_LGD	status	nvarchar
+KAN_20221101_for_LGD	subproduct	nvarchar
+KAN_20221101_for_LGD	TARIFF	nvarchar
+KAN_20221101_for_LGD	DURATION	nvarchar
+KAN_20221101_for_LGD	CAR_PRICE	nvarchar
+KAN_20221101_for_LGD	downPayment	nvarchar
+KAN_20221101_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20221101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20221101_for_LGD	activation_date	date
+KAN_20221101_for_LGD	dead_convict	date
+KAN_20221101_for_LGD	marcer	nvarchar
+KAN_20221101_for_LGD	default_date	date
+KAN_20221101_for_LGD	health_date2	date
+KAN_20221101_for_LGD	default_date_old	date
+KAN_20221101_for_LGD	restructura_date_1	date
+KAN_20221101_for_LGD	restructura_date_2	date
+KAN_20221101_for_LGD	restructura_date_3	date
+KAN_20221101_for_LGD	restructura_date_4	date
+KAN_20221101_for_LGD	restructura_date_5	date
+KAN_20221101_for_LGD	restructura_date_6	date
+KAN_20221101_for_LGD	restructura_date_7	date
+KAN_20221101_for_LGD	restructura_date_8	date
+KAN_20221101_for_LGD	дата окончания отсрочки	date
+KAN_20221101_for_LGD	default_date_dpd	date
+KAN_20221101_for_LGD	health_date	date
+KAN_20221101_for_LGD	new_default_date	date
+KAN_20221101_for_LGD	new_health_date	date
+KAN_20221101_for_LGD	fact_close_date	date
+KAN_20221101_restructura	contract_number	nvarchar
+KAN_20221101_restructura	restructura_date	date
+KAN_20221101_restructura	restructura_date2	date
+KAN_20221101_restructura	restructura_date3	date
+KAN_20221101_restructura	restructura_date4	date
+KAN_20221101_restructura	restructura_date5	date
+KAN_20221101_restructura	restructura_date6	date
+KAN_20221101_restructura	restructura_date7	date
+KAN_20221101_restructura	restructura_date8	date
+KAN_20221201_for_LGD	account_number	nvarchar
+KAN_20221201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20221201_for_LGD	status	nvarchar
+KAN_20221201_for_LGD	subproduct	nvarchar
+KAN_20221201_for_LGD	TARIFF	nvarchar
+KAN_20221201_for_LGD	DURATION	nvarchar
+KAN_20221201_for_LGD	CAR_PRICE	nvarchar
+KAN_20221201_for_LGD	downPayment	nvarchar
+KAN_20221201_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20221201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20221201_for_LGD	activation_date	date
+KAN_20221201_for_LGD	dead_convict	date
+KAN_20221201_for_LGD	marcer	nvarchar
+KAN_20221201_for_LGD	default_date	date
+KAN_20221201_for_LGD	health_date2	date
+KAN_20221201_for_LGD	default_date_old	date
+KAN_20221201_for_LGD	restructura_date_1	date
+KAN_20221201_for_LGD	restructura_date_2	date
+KAN_20221201_for_LGD	restructura_date_3	date
+KAN_20221201_for_LGD	restructura_date_4	date
+KAN_20221201_for_LGD	restructura_date_5	date
+KAN_20221201_for_LGD	restructura_date_6	date
+KAN_20221201_for_LGD	restructura_date_7	date
+KAN_20221201_for_LGD	restructura_date_8	date
+KAN_20221201_for_LGD	дата окончания отсрочки	date
+KAN_20221201_for_LGD	default_date_dpd	date
+KAN_20221201_for_LGD	health_date	date
+KAN_20221201_for_LGD	new_default_date	date
+KAN_20221201_for_LGD	new_health_date	date
+KAN_20221201_for_LGD	fact_close_date	date
+KAN_20221201_restructura	contract_number	nvarchar
+KAN_20221201_restructura	restructura_date	date
+KAN_20221201_restructura	restructura_date2	date
+KAN_20221201_restructura	restructura_date3	date
+KAN_20221201_restructura	restructura_date4	date
+KAN_20221201_restructura	restructura_date5	date
+KAN_20221201_restructura	restructura_date6	date
+KAN_20221201_restructura	restructura_date7	date
+KAN_20221201_restructura	restructura_date8	date
+KAN_20230101_for_LGD	account_number	nvarchar
+KAN_20230101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20230101_for_LGD	status	nvarchar
+KAN_20230101_for_LGD	subproduct	nvarchar
+KAN_20230101_for_LGD	TARIFF	nvarchar
+KAN_20230101_for_LGD	DURATION	nvarchar
+KAN_20230101_for_LGD	CAR_PRICE	nvarchar
+KAN_20230101_for_LGD	downPayment	nvarchar
+KAN_20230101_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20230101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20230101_for_LGD	activation_date	date
+KAN_20230101_for_LGD	dead_convict	date
+KAN_20230101_for_LGD	marcer	nvarchar
+KAN_20230101_for_LGD	default_date	date
+KAN_20230101_for_LGD	health_date2	date
+KAN_20230101_for_LGD	default_date_old	date
+KAN_20230101_for_LGD	restructura_date_1	date
+KAN_20230101_for_LGD	restructura_date_2	date
+KAN_20230101_for_LGD	restructura_date_3	date
+KAN_20230101_for_LGD	restructura_date_4	date
+KAN_20230101_for_LGD	restructura_date_5	date
+KAN_20230101_for_LGD	restructura_date_6	date
+KAN_20230101_for_LGD	restructura_date_7	date
+KAN_20230101_for_LGD	restructura_date_8	date
+KAN_20230101_for_LGD	дата окончания отсрочки	date
+KAN_20230101_for_LGD	default_date_dpd	date
+KAN_20230101_for_LGD	health_date	date
+KAN_20230101_for_LGD	new_default_date	date
+KAN_20230101_for_LGD	new_health_date	date
+KAN_20230101_for_LGD	fact_close_date	date
+KAN_20230101_restructura	contract_number	nvarchar
+KAN_20230101_restructura	restructura_date	date
+KAN_20230101_restructura	restructura_date2	date
+KAN_20230101_restructura	restructura_date3	date
+KAN_20230101_restructura	restructura_date4	date
+KAN_20230101_restructura	restructura_date5	date
+KAN_20230101_restructura	restructura_date6	date
+KAN_20230101_restructura	restructura_date7	date
+KAN_20230101_restructura	restructura_date8	date
+KAN_20230201_for_LGD	account_number	nvarchar
+KAN_20230201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20230201_for_LGD	status	nvarchar
+KAN_20230201_for_LGD	subproduct	nvarchar
+KAN_20230201_for_LGD	TARIFF	nvarchar
+KAN_20230201_for_LGD	DURATION	nvarchar
+KAN_20230201_for_LGD	CAR_PRICE	nvarchar
+KAN_20230201_for_LGD	downPayment	nvarchar
+KAN_20230201_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20230201_for_LGD	FIRST_PAYMENT_DATE	nvarchar
+KAN_20230201_for_LGD	activation_date	date
+KAN_20230201_for_LGD	dead_convict	date
+KAN_20230201_for_LGD	marcer	nvarchar
+KAN_20230201_for_LGD	default_date	date
+KAN_20230201_for_LGD	health_date2	date
+KAN_20230201_for_LGD	default_date_old	date
+KAN_20230201_for_LGD	restructura_date_1	date
+KAN_20230201_for_LGD	restructura_date_2	date
+KAN_20230201_for_LGD	restructura_date_3	date
+KAN_20230201_for_LGD	restructura_date_4	date
+KAN_20230201_for_LGD	restructura_date_5	date
+KAN_20230201_for_LGD	restructura_date_6	date
+KAN_20230201_for_LGD	restructura_date_7	date
+KAN_20230201_for_LGD	restructura_date_8	date
+KAN_20230201_for_LGD	restructura_date_9	date
+KAN_20230201_for_LGD	дата окончания отсрочки	date
+KAN_20230201_for_LGD	default_date_dpd	date
+KAN_20230201_for_LGD	health_date	date
+KAN_20230201_for_LGD	new_default_date	date
+KAN_20230201_for_LGD	new_health_date	date
+KAN_20230201_for_LGD	fact_close_date	date
+KAN_20230201_for_LGD	trigger	nvarchar
+KAN_20230201_for_LGD	trigger_1	nvarchar
+KAN_20230201_for_LGD	POCI	nvarchar
+KAN_20230201_restructura	contract_number	nvarchar
+KAN_20230201_restructura	restructura_date	date
+KAN_20230201_restructura	restructura_date2	date
+KAN_20230201_restructura	restructura_date3	date
+KAN_20230201_restructura	restructura_date4	date
+KAN_20230201_restructura	restructura_date5	date
+KAN_20230201_restructura	restructura_date6	date
+KAN_20230201_restructura	restructura_date7	date
+KAN_20230201_restructura	restructura_date8	date
+KAN_20230201_restructura	restructura_date9	date
+KAN_20230301_for_LGD	account_number	nvarchar
+KAN_20230301_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20230301_for_LGD	status	nvarchar
+KAN_20230301_for_LGD	subproduct	nvarchar
+KAN_20230301_for_LGD	TARIFF	nvarchar
+KAN_20230301_for_LGD	DURATION	nvarchar
+KAN_20230301_for_LGD	CAR_PRICE	nvarchar
+KAN_20230301_for_LGD	downPayment	nvarchar
+KAN_20230301_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20230301_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20230301_for_LGD	activation_date	date
+KAN_20230301_for_LGD	dead_convict	date
+KAN_20230301_for_LGD	marcer	nvarchar
+KAN_20230301_for_LGD	default_date	date
+KAN_20230301_for_LGD	health_date2	date
+KAN_20230301_for_LGD	default_date_old	date
+KAN_20230301_for_LGD	restructura_date_1	date
+KAN_20230301_for_LGD	restructura_date_2	date
+KAN_20230301_for_LGD	restructura_date_3	date
+KAN_20230301_for_LGD	restructura_date_4	date
+KAN_20230301_for_LGD	restructura_date_5	date
+KAN_20230301_for_LGD	restructura_date_6	date
+KAN_20230301_for_LGD	restructura_date_7	date
+KAN_20230301_for_LGD	restructura_date_8	date
+KAN_20230301_for_LGD	restructura_date_9	date
+KAN_20230301_for_LGD	дата окончания_1	date
+KAN_20230301_for_LGD	default_date_dpd	date
+KAN_20230301_for_LGD	health_date	date
+KAN_20230301_for_LGD	new_default_date	date
+KAN_20230301_for_LGD	new_health_date	date
+KAN_20230301_for_LGD	fact_close_date	date
+KAN_20230301_for_LGD	trigger	nvarchar
+KAN_20230301_for_LGD	trigger_1	nvarchar
+KAN_20230301_for_LGD	POCI	nvarchar
+KAN_20230301_restructura	contract_number	nvarchar
+KAN_20230301_restructura	restructura_date	date
+KAN_20230301_restructura	restructura_date2	date
+KAN_20230301_restructura	restructura_date3	date
+KAN_20230301_restructura	restructura_date4	date
+KAN_20230301_restructura	restructura_date5	date
+KAN_20230301_restructura	restructura_date6	date
+KAN_20230301_restructura	restructura_date7	date
+KAN_20230301_restructura	restructura_date8	date
+KAN_20230301_restructura	restructura_date9	date
+KAN_20230401_for_LGD	account_number	nvarchar
+KAN_20230401_for_LGD	IIN	nvarchar
+KAN_20230401_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20230401_for_LGD	status	nvarchar
+KAN_20230401_for_LGD	subproduct	nvarchar
+KAN_20230401_for_LGD	TARIFF	nvarchar
+KAN_20230401_for_LGD	DURATION	nvarchar
+KAN_20230401_for_LGD	CAR_PRICE	nvarchar
+KAN_20230401_for_LGD	downPayment	nvarchar
+KAN_20230401_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20230401_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20230401_for_LGD	activation_date	date
+KAN_20230401_for_LGD	dead_convict	date
+KAN_20230401_for_LGD	marcer	nvarchar
+KAN_20230401_for_LGD	bankrupt_DATE	date
+KAN_20230401_for_LGD	default_date	date
+KAN_20230401_for_LGD	health_date2	date
+KAN_20230401_for_LGD	default_date_old	date
+KAN_20230401_for_LGD	restructura_date_1	date
+KAN_20230401_for_LGD	restructura_date_2	date
+KAN_20230401_for_LGD	restructura_date_3	date
+KAN_20230401_for_LGD	restructura_date_4	date
+KAN_20230401_for_LGD	restructura_date_5	date
+KAN_20230401_for_LGD	restructura_date_6	date
+KAN_20230401_for_LGD	restructura_date_7	date
+KAN_20230401_for_LGD	restructura_date_8	date
+KAN_20230401_for_LGD	restructura_date_9	date
+KAN_20230401_for_LGD	restructura_date_10	date
+KAN_20230401_for_LGD	дата окончания реструктуры	date
+KAN_20230401_for_LGD	trigger	nvarchar
+KAN_20230401_for_LGD	trigger_1	nvarchar
+KAN_20230401_for_LGD	POCI	nvarchar
+KAN_20230401_for_LGD_бк	account_number	nvarchar
+KAN_20230401_for_LGD_бк	IIN	nvarchar
+KAN_20230401_for_LGD_бк	FACT_CLOSE_DATE_b4	date
+KAN_20230401_for_LGD_бк	status	nvarchar
+KAN_20230401_for_LGD_бк	subproduct	nvarchar
+KAN_20230401_for_LGD_бк	TARIFF	nvarchar
+KAN_20230401_for_LGD_бк	DURATION	nvarchar
+KAN_20230401_for_LGD_бк	CAR_PRICE	nvarchar
+KAN_20230401_for_LGD_бк	downPayment	nvarchar
+KAN_20230401_for_LGD_бк	LOAN_AMOUNT	nvarchar
+KAN_20230401_for_LGD_бк	FIRST_PAYMENT_DATE	date
+KAN_20230401_for_LGD_бк	activation_date	date
+KAN_20230401_for_LGD_бк	dead_convict	date
+KAN_20230401_for_LGD_бк	marcer	nvarchar
+KAN_20230401_for_LGD_бк	bankrupt_DATE	date
+KAN_20230401_for_LGD_бк	default_date	date
+KAN_20230401_for_LGD_бк	health_date2	date
+KAN_20230401_for_LGD_бк	default_date_old	date
+KAN_20230401_for_LGD_бк	restructura_date_1	date
+KAN_20230401_for_LGD_бк	restructura_date_2	date
+KAN_20230401_for_LGD_бк	restructura_date_3	date
+KAN_20230401_for_LGD_бк	restructura_date_4	date
+KAN_20230401_for_LGD_бк	restructura_date_5	date
+KAN_20230401_for_LGD_бк	restructura_date_6	date
+KAN_20230401_for_LGD_бк	restructura_date_7	date
+KAN_20230401_for_LGD_бк	restructura_date_8	date
+KAN_20230401_for_LGD_бк	restructura_date_9	date
+KAN_20230401_for_LGD_бк	restructura_date_10	date
+KAN_20230401_for_LGD_бк	дата окончания реструктуры	date
+KAN_20230401_for_LGD_бк	default_date_dpd	date
+KAN_20230401_for_LGD_бк	health_date	date
+KAN_20230401_for_LGD_бк	new_default_date	date
+KAN_20230401_for_LGD_бк	new_health_date	date
+KAN_20230401_for_LGD_бк	fact_close_date	date
+KAN_20230401_for_LGD_бк	trigger	nvarchar
+KAN_20230401_for_LGD_бк	trigger_1	nvarchar
+KAN_20230401_for_LGD_бк	POCI	nvarchar
+KAN_20230401_restructura	contract_number	nvarchar
+KAN_20230401_restructura	restructura_date	date
+KAN_20230401_restructura	restructura_date2	date
+KAN_20230401_restructura	restructura_date3	date
+KAN_20230401_restructura	restructura_date4	date
+KAN_20230401_restructura	restructura_date5	date
+KAN_20230401_restructura	restructura_date6	date
+KAN_20230401_restructura	restructura_date7	date
+KAN_20230401_restructura	restructura_date8	date
+KAN_20230401_restructura	restructura_date9	date
+KAN_20230401_restructura	restructura_date10	date
+KAN_20230501_for_LGD	account_number	nvarchar
+KAN_20230501_for_LGD	IIN	nvarchar
+KAN_20230501_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20230501_for_LGD	status	nvarchar
+KAN_20230501_for_LGD	subproduct	nvarchar
+KAN_20230501_for_LGD	TARIFF	nvarchar
+KAN_20230501_for_LGD	DURATION	nvarchar
+KAN_20230501_for_LGD	CAR_PRICE	nvarchar
+KAN_20230501_for_LGD	downPayment	nvarchar
+KAN_20230501_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20230501_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20230501_for_LGD	activation_date	date
+KAN_20230501_for_LGD	dead_convict	date
+KAN_20230501_for_LGD	marcer	nvarchar
+KAN_20230501_for_LGD	STATuS_DATE	date
+KAN_20230501_for_LGD	default_date	date
+KAN_20230501_for_LGD	health_date2	date
+KAN_20230501_for_LGD	default_date_old	date
+KAN_20230501_for_LGD	restructura_date_1	date
+KAN_20230501_for_LGD	restructura_date_2	date
+KAN_20230501_for_LGD	restructura_date_3	date
+KAN_20230501_for_LGD	restructura_date_4	date
+KAN_20230501_for_LGD	restructura_date_5	date
+KAN_20230501_for_LGD	restructura_date_6	date
+KAN_20230501_for_LGD	restructura_date_7	date
+KAN_20230501_for_LGD	restructura_date_8	date
+KAN_20230501_for_LGD	restructura_date_9	date
+KAN_20230501_for_LGD	restructura_date_10	date
+KAN_20230501_for_LGD	дата окончания рестра	date
+KAN_20230501_for_LGD	default_date_dpd	date
+KAN_20230501_for_LGD	health_date	date
+KAN_20230501_for_LGD	new_default_date	date
+KAN_20230501_for_LGD	new_health_date	date
+KAN_20230501_for_LGD	fact_close_date	date
+KAN_20230501_for_LGD	trigger	nvarchar
+KAN_20230501_for_LGD	trigger_1	nvarchar
+KAN_20230501_for_LGD	POCI	nvarchar
+KAN_20230501_for_LGD_бк	account_number	nvarchar
+KAN_20230501_for_LGD_бк	IIN	nvarchar
+KAN_20230501_for_LGD_бк	FACT_CLOSE_DATE_b4	date
+KAN_20230501_for_LGD_бк	status	nvarchar
+KAN_20230501_for_LGD_бк	subproduct	nvarchar
+KAN_20230501_for_LGD_бк	TARIFF	nvarchar
+KAN_20230501_for_LGD_бк	DURATION	nvarchar
+KAN_20230501_for_LGD_бк	CAR_PRICE	nvarchar
+KAN_20230501_for_LGD_бк	downPayment	nvarchar
+KAN_20230501_for_LGD_бк	LOAN_AMOUNT	nvarchar
+KAN_20230501_for_LGD_бк	FIRST_PAYMENT_DATE	date
+KAN_20230501_for_LGD_бк	activation_date	date
+KAN_20230501_for_LGD_бк	dead_convict	date
+KAN_20230501_for_LGD_бк	marcer	nvarchar
+KAN_20230501_for_LGD_бк	bankrupt_DATE	date
+KAN_20230501_for_LGD_бк	default_date	date
+KAN_20230501_for_LGD_бк	health_date2	date
+KAN_20230501_for_LGD_бк	default_date_old	date
+KAN_20230501_for_LGD_бк	restructura_date_1	date
+KAN_20230501_for_LGD_бк	restructura_date_2	date
+KAN_20230501_for_LGD_бк	restructura_date_3	date
+KAN_20230501_for_LGD_бк	restructura_date_4	date
+KAN_20230501_for_LGD_бк	restructura_date_5	date
+KAN_20230501_for_LGD_бк	restructura_date_6	date
+KAN_20230501_for_LGD_бк	restructura_date_7	date
+KAN_20230501_for_LGD_бк	restructura_date_8	date
+KAN_20230501_for_LGD_бк	restructura_date_9	date
+KAN_20230501_for_LGD_бк	restructura_date_10	date
+KAN_20230501_for_LGD_бк	дата окончания рестра 	date
+KAN_20230501_for_LGD_бк	default_date_dpd	date
+KAN_20230501_for_LGD_бк	health_date	date
+KAN_20230501_for_LGD_бк	new_default_date	date
+KAN_20230501_for_LGD_бк	new_health_date	date
+KAN_20230501_for_LGD_бк	fact_close_date	date
+KAN_20230501_for_LGD_бк	trigger	nvarchar
+KAN_20230501_for_LGD_бк	trigger_1	nvarchar
+KAN_20230501_for_LGD_бк	POCI	nvarchar
+KAN_20230501_restructura	contract_number	nvarchar
+KAN_20230501_restructura	restructura_date	date
+KAN_20230501_restructura	restructura_date2	date
+KAN_20230501_restructura	restructura_date3	date
+KAN_20230501_restructura	restructura_date4	date
+KAN_20230501_restructura	restructura_date5	date
+KAN_20230501_restructura	restructura_date6	date
+KAN_20230501_restructura	restructura_date7	date
+KAN_20230501_restructura	restructura_date8	date
+KAN_20230501_restructura	restructura_date9	date
+KAN_20230501_restructura	restructura_date10	date
+KAN_20230601_for_LGD_бк	account_number	nvarchar
+KAN_20230601_for_LGD_бк	IIN	nvarchar
+KAN_20230601_for_LGD_бк	FACT_CLOSE_DATE_b4	date
+KAN_20230601_for_LGD_бк	status	nvarchar
+KAN_20230601_for_LGD_бк	subproduct	nvarchar
+KAN_20230601_for_LGD_бк	TARIFF	nvarchar
+KAN_20230601_for_LGD_бк	DURATION	nvarchar
+KAN_20230601_for_LGD_бк	CAR_PRICE	nvarchar
+KAN_20230601_for_LGD_бк	downPayment	nvarchar
+KAN_20230601_for_LGD_бк	LOAN_AMOUNT	nvarchar
+KAN_20230601_for_LGD_бк	FIRST_PAYMENT_DATE	date
+KAN_20230601_for_LGD_бк	activation_date	date
+KAN_20230601_for_LGD_бк	dead_convict	date
+KAN_20230601_for_LGD_бк	marcer	nvarchar
+KAN_20230601_for_LGD_бк	bankrupt_DATE	date
+KAN_20230601_for_LGD_бк	default_date	date
+KAN_20230601_for_LGD_бк	health_date2	date
+KAN_20230601_for_LGD_бк	default_date_old	date
+KAN_20230601_for_LGD_бк	restructura_date_1	date
+KAN_20230601_for_LGD_бк	restructura_date_2	date
+KAN_20230601_for_LGD_бк	restructura_date_3	date
+KAN_20230601_for_LGD_бк	restructura_date_4	date
+KAN_20230601_for_LGD_бк	restructura_date_5	date
+KAN_20230601_for_LGD_бк	restructura_date_6	date
+KAN_20230601_for_LGD_бк	restructura_date_7	date
+KAN_20230601_for_LGD_бк	restructura_date_8	date
+KAN_20230601_for_LGD_бк	restructura_date_9	date
+KAN_20230601_for_LGD_бк	restructura_date_10	date
+KAN_20230601_for_LGD_бк	дата окончания_рестра	date
+KAN_20230601_for_LGD_бк	default_date_dpd	date
+KAN_20230601_for_LGD_бк	health_date	date
+KAN_20230601_for_LGD_бк	new_default_date	date
+KAN_20230601_for_LGD_бк	new_health_date	date
+KAN_20230601_for_LGD_бк	trigger	nvarchar
+KAN_20230601_for_LGD_бк	trigger_1	nvarchar
+KAN_20230601_for_LGD_бк	POCI	nvarchar
+KAN_20230601_restructura	contract_number	nvarchar
+KAN_20230601_restructura	restructura_date	date
+KAN_20230601_restructura	restructura_date2	date
+KAN_20230601_restructura	restructura_date3	date
+KAN_20230601_restructura	restructura_date4	date
+KAN_20230601_restructura	restructura_date5	date
+KAN_20230601_restructura	restructura_date6	date
+KAN_20230601_restructura	restructura_date7	date
+KAN_20230601_restructura	restructura_date8	date
+KAN_20230601_restructura	restructura_date9	date
+KAN_20230601_restructura	restructura_date10	date
+KAN_20230601_restructura	Столбец 11	nvarchar
+KAN_20230601_restructura	Столбец 12	nvarchar
+KAN_20230601_restructura	Столбец 13	nvarchar
+KAN_20230601_restructura	Столбец 14	nvarchar
+KAN_20230601_restructura	добавлено в феврале	nvarchar
+KAN_20230601_restructura	Столбец 16	nvarchar
+KAN_20230701_for_LGD_бк	account_number	nvarchar
+KAN_20230701_for_LGD_бк	IIN	nvarchar
+KAN_20230701_for_LGD_бк	FACT_CLOSE_DATE_b4	date
+KAN_20230701_for_LGD_бк	status	nvarchar
+KAN_20230701_for_LGD_бк	subproduct	nvarchar
+KAN_20230701_for_LGD_бк	TARIFF	nvarchar
+KAN_20230701_for_LGD_бк	DURATION	nvarchar
+KAN_20230701_for_LGD_бк	CAR_PRICE	nvarchar
+KAN_20230701_for_LGD_бк	downPayment	nvarchar
+KAN_20230701_for_LGD_бк	LOAN_AMOUNT	nvarchar
+KAN_20230701_for_LGD_бк	FIRST_PAYMENT_DATE	date
+KAN_20230701_for_LGD_бк	activation_date	date
+KAN_20230701_for_LGD_бк	dead_convict	date
+KAN_20230701_for_LGD_бк	marcer	nvarchar
+KAN_20230701_for_LGD_бк	bankrupt	date
+KAN_20230701_for_LGD_бк	default_date	date
+KAN_20230701_for_LGD_бк	health_date2	date
+KAN_20230701_for_LGD_бк	default_date_old	date
+KAN_20230701_for_LGD_бк	restructura_date_1	date
+KAN_20230701_for_LGD_бк	restructura_date_2	date
+KAN_20230701_for_LGD_бк	restructura_date_3	date
+KAN_20230701_for_LGD_бк	restructura_date_4	date
+KAN_20230701_for_LGD_бк	restructura_date_5	date
+KAN_20230701_for_LGD_бк	restructura_date_6	date
+KAN_20230701_for_LGD_бк	restructura_date_7	date
+KAN_20230701_for_LGD_бк	restructura_date_8	date
+KAN_20230701_for_LGD_бк	restructura_date_9	date
+KAN_20230701_for_LGD_бк	restructura_date_10	date
+KAN_20230701_for_LGD_бк	дата окончания	date
+KAN_20230701_for_LGD_бк	default_date_dpd	date
+KAN_20230701_for_LGD_бк	health_date	date
+KAN_20230701_for_LGD_бк	new_default_date	date
+KAN_20230701_for_LGD_бк	new_health_date	date
+KAN_20230701_for_LGD_бк	fact_close_date	date
+KAN_20230701_for_LGD_бк	trigger	nvarchar
+KAN_20230701_for_LGD_бк	trigger_1	nvarchar
+KAN_20230701_for_LGD_бк	POCI	nvarchar
+KAN_20230701_restructura	contract_number	nvarchar
+KAN_20230701_restructura	restructura_date	date
+KAN_20230701_restructura	restructura_date2	date
+KAN_20230701_restructura	restructura_date3	date
+KAN_20230701_restructura	restructura_date4	date
+KAN_20230701_restructura	restructura_date5	date
+KAN_20230701_restructura	restructura_date6	date
+KAN_20230701_restructura	restructura_date7	date
+KAN_20230701_restructura	restructura_date8	date
+KAN_20230701_restructura	restructura_date9	date
+KAN_20230701_restructura	restructura_date10	date
+KAN_20230801_for_LGD_бк	account_number	nvarchar
+KAN_20230801_for_LGD_бк	IIN	nvarchar
+KAN_20230801_for_LGD_бк	FACT_CLOSE_DATE_b4	date
+KAN_20230801_for_LGD_бк	status	nvarchar
+KAN_20230801_for_LGD_бк	subproduct	nvarchar
+KAN_20230801_for_LGD_бк	TARIFF	nvarchar
+KAN_20230801_for_LGD_бк	DURATION	nvarchar
+KAN_20230801_for_LGD_бк	CAR_PRICE	nvarchar
+KAN_20230801_for_LGD_бк	downPayment	nvarchar
+KAN_20230801_for_LGD_бк	LOAN_AMOUNT	nvarchar
+KAN_20230801_for_LGD_бк	FIRST_PAYMENT_DATE	date
+KAN_20230801_for_LGD_бк	activation_date	date
+KAN_20230801_for_LGD_бк	dead_convict	date
+KAN_20230801_for_LGD_бк	marcer	nvarchar
+KAN_20230801_for_LGD_бк	bankrupt_DATE	nvarchar
+KAN_20230801_for_LGD_бк	default_date	date
+KAN_20230801_for_LGD_бк	health_date2	date
+KAN_20230801_for_LGD_бк	default_date_old	date
+KAN_20230801_for_LGD_бк	дата окончания	date
+KAN_20230801_for_LGD_бк	default_date_dpd	date
+KAN_20230801_for_LGD_бк	health_date	date
+KAN_20230801_for_LGD_бк	new_default_date	date
+KAN_20230801_for_LGD_бк	new_health_date	date
+KAN_20230801_for_LGD_бк	fact_close_date	date
+KAN_20230801_for_LGD_бк	trigger	nvarchar
+KAN_20230801_for_LGD_бк	trigger_1	nvarchar
+KAN_20230801_for_LGD_бк	POCI	nvarchar
+KAN_20230801_restructura	contract_number	nvarchar
+KAN_20230801_restructura	restructura_date	date
+KAN_20230801_restructura	restructura_date2	date
+KAN_20230801_restructura	restructura_date3	date
+KAN_20230801_restructura	restructura_date4	date
+KAN_20230801_restructura	restructura_date5	date
+KAN_20230801_restructura	restructura_date6	date
+KAN_20230801_restructura	restructura_date7	date
+KAN_20230801_restructura	restructura_date8	date
+KAN_20230801_restructura	restructura_date9	date
+KAN_20230801_restructura	restructura_date10	date
+KAN_20230801_restructura	Столбец 11	nvarchar
+KAN_20230801_restructura	Столбец 12	nvarchar
+KAN_20230801_restructura	Столбец 13	nvarchar
+KAN_20230801_restructura	Столбец 14	nvarchar
+KAN_20230901_for_LGD_бк	account_number	nvarchar
+KAN_20230901_for_LGD_бк	IIN	nvarchar
+KAN_20230901_for_LGD_бк	FACT_CLOSE_DATE_b4	date
+KAN_20230901_for_LGD_бк	status	nvarchar
+KAN_20230901_for_LGD_бк	subproduct	nvarchar
+KAN_20230901_for_LGD_бк	TARIFF	nvarchar
+KAN_20230901_for_LGD_бк	DURATION	nvarchar
+KAN_20230901_for_LGD_бк	CAR_PRICE	nvarchar
+KAN_20230901_for_LGD_бк	downPayment	nvarchar
+KAN_20230901_for_LGD_бк	LOAN_AMOUNT	nvarchar
+KAN_20230901_for_LGD_бк	FIRST_PAYMENT_DATE	date
+KAN_20230901_for_LGD_бк	activation_date	date
+KAN_20230901_for_LGD_бк	dead_convict	date
+KAN_20230901_for_LGD_бк	marcer	nvarchar
+KAN_20230901_for_LGD_бк	bankrupt_DATE	date
+KAN_20230901_for_LGD_бк	default_date	date
+KAN_20230901_for_LGD_бк	health_date2	date
+KAN_20230901_for_LGD_бк	default_date_old	date
+KAN_20230901_for_LGD_бк	дата окончания реструктуры	date
+KAN_20230901_for_LGD_бк	default_date_dpd	date
+KAN_20230901_for_LGD_бк	health_date	date
+KAN_20230901_for_LGD_бк	new_default_date	date
+KAN_20230901_for_LGD_бк	new_health_date	date
+KAN_20230901_for_LGD_бк	fact_close_date	date
+KAN_20230901_for_LGD_бк	trigger	nvarchar
+KAN_20230901_for_LGD_бк	trigger_1	nvarchar
+KAN_20230901_for_LGD_бк	POCI	nvarchar
+KAN_20230901_restructura	contract_number	nvarchar
+KAN_20230901_restructura	restructura_date	date
+KAN_20230901_restructura	restructura_date2	date
+KAN_20230901_restructura	restructura_date3	date
+KAN_20230901_restructura	restructura_date4	date
+KAN_20230901_restructura	restructura_date5	date
+KAN_20230901_restructura	restructura_date6	date
+KAN_20230901_restructura	restructura_date7	date
+KAN_20230901_restructura	restructura_date8	date
+KAN_20230901_restructura	restructura_date9	date
+KAN_20230901_restructura	restructura_date10	date
+KAN_20231001_for_LGD	account_number	nvarchar
+KAN_20231001_for_LGD	IIN	nvarchar
+KAN_20231001_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20231001_for_LGD	status	nvarchar
+KAN_20231001_for_LGD	subproduct	nvarchar
+KAN_20231001_for_LGD	TARIFF	nvarchar
+KAN_20231001_for_LGD	DURATION	nvarchar
+KAN_20231001_for_LGD	CAR_PRICE	nvarchar
+KAN_20231001_for_LGD	downPayment	nvarchar
+KAN_20231001_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20231001_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20231001_for_LGD	activation_date	date
+KAN_20231001_for_LGD	dead_convict	date
+KAN_20231001_for_LGD	marcer	nvarchar
+KAN_20231001_for_LGD	bankrupt_date	date
+KAN_20231001_for_LGD	default_date	date
+KAN_20231001_for_LGD	health_date2	date
+KAN_20231001_for_LGD	default_date_old	date
+KAN_20231001_for_LGD	дата окончания_1	date
+KAN_20231001_for_LGD	POCI	nvarchar
+KAN_20231001_for_LGD	trigger	nvarchar
+KAN_20231001_for_LGD	trigger_1	nvarchar
+KAN_20231001_restructura	contract_number	nvarchar
+KAN_20231001_restructura	restructura_date	date
+KAN_20231001_restructura	restructura_date2	date
+KAN_20231001_restructura	restructura_date3	date
+KAN_20231001_restructura	restructura_date4	date
+KAN_20231001_restructura	restructura_date5	date
+KAN_20231001_restructura	restructura_date6	date
+KAN_20231001_restructura	restructura_date7	date
+KAN_20231001_restructura	restructura_date8	date
+KAN_20231001_restructura	restructura_date9	date
+KAN_20231001_restructura	restructura_date10	date
+KAN_20231101_for_LGD	account_number	nvarchar
+KAN_20231101_for_LGD	IIN	nvarchar
+KAN_20231101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20231101_for_LGD	status	nvarchar
+KAN_20231101_for_LGD	subproduct	nvarchar
+KAN_20231101_for_LGD	TARIFF	nvarchar
+KAN_20231101_for_LGD	DURATION	nvarchar
+KAN_20231101_for_LGD	 CAR_PRICE 	nvarchar
+KAN_20231101_for_LGD	 downPayment 	nvarchar
+KAN_20231101_for_LGD	 LOAN_AMOUNT 	nvarchar
+KAN_20231101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20231101_for_LGD	activation_date	date
+KAN_20231101_for_LGD	dead_convict	date
+KAN_20231101_for_LGD	marcer	nvarchar
+KAN_20231101_for_LGD	bankrupt_date	date
+KAN_20231101_for_LGD	default_date	date
+KAN_20231101_for_LGD	health_date2	date
+KAN_20231101_for_LGD	default_date_old	date
+KAN_20231101_for_LGD	дата окончания реструктуризации	date
+KAN_20231101_for_LGD	POCI	nvarchar
+KAN_20231101_for_LGD	trigger	nvarchar
+KAN_20231101_for_LGD	trigger_1	nvarchar
+KAN_20231101_for_LGD_test	account_number	nvarchar
+KAN_20231101_for_LGD_test	IIN	nvarchar
+KAN_20231101_for_LGD_test	FACT_CLOSE_DATE_b4	date
+KAN_20231101_for_LGD_test	status	nvarchar
+KAN_20231101_for_LGD_test	subproduct	nvarchar
+KAN_20231101_for_LGD_test	TARIFF	nvarchar
+KAN_20231101_for_LGD_test	DURATION	nvarchar
+KAN_20231101_for_LGD_test	 CAR_PRICE 	nvarchar
+KAN_20231101_for_LGD_test	 downPayment 	nvarchar
+KAN_20231101_for_LGD_test	 LOAN_AMOUNT 	float
+KAN_20231101_for_LGD_test	FIRST_PAYMENT_DATE	date
+KAN_20231101_for_LGD_test	activation_date	date
+KAN_20231101_for_LGD_test	dead_convict	date
+KAN_20231101_for_LGD_test	marcer	nvarchar
+KAN_20231101_for_LGD_test	bankrupt_date	date
+KAN_20231101_for_LGD_test	default_date	date
+KAN_20231101_for_LGD_test	health_date2	date
+KAN_20231101_for_LGD_test	default_date_old	date
+KAN_20231101_for_LGD_test	trigger	nvarchar
+KAN_20231101_restructura	contract_number	nvarchar
+KAN_20231101_restructura	restructura_date	date
+KAN_20231101_restructura	restructura_date2	date
+KAN_20231101_restructura	restructura_date3	date
+KAN_20231101_restructura	restructura_date4	date
+KAN_20231101_restructura	restructura_date5	date
+KAN_20231101_restructura	restructura_date6	date
+KAN_20231101_restructura	restructura_date7	date
+KAN_20231101_restructura	restructura_date8	date
+KAN_20231101_restructura	restructura_date9	date
+KAN_20231101_restructura	restructura_date10	date
+KAN_20231101_restructura	комментарий	nvarchar
+KAN_20231201_for_LGD	account_number	nvarchar
+KAN_20231201_for_LGD	iin	nvarchar
+KAN_20231201_for_LGD	fact_close_date	date
+KAN_20231201_for_LGD	status	nvarchar
+KAN_20231201_for_LGD	subproduct	nvarchar
+KAN_20231201_for_LGD	tariff	nvarchar
+KAN_20231201_for_LGD	duration	nvarchar
+KAN_20231201_for_LGD	car_price	float
+KAN_20231201_for_LGD	downPayment	float
+KAN_20231201_for_LGD	 loan_amount 	float
+KAN_20231201_for_LGD	first_payment_date	date
+KAN_20231201_for_LGD	activation_date	date
+KAN_20231201_for_LGD	dead_convict	date
+KAN_20231201_for_LGD	marcer	nvarchar
+KAN_20231201_for_LGD	bankrupt_date	date
+KAN_20231201_for_LGD	default_date	date
+KAN_20231201_for_LGD	health_date2	date
+KAN_20231201_for_LGD	default_date_old	date
+KAN_20231201_for_LGD	дата окончания_реструктуры	date
+KAN_20231201_for_LGD	POCI	nvarchar
+KAN_20231201_for_LGD	trigger	nvarchar
+KAN_20231201_for_LGD	trigger_1	nvarchar
+KAN_20231201_for_LGD	trigger на тек дату	nvarchar
+KAN_20231201_for_LGD	примечание 	nvarchar
+KAN_20231201_for_LGD_AQR2024	account_number	nvarchar
+KAN_20231201_for_LGD_AQR2024	iin	nvarchar
+KAN_20231201_for_LGD_AQR2024	fact_close_date	date
+KAN_20231201_for_LGD_AQR2024	status	nvarchar
+KAN_20231201_for_LGD_AQR2024	subproduct	nvarchar
+KAN_20231201_for_LGD_AQR2024	tariff	nvarchar
+KAN_20231201_for_LGD_AQR2024	duration	nvarchar
+KAN_20231201_for_LGD_AQR2024	car_price	nvarchar
+KAN_20231201_for_LGD_AQR2024	downPayment	nvarchar
+KAN_20231201_for_LGD_AQR2024	 loan_amount 	nvarchar
+KAN_20231201_for_LGD_AQR2024	first_payment_date	date
+KAN_20231201_for_LGD_AQR2024	activation_date	date
+KAN_20231201_for_LGD_AQR2024	dead_convict	date
+KAN_20231201_for_LGD_AQR2024	marcer	nvarchar
+KAN_20231201_for_LGD_AQR2024	bankrupt_date	date
+KAN_20231201_for_LGD_AQR2024	default_date	date
+KAN_20231201_for_LGD_AQR2024	health_date2	date
+KAN_20231201_for_LGD_AQR2024	default_date_old	date
+KAN_20231201_for_LGD_AQR2024	дата окончания_реструктуры	date
+KAN_20231201_for_LGD_AQR2024	POCI	nvarchar
+KAN_20231201_for_LGD_AQR2024	trigger	nvarchar
+KAN_20231201_for_LGD_AQR2024	trigger_1	nvarchar
+KAN_20231201_for_LGD_AQR2024	trigger на тек дату	nvarchar
+KAN_20231201_for_LGD_AQR2024	примечание 	nvarchar
+KAN_20231201_restructura	contract_number	nvarchar
+KAN_20231201_restructura	restructura_date	date
+KAN_20231201_restructura	restructura_date2	date
+KAN_20231201_restructura	restructura_date3	date
+KAN_20231201_restructura	restructura_date4	date
+KAN_20231201_restructura	restructura_date5	date
+KAN_20231201_restructura	restructura_date6	date
+KAN_20231201_restructura	restructura_date7	date
+KAN_20231201_restructura	restructura_date8	date
+KAN_20231201_restructura	restructura_date9	date
+KAN_20231201_restructura	restructura_date10	date
+KAN_20231201_restructura	комментарий	nvarchar
+KAN_20240101_for_LGD	account_number	nvarchar
+KAN_20240101_for_LGD	IIN	nvarchar
+KAN_20240101_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20240101_for_LGD	status	nvarchar
+KAN_20240101_for_LGD	subproduct	nvarchar
+KAN_20240101_for_LGD	TARIFF	nvarchar
+KAN_20240101_for_LGD	DURATION	nvarchar
+KAN_20240101_for_LGD	CAR_PRICE	nvarchar
+KAN_20240101_for_LGD	downPayment	nvarchar
+KAN_20240101_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20240101_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20240101_for_LGD	activation_date	date
+KAN_20240101_for_LGD	dead_convict	date
+KAN_20240101_for_LGD	marcer	nvarchar
+KAN_20240101_for_LGD	bankrupt_date	date
+KAN_20240101_for_LGD	default_date	date
+KAN_20240101_for_LGD	health_date2	date
+KAN_20240101_for_LGD	default_date_old	date
+KAN_20240101_for_LGD	дата окончания реструктуры	date
+KAN_20240101_for_LGD	poci_date	date
+KAN_20240101_for_LGD	trigger_первый	nvarchar
+KAN_20240101_for_LGD	trigger_последующий	nvarchar
+KAN_20240101_for_LGD	trigger на тек дату	nvarchar
+KAN_20240101_for_LGD	примечание 	nvarchar
+KAN_20240101_restructura	contract_number	nvarchar
+KAN_20240101_restructura	restructura_date	date
+KAN_20240101_restructura	restructura_date2	date
+KAN_20240101_restructura	restructura_date3	date
+KAN_20240101_restructura	restructura_date4	date
+KAN_20240101_restructura	restructura_date5	date
+KAN_20240101_restructura	restructura_date6	date
+KAN_20240101_restructura	restructura_date7	date
+KAN_20240101_restructura	restructura_date8	date
+KAN_20240101_restructura	restructura_date9	date
+KAN_20240101_restructura	restructura_date10	date
+KAN_20240101_restructura	restructura_date11	date
+KAN_20240101_restructura	комментарий	nvarchar
+KAN_20240201_for_LGD	account_number	nvarchar
+KAN_20240201_for_LGD	IIN	nvarchar
+KAN_20240201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20240201_for_LGD	status	nvarchar
+KAN_20240201_for_LGD	subproduct	nvarchar
+KAN_20240201_for_LGD	TARIFF	nvarchar
+KAN_20240201_for_LGD	DURATION	nvarchar
+KAN_20240201_for_LGD	CAR_PRICE	nvarchar
+KAN_20240201_for_LGD	downPayment	nvarchar
+KAN_20240201_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20240201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20240201_for_LGD	activation_date	date
+KAN_20240201_for_LGD	dead_convict	date
+KAN_20240201_for_LGD	marcer	nvarchar
+KAN_20240201_for_LGD	bankrupt_date	date
+KAN_20240201_for_LGD	default_date	date
+KAN_20240201_for_LGD	health_date2	date
+KAN_20240201_for_LGD	default_date_old	date
+KAN_20240201_for_LGD	дата окончания реструктуры	date
+KAN_20240201_for_LGD	poci_date	date
+KAN_20240201_for_LGD	trigger_первый	nvarchar
+KAN_20240201_for_LGD	trigger_последующий	nvarchar
+KAN_20240201_for_LGD	trigger на тек дату	nvarchar
+KAN_20240201_for_LGD	примечание 	nvarchar
+KAN_20240201_restructura	contract_number	nvarchar
+KAN_20240201_restructura	restructura_date	date
+KAN_20240201_restructura	restructura_date2	date
+KAN_20240201_restructura	restructura_date3	date
+KAN_20240201_restructura	restructura_date4	date
+KAN_20240201_restructura	restructura_date5	date
+KAN_20240201_restructura	restructura_date6	date
+KAN_20240201_restructura	restructura_date7	date
+KAN_20240201_restructura	restructura_date8	date
+KAN_20240201_restructura	restructura_date9	date
+KAN_20240201_restructura	restructura_date10	date
+KAN_20240201_restructura	restructura_date11	date
+KAN_20240201_restructura	комментарий	nvarchar
+KAN_20240301_for_LGD	account_number	nvarchar
+KAN_20240301_for_LGD	IIN	nvarchar
+KAN_20240301_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20240301_for_LGD	status	nvarchar
+KAN_20240301_for_LGD	subproduct	nvarchar
+KAN_20240301_for_LGD	TARIFF	nvarchar
+KAN_20240301_for_LGD	DURATION	nvarchar
+KAN_20240301_for_LGD	CAR_PRICE	nvarchar
+KAN_20240301_for_LGD	down Payment	nvarchar
+KAN_20240301_for_LGD	LOAN_ AMOUNT	nvarchar
+KAN_20240301_for_LGD	FIRST_ PAYMENT_DATE	date
+KAN_20240301_for_LGD	activation_date	date
+KAN_20240301_for_LGD	dead_ convict	date
+KAN_20240301_for_LGD	marcer	nvarchar
+KAN_20240301_for_LGD	bankrupt_ date	date
+KAN_20240301_for_LGD	default_date	date
+KAN_20240301_for_LGD	health_date2	date
+KAN_20240301_for_LGD	default_date_old	date
+KAN_20240301_for_LGD	дата окончания реструктуры	date
+KAN_20240301_for_LGD	poci_date	date
+KAN_20240301_for_LGD	trigger_первый	nvarchar
+KAN_20240301_for_LGD	trigger_последующий	nvarchar
+KAN_20240301_for_LGD	trigger на тек дату	nvarchar
+KAN_20240301_for_LGD	примечание 	nvarchar
+KAN_20240301_restructura	contract_number	nvarchar
+KAN_20240301_restructura	restructura_date	date
+KAN_20240301_restructura	restructura_date2	date
+KAN_20240301_restructura	restructura_date3	date
+KAN_20240301_restructura	restructura_date4	date
+KAN_20240301_restructura	restructura_date5	date
+KAN_20240301_restructura	restructura_date6	date
+KAN_20240301_restructura	restructura_date7	date
+KAN_20240301_restructura	restructura_date8	date
+KAN_20240301_restructura	restructura_date9	date
+KAN_20240301_restructura	restructura_date10	date
+KAN_20240301_restructura	restructura_date11	date
+KAN_20240301_restructura	комментарий	nvarchar
+KAN_20240401_for_LGD	account_number	nvarchar
+KAN_20240401_for_LGD	IIN	nvarchar
+KAN_20240401_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20240401_for_LGD	status	nvarchar
+KAN_20240401_for_LGD	subproduct	nvarchar
+KAN_20240401_for_LGD	TARIFF	nvarchar
+KAN_20240401_for_LGD	DURATION	nvarchar
+KAN_20240401_for_LGD	CAR_PRICE	nvarchar
+KAN_20240401_for_LGD	downPayment	nvarchar
+KAN_20240401_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20240401_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20240401_for_LGD	activation_date	date
+KAN_20240401_for_LGD	dead_convict	date
+KAN_20240401_for_LGD	marcer	nvarchar
+KAN_20240401_for_LGD	bankrupt_date	date
+KAN_20240401_for_LGD	default_date	date
+KAN_20240401_for_LGD	health_date2	date
+KAN_20240401_for_LGD	default_date_old	date
+KAN_20240401_for_LGD	дата окончания реструктуры	date
+KAN_20240401_for_LGD	poci_date	date
+KAN_20240401_for_LGD	trigger_первый	nvarchar
+KAN_20240401_for_LGD	trigger_последующий	nvarchar
+KAN_20240401_for_LGD	trigger на тек дату	nvarchar
+KAN_20240401_for_LGD	примечание 	nvarchar
+KAN_20240401_for_LGD_old	account_number	nvarchar
+KAN_20240401_for_LGD_old	IIN	nvarchar
+KAN_20240401_for_LGD_old	FACT_CLOSE_DATE_b4	date
+KAN_20240401_for_LGD_old	status	nvarchar
+KAN_20240401_for_LGD_old	subproduct	nvarchar
+KAN_20240401_for_LGD_old	TARIFF	nvarchar
+KAN_20240401_for_LGD_old	DURATION	nvarchar
+KAN_20240401_for_LGD_old	CAR_PRICE	nvarchar
+KAN_20240401_for_LGD_old	downPayment	nvarchar
+KAN_20240401_for_LGD_old	LOAN_AMOUNT	nvarchar
+KAN_20240401_for_LGD_old	FIRST_PAYMENT_DATE	date
+KAN_20240401_for_LGD_old	activation_date	date
+KAN_20240401_for_LGD_old	dead_convict	date
+KAN_20240401_for_LGD_old	marcer	nvarchar
+KAN_20240401_for_LGD_old	bankrupt_date	date
+KAN_20240401_for_LGD_old	default_date	date
+KAN_20240401_for_LGD_old	health_date2	date
+KAN_20240401_for_LGD_old	default_date_old	date
+KAN_20240401_for_LGD_old	дата окончания реструктуры	date
+KAN_20240401_for_LGD_old	poci_date	date
+KAN_20240401_for_LGD_old	trigger_первый	nvarchar
+KAN_20240401_for_LGD_old	trigger_последующий	nvarchar
+KAN_20240401_for_LGD_old	trigger на тек дату	nvarchar
+KAN_20240401_for_LGD_old	примечание 	nvarchar
+KAN_20240401_restructura	contract_number	nvarchar
+KAN_20240401_restructura	restructura_date	date
+KAN_20240401_restructura	restructura_date2	date
+KAN_20240401_restructura	restructura_date3	date
+KAN_20240401_restructura	restructura_date4	date
+KAN_20240401_restructura	restructura_date5	date
+KAN_20240401_restructura	restructura_date6	date
+KAN_20240401_restructura	restructura_date7	date
+KAN_20240401_restructura	restructura_date8	date
+KAN_20240401_restructura	restructura_date9	date
+KAN_20240401_restructura	restructura_date10	date
+KAN_20240401_restructura	restructura_date11	date
+KAN_20240401_restructura	комментарий	nvarchar
+KAN_20240501_for_LGD	account_number	nvarchar
+KAN_20240501_for_LGD	IIN	nvarchar
+KAN_20240501_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20240501_for_LGD	status	nvarchar
+KAN_20240501_for_LGD	subproduct	nvarchar
+KAN_20240501_for_LGD	TARIFF	nvarchar
+KAN_20240501_for_LGD	DURATION	nvarchar
+KAN_20240501_for_LGD	CAR_PRICE	nvarchar
+KAN_20240501_for_LGD	downPayment	nvarchar
+KAN_20240501_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20240501_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20240501_for_LGD	activation_date	date
+KAN_20240501_for_LGD	dead_convict	date
+KAN_20240501_for_LGD	marcer	nvarchar
+KAN_20240501_for_LGD	bankrupt_date	date
+KAN_20240501_for_LGD	default_date	date
+KAN_20240501_for_LGD	health_date2	date
+KAN_20240501_for_LGD	default_date_old	date
+KAN_20240501_for_LGD	дата окончания реструктуры	date
+KAN_20240501_for_LGD	poci_date	date
+KAN_20240501_for_LGD	trigger_первый	nvarchar
+KAN_20240501_for_LGD	trigger_последующий	nvarchar
+KAN_20240501_for_LGD	trigger на тек дату	nvarchar
+KAN_20240501_for_LGD	примечание 	nvarchar
+KAN_20240501_for_LGD2	account_number	nvarchar
+KAN_20240501_for_LGD2	IIN	nvarchar
+KAN_20240501_for_LGD2	FACT_CLOSE_DATE_b4	date
+KAN_20240501_for_LGD2	status	nvarchar
+KAN_20240501_for_LGD2	subproduct	nvarchar
+KAN_20240501_for_LGD2	TARIFF	nvarchar
+KAN_20240501_for_LGD2	DURATION	nvarchar
+KAN_20240501_for_LGD2	CAR_PRICE	nvarchar
+KAN_20240501_for_LGD2	downPayment	nvarchar
+KAN_20240501_for_LGD2	LOAN_AMOUNT	nvarchar
+KAN_20240501_for_LGD2	FIRST_PAYMENT_DATE	date
+KAN_20240501_for_LGD2	activation_date	date
+KAN_20240501_for_LGD2	dead_convict	date
+KAN_20240501_for_LGD2	marcer	nvarchar
+KAN_20240501_for_LGD2	bankrupt_date	date
+KAN_20240501_for_LGD2	default_date	date
+KAN_20240501_for_LGD2	health_date2	date
+KAN_20240501_for_LGD2	default_date_old	date
+KAN_20240501_for_LGD2	дата окончания реструктуры	date
+KAN_20240501_for_LGD2	poci_date	date
+KAN_20240501_for_LGD2	trigger_первый	nvarchar
+KAN_20240501_for_LGD2	trigger_последующий	nvarchar
+KAN_20240501_for_LGD2	trigger на тек дату	nvarchar
+KAN_20240501_for_LGD2	примечание 	nvarchar
+KAN_20240501_restructura	contract_number	nvarchar
+KAN_20240501_restructura	restructura_date	date
+KAN_20240501_restructura	restructura_date2	date
+KAN_20240501_restructura	restructura_date3	date
+KAN_20240501_restructura	restructura_date4	date
+KAN_20240501_restructura	restructura_date5	date
+KAN_20240501_restructura	restructura_date6	date
+KAN_20240501_restructura	restructura_date7	date
+KAN_20240501_restructura	restructura_date8	date
+KAN_20240501_restructura	restructura_date9	date
+KAN_20240501_restructura	restructura_date10	date
+KAN_20240501_restructura	restructura_date11	date
+KAN_20240501_restructura	комментарий	nvarchar
+KAN_20240601_for_LGD_FENIX	account_number	nvarchar
+KAN_20240601_for_LGD_FENIX	IIN	nvarchar
+KAN_20240601_for_LGD_FENIX	FACT_CLOSE_DATE_b4	date
+KAN_20240601_for_LGD_FENIX	status	nvarchar
+KAN_20240601_for_LGD_FENIX	subproduct	nvarchar
+KAN_20240601_for_LGD_FENIX	TARIFF	nvarchar
+KAN_20240601_for_LGD_FENIX	DURATION	nvarchar
+KAN_20240601_for_LGD_FENIX	CAR_PRICE	nvarchar
+KAN_20240601_for_LGD_FENIX	downPayment	nvarchar
+KAN_20240601_for_LGD_FENIX	LOAN_AMOUNT	nvarchar
+KAN_20240601_for_LGD_FENIX	FIRST_PAYMENT_DATE	date
+KAN_20240601_for_LGD_FENIX	activation_date	date
+KAN_20240601_for_LGD_FENIX	dead_convict	date
+KAN_20240601_for_LGD_FENIX	marcer	nvarchar
+KAN_20240601_for_LGD_FENIX	bankrupt_date	date
+KAN_20240601_for_LGD_FENIX	default_date	date
+KAN_20240601_for_LGD_FENIX	health_date2	date
+KAN_20240601_for_LGD_FENIX	default_date_old	date
+KAN_20240601_for_LGD_FENIX	дата окончания реструктуры	date
+KAN_20240601_for_LGD_FENIX	poci_date	date
+KAN_20240601_for_LGD_FENIX	trigger_первый	nvarchar
+KAN_20240601_for_LGD_FENIX	trigger_последующий	nvarchar
+KAN_20240601_for_LGD_FENIX	trigger на тек дату	nvarchar
+KAN_20240601_for_LGD_FENIX	примечание 	nvarchar
+KAN_20240601_for_LGD+MR_TEST	account_number	nvarchar
+KAN_20240601_for_LGD+MR_TEST	IIN	nvarchar
+KAN_20240601_for_LGD+MR_TEST	FACT_CLOSE_DATE_b4	date
+KAN_20240601_for_LGD+MR_TEST	status	nvarchar
+KAN_20240601_for_LGD+MR_TEST	subproduct	nvarchar
+KAN_20240601_for_LGD+MR_TEST	TARIFF	nvarchar
+KAN_20240601_for_LGD+MR_TEST	DURATION	nvarchar
+KAN_20240601_for_LGD+MR_TEST	CAR_PRICE	nvarchar
+KAN_20240601_for_LGD+MR_TEST	downPayment	nvarchar
+KAN_20240601_for_LGD+MR_TEST	LOAN_AMOUNT	nvarchar
+KAN_20240601_for_LGD+MR_TEST	FIRST_PAYMENT_DATE	date
+KAN_20240601_for_LGD+MR_TEST	activation_date	date
+KAN_20240601_for_LGD+MR_TEST	dead_convict	date
+KAN_20240601_for_LGD+MR_TEST	marcer	nvarchar
+KAN_20240601_for_LGD+MR_TEST	bankrupt_date	date
+KAN_20240601_for_LGD+MR_TEST	default_date	date
+KAN_20240601_for_LGD+MR_TEST	health_date2	date
+KAN_20240601_for_LGD+MR_TEST	default_date_old	date
+KAN_20240601_for_LGD+MR_TEST	дата окончания реструктуры	date
+KAN_20240601_for_LGD+MR_TEST	poci_date	date
+KAN_20240601_for_LGD+MR_TEST	trigger_первый	nvarchar
+KAN_20240601_for_LGD+MR_TEST	trigger_последующий	nvarchar
+KAN_20240601_for_LGD+MR_TEST	trigger на тек дату	nvarchar
+KAN_20240601_for_LGD+MR_TEST	примечание 	nvarchar
+KAN_20240601_restructura	contract_number	nvarchar
+KAN_20240601_restructura	restructura_date	date
+KAN_20240601_restructura	restructura_date2	date
+KAN_20240601_restructura	restructura_date3	date
+KAN_20240601_restructura	restructura_date4	date
+KAN_20240601_restructura	restructura_date5	date
+KAN_20240601_restructura	restructura_date6	date
+KAN_20240601_restructura	restructura_date7	date
+KAN_20240601_restructura	restructura_date8	date
+KAN_20240601_restructura	restructura_date9	date
+KAN_20240601_restructura	restructura_date10	date
+KAN_20240601_restructura	restructura_date11	date
+KAN_20240601_restructura	комментарий	nvarchar
+KAN_20240701_for_LGD	account_number	nvarchar
+KAN_20240701_for_LGD	IIN	nvarchar
+KAN_20240701_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20240701_for_LGD	status	nvarchar
+KAN_20240701_for_LGD	subproduct	nvarchar
+KAN_20240701_for_LGD	TARIFF	nvarchar
+KAN_20240701_for_LGD	DURATION	nvarchar
+KAN_20240701_for_LGD	CAR_PRICE	nvarchar
+KAN_20240701_for_LGD	downPayment	nvarchar
+KAN_20240701_for_LGD	LOAN_AMOUNT	nvarchar
+KAN_20240701_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20240701_for_LGD	activation_date	date
+KAN_20240701_for_LGD	dead_convict	date
+KAN_20240701_for_LGD	marcer	nvarchar
+KAN_20240701_for_LGD	bankrupt_date	date
+KAN_20240701_for_LGD	default_date	date
+KAN_20240701_for_LGD	health_date2	date
+KAN_20240701_for_LGD	default_date_old	date
+KAN_20240701_for_LGD	дата окончания реструктуры	date
+KAN_20240701_for_LGD	poci_date	date
+KAN_20240701_for_LGD	trigger_первый	nvarchar
+KAN_20240701_for_LGD	trigger_последующий	nvarchar
+KAN_20240701_for_LGD	trigger на тек дату	nvarchar
+KAN_20240701_for_LGD	примечание 	nvarchar
+KAN_20240701_for_LGD_FENIX	account_number	nvarchar
+KAN_20240701_for_LGD_FENIX	IIN	nvarchar
+KAN_20240701_for_LGD_FENIX	FACT_CLOSE_DATE_b4	date
+KAN_20240701_for_LGD_FENIX	status	nvarchar
+KAN_20240701_for_LGD_FENIX	subproduct	nvarchar
+KAN_20240701_for_LGD_FENIX	TARIFF	nvarchar
+KAN_20240701_for_LGD_FENIX	DURATION	nvarchar
+KAN_20240701_for_LGD_FENIX	CAR_PRICE	nvarchar
+KAN_20240701_for_LGD_FENIX	downPayment	nvarchar
+KAN_20240701_for_LGD_FENIX	LOAN_AMOUNT	nvarchar
+KAN_20240701_for_LGD_FENIX	FIRST_PAYMENT_DATE	date
+KAN_20240701_for_LGD_FENIX	activation_date	date
+KAN_20240701_for_LGD_FENIX	dead_convict	date
+KAN_20240701_for_LGD_FENIX	marcer	nvarchar
+KAN_20240701_for_LGD_FENIX	bankrupt_date	date
+KAN_20240701_for_LGD_FENIX	default_date	date
+KAN_20240701_for_LGD_FENIX	health_date2	date
+KAN_20240701_for_LGD_FENIX	default_date_old	date
+KAN_20240701_for_LGD_FENIX	дата окончания реструктуры	date
+KAN_20240701_for_LGD_FENIX	poci_date	date
+KAN_20240701_for_LGD_FENIX	trigger_первый	nvarchar
+KAN_20240701_for_LGD_FENIX	trigger_последующий	nvarchar
+KAN_20240701_for_LGD_FENIX	trigger на тек дату	nvarchar
+KAN_20240701_for_LGD_FENIX	примечание 	nvarchar
+KAN_20240701_restructura	contract_number	nvarchar
+KAN_20240701_restructura	restructura_date	date
+KAN_20240701_restructura	restructura_date2	date
+KAN_20240701_restructura	restructura_date3	date
+KAN_20240701_restructura	restructura_date4	date
+KAN_20240701_restructura	restructura_date5	date
+KAN_20240701_restructura	restructura_date6	date
+KAN_20240701_restructura	restructura_date7	date
+KAN_20240701_restructura	restructura_date8	date
+KAN_20240701_restructura	restructura_date9	date
+KAN_20240701_restructura	restructura_date10	date
+KAN_20240701_restructura	restructura_date11	date
+KAN_20240701_restructura	комментарий	nvarchar
+KAN_20240801_for_LGD_FENIX	account_number	nvarchar
+KAN_20240801_for_LGD_FENIX	IIN	nvarchar
+KAN_20240801_for_LGD_FENIX	FACT_CLOSE_DATE_b4	date
+KAN_20240801_for_LGD_FENIX	status	nvarchar
+KAN_20240801_for_LGD_FENIX	subproduct	nvarchar
+KAN_20240801_for_LGD_FENIX	TARIFF	nvarchar
+KAN_20240801_for_LGD_FENIX	DURATION	nvarchar
+KAN_20240801_for_LGD_FENIX	CAR_PRICE	float
+KAN_20240801_for_LGD_FENIX	downPayment	float
+KAN_20240801_for_LGD_FENIX	LOAN_AMOUNT	float
+KAN_20240801_for_LGD_FENIX	FIRST_PAYMENT_DATE	date
+KAN_20240801_for_LGD_FENIX	activation_date	date
+KAN_20240801_for_LGD_FENIX	dead_convict	date
+KAN_20240801_for_LGD_FENIX	marcer	nvarchar
+KAN_20240801_for_LGD_FENIX	bankrupt_date	date
+KAN_20240801_for_LGD_FENIX	default_date	date
+KAN_20240801_for_LGD_FENIX	health_date2	date
+KAN_20240801_for_LGD_FENIX	default_date_old	date
+KAN_20240801_for_LGD_FENIX	дата окончания реструктуры	date
+KAN_20240801_for_LGD_FENIX	poci_date	date
+KAN_20240801_for_LGD_FENIX	trigger_первый	nvarchar
+KAN_20240801_for_LGD_FENIX	trigger_последующий	nvarchar
+KAN_20240801_for_LGD_FENIX	trigger на тек дату	nvarchar
+KAN_20240801_for_LGD_FENIX	примечание 	nvarchar
+KAN_20240801_restructura	contract_number	nvarchar
+KAN_20240801_restructura	restructura_date	date
+KAN_20240801_restructura	restructura_date2	date
+KAN_20240801_restructura	restructura_date3	date
+KAN_20240801_restructura	restructura_date4	date
+KAN_20240801_restructura	restructura_date5	date
+KAN_20240801_restructura	restructura_date6	date
+KAN_20240801_restructura	restructura_date7	date
+KAN_20240801_restructura	restructura_date8	date
+KAN_20240801_restructura	restructura_date9	date
+KAN_20240801_restructura	restructura_date10	date
+KAN_20240801_restructura	restructura_date11	date
+KAN_20240801_restructura	комментарий	nvarchar
+KAN_20240901_for_LGD	account_number	nvarchar
+KAN_20240901_for_LGD	IIN	nvarchar
+KAN_20240901_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20240901_for_LGD	status	nvarchar
+KAN_20240901_for_LGD	subproduct	nvarchar
+KAN_20240901_for_LGD	TARIFF	nvarchar
+KAN_20240901_for_LGD	DURATION	nvarchar
+KAN_20240901_for_LGD	CAR_PRICE	float
+KAN_20240901_for_LGD	downPayment	float
+KAN_20240901_for_LGD	LOAN_AMOUNT	float
+KAN_20240901_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20240901_for_LGD	activation_date	date
+KAN_20240901_for_LGD	dead_convict	date
+KAN_20240901_for_LGD	marcer	nvarchar
+KAN_20240901_for_LGD	bankrupt_date	date
+KAN_20240901_for_LGD	default_date	date
+KAN_20240901_for_LGD	health_date2	date
+KAN_20240901_for_LGD	default_date_old	date
+KAN_20240901_for_LGD	дата окончания реструктуры	date
+KAN_20240901_for_LGD	poci_date	date
+KAN_20240901_for_LGD	trigger_первый	nvarchar
+KAN_20240901_for_LGD	trigger_последующий	nvarchar
+KAN_20240901_for_LGD	trigger на тек дату	nvarchar
+KAN_20240901_for_LGD	примечание 	nvarchar
+KAN_20240901_for_LGD_Fenix	account_number	nvarchar
+KAN_20240901_for_LGD_Fenix	IIN	nvarchar
+KAN_20240901_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20240901_for_LGD_Fenix	status	nvarchar
+KAN_20240901_for_LGD_Fenix	subproduct	nvarchar
+KAN_20240901_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20240901_for_LGD_Fenix	DURATION	nvarchar
+KAN_20240901_for_LGD_Fenix	CAR_PRICE	float
+KAN_20240901_for_LGD_Fenix	downPayment	float
+KAN_20240901_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20240901_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20240901_for_LGD_Fenix	activation_date	date
+KAN_20240901_for_LGD_Fenix	dead_convict	date
+KAN_20240901_for_LGD_Fenix	marcer	nvarchar
+KAN_20240901_for_LGD_Fenix	bankrupt_date	date
+KAN_20240901_for_LGD_Fenix	default_date	date
+KAN_20240901_for_LGD_Fenix	health_date2	date
+KAN_20240901_for_LGD_Fenix	default_date_old	date
+KAN_20240901_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20240901_for_LGD_Fenix	poci_date	date
+KAN_20240901_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20240901_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20240901_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20240901_for_LGD_Fenix	примечание 	nvarchar
+KAN_20240901_restructura	contract_number	nvarchar
+KAN_20240901_restructura	restructura_date	date
+KAN_20240901_restructura	restructura_date2	date
+KAN_20240901_restructura	restructura_date3	date
+KAN_20240901_restructura	restructura_date4	date
+KAN_20240901_restructura	restructura_date5	date
+KAN_20240901_restructura	restructura_date6	date
+KAN_20240901_restructura	restructura_date7	date
+KAN_20240901_restructura	restructura_date8	date
+KAN_20240901_restructura	restructura_date9	date
+KAN_20240901_restructura	restructura_date10	date
+KAN_20240901_restructura	restructura_date11	date
+KAN_20240901_restructura	комментарий	nvarchar
+KAN_20241001_for_LGD_Fenix	account_number	nvarchar
+KAN_20241001_for_LGD_Fenix	IIN	nvarchar
+KAN_20241001_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20241001_for_LGD_Fenix	status	nvarchar
+KAN_20241001_for_LGD_Fenix	subproduct	nvarchar
+KAN_20241001_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20241001_for_LGD_Fenix	DURATION	nvarchar
+KAN_20241001_for_LGD_Fenix	CAR_PRICE	float
+KAN_20241001_for_LGD_Fenix	downPayment	float
+KAN_20241001_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20241001_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20241001_for_LGD_Fenix	activation_date	date
+KAN_20241001_for_LGD_Fenix	dead_convict	date
+KAN_20241001_for_LGD_Fenix	marcer	nvarchar
+KAN_20241001_for_LGD_Fenix	bankrupt_date	date
+KAN_20241001_for_LGD_Fenix	default_date	date
+KAN_20241001_for_LGD_Fenix	health_date2	date
+KAN_20241001_for_LGD_Fenix	default_date_old	date
+KAN_20241001_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20241001_for_LGD_Fenix	poci_date	date
+KAN_20241001_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20241001_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20241001_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20241001_for_LGD_Fenix	примечание 	nvarchar
+KAN_20241001_restructura	contract_number	nvarchar
+KAN_20241001_restructura	restructura_date	date
+KAN_20241001_restructura	restructura_date2	date
+KAN_20241001_restructura	restructura_date3	date
+KAN_20241001_restructura	restructura_date4	date
+KAN_20241001_restructura	restructura_date5	date
+KAN_20241001_restructura	restructura_date6	date
+KAN_20241001_restructura	restructura_date7	date
+KAN_20241001_restructura	restructura_date8	date
+KAN_20241001_restructura	restructura_date9	date
+KAN_20241001_restructura	restructura_date10	date
+KAN_20241001_restructura	restructura_date11	date
+KAN_20241001_restructura	комментарий	nvarchar
+KAN_20241101_for_LGD_Fenix	account_number	nvarchar
+KAN_20241101_for_LGD_Fenix	IIN	nvarchar
+KAN_20241101_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20241101_for_LGD_Fenix	status	nvarchar
+KAN_20241101_for_LGD_Fenix	subproduct	nvarchar
+KAN_20241101_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20241101_for_LGD_Fenix	DURATION	nvarchar
+KAN_20241101_for_LGD_Fenix	CAR_PRICE	float
+KAN_20241101_for_LGD_Fenix	downPayment	float
+KAN_20241101_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20241101_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20241101_for_LGD_Fenix	activation_date	date
+KAN_20241101_for_LGD_Fenix	dead_convict	date
+KAN_20241101_for_LGD_Fenix	marcer	nvarchar
+KAN_20241101_for_LGD_Fenix	bankrupt_date	date
+KAN_20241101_for_LGD_Fenix	default_date	date
+KAN_20241101_for_LGD_Fenix	health_date2	date
+KAN_20241101_for_LGD_Fenix	default_date_old	date
+KAN_20241101_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20241101_for_LGD_Fenix	poci_date	date
+KAN_20241101_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20241101_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20241101_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20241101_for_LGD_Fenix	примечание 	nvarchar
+KAN_20241101_restructura	contract_number	nvarchar
+KAN_20241101_restructura	restructura_date	date
+KAN_20241101_restructura	restructura_date2	date
+KAN_20241101_restructura	restructura_date3	date
+KAN_20241101_restructura	restructura_date4	date
+KAN_20241101_restructura	restructura_date5	date
+KAN_20241101_restructura	restructura_date6	date
+KAN_20241101_restructura	restructura_date7	date
+KAN_20241101_restructura	restructura_date8	date
+KAN_20241101_restructura	restructura_date9	date
+KAN_20241101_restructura	restructura_date10	date
+KAN_20241101_restructura	restructura_date11	date
+KAN_20241101_restructura	комментарий	nvarchar
+KAN_20241201_for_LGD	account_number	nvarchar
+KAN_20241201_for_LGD	IIN	nvarchar
+KAN_20241201_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20241201_for_LGD	status	nvarchar
+KAN_20241201_for_LGD	subproduct	nvarchar
+KAN_20241201_for_LGD	TARIFF	nvarchar
+KAN_20241201_for_LGD	DURATION	nvarchar
+KAN_20241201_for_LGD	CAR_PRICE	float
+KAN_20241201_for_LGD	downPayment	float
+KAN_20241201_for_LGD	LOAN_AMOUNT	float
+KAN_20241201_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20241201_for_LGD	activation_date	date
+KAN_20241201_for_LGD	dead_convict	date
+KAN_20241201_for_LGD	marcer	nvarchar
+KAN_20241201_for_LGD	bankrupt_date	date
+KAN_20241201_for_LGD	default_date	date
+KAN_20241201_for_LGD	health_date2	date
+KAN_20241201_for_LGD	default_date_old	date
+KAN_20241201_for_LGD	дата окончания реструктуры	date
+KAN_20241201_for_LGD	poci_date	date
+KAN_20241201_for_LGD	trigger_первый	nvarchar
+KAN_20241201_for_LGD	trigger_последующий	nvarchar
+KAN_20241201_for_LGD	trigger на тек дату	nvarchar
+KAN_20241201_for_LGD	примечание 	nvarchar
+KAN_20241201_for_LGD_Fenix	account_number	nvarchar
+KAN_20241201_for_LGD_Fenix	IIN	nvarchar
+KAN_20241201_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20241201_for_LGD_Fenix	status	nvarchar
+KAN_20241201_for_LGD_Fenix	subproduct	nvarchar
+KAN_20241201_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20241201_for_LGD_Fenix	DURATION	nvarchar
+KAN_20241201_for_LGD_Fenix	CAR_PRICE	float
+KAN_20241201_for_LGD_Fenix	downPayment	float
+KAN_20241201_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20241201_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20241201_for_LGD_Fenix	activation_date	date
+KAN_20241201_for_LGD_Fenix	dead_convict	date
+KAN_20241201_for_LGD_Fenix	marcer	nvarchar
+KAN_20241201_for_LGD_Fenix	bankrupt_date	date
+KAN_20241201_for_LGD_Fenix	default_date	date
+KAN_20241201_for_LGD_Fenix	health_date2	date
+KAN_20241201_for_LGD_Fenix	default_date_old	date
+KAN_20241201_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20241201_for_LGD_Fenix	poci_date	date
+KAN_20241201_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20241201_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20241201_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20241201_for_LGD_Fenix	примечание 	nvarchar
+KAN_20241201_restructura	contract_number	nvarchar
+KAN_20241201_restructura	restructura_date	date
+KAN_20241201_restructura	restructura_date2	date
+KAN_20241201_restructura	restructura_date3	date
+KAN_20241201_restructura	restructura_date4	date
+KAN_20241201_restructura	restructura_date5	date
+KAN_20241201_restructura	restructura_date6	date
+KAN_20241201_restructura	restructura_date7	date
+KAN_20241201_restructura	restructura_date8	date
+KAN_20241201_restructura	restructura_date9	date
+KAN_20241201_restructura	restructura_date10	date
+KAN_20241201_restructura	restructura_date11	date
+KAN_20241201_restructura	комментарий	nvarchar
+KAN_20250101_for_LGD_Fenix	account_number	nvarchar
+KAN_20250101_for_LGD_Fenix	IIN	nvarchar
+KAN_20250101_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250101_for_LGD_Fenix	status	nvarchar
+KAN_20250101_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250101_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250101_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250101_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250101_for_LGD_Fenix	downPayment	float
+KAN_20250101_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250101_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250101_for_LGD_Fenix	activation_date	date
+KAN_20250101_for_LGD_Fenix	dead_convict	date
+KAN_20250101_for_LGD_Fenix	marcer	nvarchar
+KAN_20250101_for_LGD_Fenix	bankrupt_date	date
+KAN_20250101_for_LGD_Fenix	default_date	date
+KAN_20250101_for_LGD_Fenix	health_date2	date
+KAN_20250101_for_LGD_Fenix	default_date_old	date
+KAN_20250101_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250101_for_LGD_Fenix	poci_date	date
+KAN_20250101_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250101_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250101_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250101_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250101_restructura	contract_number	nvarchar
+KAN_20250101_restructura	restructura_date	date
+KAN_20250101_restructura	restructura_date2	date
+KAN_20250101_restructura	restructura_date3	date
+KAN_20250101_restructura	restructura_date4	date
+KAN_20250101_restructura	restructura_date5	date
+KAN_20250101_restructura	restructura_date6	date
+KAN_20250101_restructura	restructura_date7	date
+KAN_20250101_restructura	restructura_date8	date
+KAN_20250101_restructura	restructura_date9	date
+KAN_20250101_restructura	restructura_date10	date
+KAN_20250101_restructura	restructura_date11	date
+KAN_20250101_restructura	комментарий	nvarchar
+KAN_20250201_for_LGD_Fenix	account_number	nvarchar
+KAN_20250201_for_LGD_Fenix	IIN	nvarchar
+KAN_20250201_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250201_for_LGD_Fenix	status	nvarchar
+KAN_20250201_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250201_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250201_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250201_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250201_for_LGD_Fenix	downPayment	float
+KAN_20250201_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250201_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250201_for_LGD_Fenix	activation_date	date
+KAN_20250201_for_LGD_Fenix	dead_convict	date
+KAN_20250201_for_LGD_Fenix	marcer	nvarchar
+KAN_20250201_for_LGD_Fenix	bankrupt_date	date
+KAN_20250201_for_LGD_Fenix	default_date	date
+KAN_20250201_for_LGD_Fenix	health_date2	date
+KAN_20250201_for_LGD_Fenix	default_date_old	date
+KAN_20250201_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250201_for_LGD_Fenix	poci_date	date
+KAN_20250201_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250201_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250201_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250201_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250201_restructura	contract_number	nvarchar
+KAN_20250201_restructura	restructura_date	date
+KAN_20250201_restructura	restructura_date2	date
+KAN_20250201_restructura	restructura_date3	date
+KAN_20250201_restructura	restructura_date4	date
+KAN_20250201_restructura	restructura_date5	date
+KAN_20250201_restructura	restructura_date6	date
+KAN_20250201_restructura	restructura_date7	date
+KAN_20250201_restructura	restructura_date8	date
+KAN_20250201_restructura	restructura_date9	date
+KAN_20250201_restructura	restructura_date10	date
+KAN_20250201_restructura	restructura_date11	date
+KAN_20250201_restructura	комментарий	nvarchar
+KAN_20250301_for_LGD	account_number	nvarchar
+KAN_20250301_for_LGD	IIN	nvarchar
+KAN_20250301_for_LGD	FACT_CLOSE_DATE_b4	date
+KAN_20250301_for_LGD	status	nvarchar
+KAN_20250301_for_LGD	subproduct	nvarchar
+KAN_20250301_for_LGD	TARIFF	nvarchar
+KAN_20250301_for_LGD	DURATION	nvarchar
+KAN_20250301_for_LGD	CAR_PRICE	float
+KAN_20250301_for_LGD	downPayment	float
+KAN_20250301_for_LGD	LOAN_AMOUNT	float
+KAN_20250301_for_LGD	FIRST_PAYMENT_DATE	date
+KAN_20250301_for_LGD	activation_date	date
+KAN_20250301_for_LGD	dead_convict	date
+KAN_20250301_for_LGD	marcer	nvarchar
+KAN_20250301_for_LGD	bankrupt_date	date
+KAN_20250301_for_LGD	default_date	date
+KAN_20250301_for_LGD	health_date2	date
+KAN_20250301_for_LGD	default_date_old	date
+KAN_20250301_for_LGD	дата окончания реструктуры	date
+KAN_20250301_for_LGD	poci_date	date
+KAN_20250301_for_LGD	trigger_первый	nvarchar
+KAN_20250301_for_LGD	trigger_последующий	nvarchar
+KAN_20250301_for_LGD	trigger на тек дату	nvarchar
+KAN_20250301_for_LGD	примечание 	nvarchar
+KAN_20250301_for_LGD_Fenix	account_number	nvarchar
+KAN_20250301_for_LGD_Fenix	IIN	nvarchar
+KAN_20250301_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250301_for_LGD_Fenix	status	nvarchar
+KAN_20250301_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250301_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250301_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250301_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250301_for_LGD_Fenix	downPayment	float
+KAN_20250301_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250301_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250301_for_LGD_Fenix	activation_date	date
+KAN_20250301_for_LGD_Fenix	dead_convict	date
+KAN_20250301_for_LGD_Fenix	marcer	nvarchar
+KAN_20250301_for_LGD_Fenix	bankrupt_date	date
+KAN_20250301_for_LGD_Fenix	default_date	date
+KAN_20250301_for_LGD_Fenix	health_date2	date
+KAN_20250301_for_LGD_Fenix	default_date_old	date
+KAN_20250301_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250301_for_LGD_Fenix	poci_date	date
+KAN_20250301_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250301_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250301_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250301_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	account_number	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	IIN	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	FACT_CLOSE_DATE_b4	date
+KAN_20250301_for_LGD_Fenix_основной	status	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	subproduct	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	TARIFF	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	DURATION	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	CAR_PRICE	float
+KAN_20250301_for_LGD_Fenix_основной	downPayment	float
+KAN_20250301_for_LGD_Fenix_основной	LOAN_AMOUNT	float
+KAN_20250301_for_LGD_Fenix_основной	FIRST_PAYMENT_DATE	date
+KAN_20250301_for_LGD_Fenix_основной	activation_date	date
+KAN_20250301_for_LGD_Fenix_основной	dead_convict	date
+KAN_20250301_for_LGD_Fenix_основной	marcer	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	bankrupt_date	date
+KAN_20250301_for_LGD_Fenix_основной	default_date	date
+KAN_20250301_for_LGD_Fenix_основной	health_date2	date
+KAN_20250301_for_LGD_Fenix_основной	default_date_old	date
+KAN_20250301_for_LGD_Fenix_основной	дата окончания реструктуры	date
+KAN_20250301_for_LGD_Fenix_основной	poci_date	date
+KAN_20250301_for_LGD_Fenix_основной	trigger_первый	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	trigger_последующий	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	trigger на тек дату	nvarchar
+KAN_20250301_for_LGD_Fenix_основной	примечание 	nvarchar
+KAN_20250301_restructura	contract_number	nvarchar
+KAN_20250301_restructura	restructura_date	date
+KAN_20250301_restructura	restructura_date2	date
+KAN_20250301_restructura	restructura_date3	date
+KAN_20250301_restructura	restructura_date4	date
+KAN_20250301_restructura	restructura_date5	date
+KAN_20250301_restructura	restructura_date6	date
+KAN_20250301_restructura	restructura_date7	date
+KAN_20250301_restructura	restructura_date8	date
+KAN_20250301_restructura	restructura_date9	date
+KAN_20250301_restructura	restructura_date10	date
+KAN_20250301_restructura	restructura_date11	date
+KAN_20250301_restructura	комментарий	nvarchar
+KAN_20250401_for_LGD_Fenix	account_number	nvarchar
+KAN_20250401_for_LGD_Fenix	IIN	nvarchar
+KAN_20250401_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250401_for_LGD_Fenix	status	nvarchar
+KAN_20250401_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250401_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250401_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250401_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250401_for_LGD_Fenix	downPayment	float
+KAN_20250401_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250401_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250401_for_LGD_Fenix	activation_date	date
+KAN_20250401_for_LGD_Fenix	dead_convict	date
+KAN_20250401_for_LGD_Fenix	marcer	nvarchar
+KAN_20250401_for_LGD_Fenix	bankrupt_date	date
+KAN_20250401_for_LGD_Fenix	default_date	date
+KAN_20250401_for_LGD_Fenix	health_date2	date
+KAN_20250401_for_LGD_Fenix	default_date_old	date
+KAN_20250401_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250401_for_LGD_Fenix	poci_date	date
+KAN_20250401_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250401_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250401_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250401_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250401_restructura	contract_number	nvarchar
+KAN_20250401_restructura	restructura_date	date
+KAN_20250401_restructura	restructura_date2	date
+KAN_20250401_restructura	restructura_date3	date
+KAN_20250401_restructura	restructura_date4	date
+KAN_20250401_restructura	restructura_date5	date
+KAN_20250401_restructura	restructura_date6	date
+KAN_20250401_restructura	restructura_date7	date
+KAN_20250401_restructura	restructura_date8	date
+KAN_20250401_restructura	restructura_date9	date
+KAN_20250401_restructura	restructura_date10	date
+KAN_20250401_restructura	restructura_date11	date
+KAN_20250401_restructura	комментарий	nvarchar
+KAN_20250501_for_LGD_Fenix	account_number	nvarchar
+KAN_20250501_for_LGD_Fenix	IIN	nvarchar
+KAN_20250501_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250501_for_LGD_Fenix	status	nvarchar
+KAN_20250501_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250501_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250501_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250501_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250501_for_LGD_Fenix	downPayment	float
+KAN_20250501_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250501_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250501_for_LGD_Fenix	activation_date	date
+KAN_20250501_for_LGD_Fenix	dead_convict	date
+KAN_20250501_for_LGD_Fenix	marcer	nvarchar
+KAN_20250501_for_LGD_Fenix	bankrupt_date	date
+KAN_20250501_for_LGD_Fenix	default_date	date
+KAN_20250501_for_LGD_Fenix	health_date2	date
+KAN_20250501_for_LGD_Fenix	default_date_old	date
+KAN_20250501_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250501_for_LGD_Fenix	poci_date	date
+KAN_20250501_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250501_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250501_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250501_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250501_restructura	contract_number	nvarchar
+KAN_20250501_restructura	restructura_date	date
+KAN_20250501_restructura	restructura_date2	date
+KAN_20250501_restructura	restructura_date3	date
+KAN_20250501_restructura	restructura_date4	date
+KAN_20250501_restructura	restructura_date5	date
+KAN_20250501_restructura	restructura_date6	date
+KAN_20250501_restructura	restructura_date7	date
+KAN_20250501_restructura	restructura_date8	date
+KAN_20250501_restructura	restructura_date9	date
+KAN_20250501_restructura	restructura_date10	date
+KAN_20250501_restructura	restructura_date11	date
+KAN_20250501_restructura	комментарий	nvarchar
+KAN_20250601_for_LGD_Fenix	account_number	nvarchar
+KAN_20250601_for_LGD_Fenix	IIN	nvarchar
+KAN_20250601_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250601_for_LGD_Fenix	status	nvarchar
+KAN_20250601_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250601_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250601_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250601_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250601_for_LGD_Fenix	downPayment	float
+KAN_20250601_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250601_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250601_for_LGD_Fenix	activation_date	date
+KAN_20250601_for_LGD_Fenix	dead_convict	date
+KAN_20250601_for_LGD_Fenix	marcer	nvarchar
+KAN_20250601_for_LGD_Fenix	bankrupt_date	date
+KAN_20250601_for_LGD_Fenix	default_date	date
+KAN_20250601_for_LGD_Fenix	health_date2	date
+KAN_20250601_for_LGD_Fenix	default_date_old	date
+KAN_20250601_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250601_for_LGD_Fenix	poci_date	date
+KAN_20250601_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250601_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250601_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250601_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250601_restructura	contract_number	nvarchar
+KAN_20250601_restructura	restructura_date	date
+KAN_20250601_restructura	restructura_date2	date
+KAN_20250601_restructura	restructura_date3	date
+KAN_20250601_restructura	restructura_date4	date
+KAN_20250601_restructura	restructura_date5	date
+KAN_20250601_restructura	restructura_date6	date
+KAN_20250601_restructura	restructura_date7	date
+KAN_20250601_restructura	restructura_date8	date
+KAN_20250601_restructura	restructura_date9	date
+KAN_20250601_restructura	restructura_date10	date
+KAN_20250601_restructura	restructura_date11	date
+KAN_20250601_restructura	комментарий	nvarchar
+KAN_20250701_for_LGD_Fenix	account_number	nvarchar
+KAN_20250701_for_LGD_Fenix	IIN	nvarchar
+KAN_20250701_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250701_for_LGD_Fenix	status	nvarchar
+KAN_20250701_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250701_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250701_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250701_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250701_for_LGD_Fenix	downPayment	float
+KAN_20250701_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250701_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250701_for_LGD_Fenix	activation_date	date
+KAN_20250701_for_LGD_Fenix	dead_convict	date
+KAN_20250701_for_LGD_Fenix	marcer	nvarchar
+KAN_20250701_for_LGD_Fenix	bankrupt_date	date
+KAN_20250701_for_LGD_Fenix	default_date	date
+KAN_20250701_for_LGD_Fenix	health_date2	date
+KAN_20250701_for_LGD_Fenix	default_date_old	date
+KAN_20250701_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250701_for_LGD_Fenix	poci_date	date
+KAN_20250701_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250701_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250701_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250701_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250701_restructura	contract_number	nvarchar
+KAN_20250701_restructura	restructura_date	date
+KAN_20250701_restructura	restructura_date2	date
+KAN_20250701_restructura	restructura_date3	date
+KAN_20250701_restructura	restructura_date4	date
+KAN_20250701_restructura	restructura_date5	date
+KAN_20250701_restructura	restructura_date6	date
+KAN_20250701_restructura	restructura_date7	date
+KAN_20250701_restructura	restructura_date8	date
+KAN_20250701_restructura	restructura_date9	date
+KAN_20250701_restructura	restructura_date10	date
+KAN_20250701_restructura	restructura_date11	date
+KAN_20250701_restructura	комментарий	nvarchar
+KAN_20250801_for_LGD_Fenix	account_number	nvarchar
+KAN_20250801_for_LGD_Fenix	IIN	nvarchar
+KAN_20250801_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250801_for_LGD_Fenix	status	nvarchar
+KAN_20250801_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250801_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250801_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250801_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250801_for_LGD_Fenix	downPayment	float
+KAN_20250801_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250801_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250801_for_LGD_Fenix	activation_date	date
+KAN_20250801_for_LGD_Fenix	dead_convict	date
+KAN_20250801_for_LGD_Fenix	marcer	nvarchar
+KAN_20250801_for_LGD_Fenix	bankrupt_date	date
+KAN_20250801_for_LGD_Fenix	default_date	date
+KAN_20250801_for_LGD_Fenix	health_date2	date
+KAN_20250801_for_LGD_Fenix	default_date_old	date
+KAN_20250801_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250801_for_LGD_Fenix	poci_date	date
+KAN_20250801_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250801_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250801_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250801_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250801_restructura	contract_number	nvarchar
+KAN_20250801_restructura	restructura_date	date
+KAN_20250801_restructura	restructura_date2	date
+KAN_20250801_restructura	restructura_date3	date
+KAN_20250801_restructura	restructura_date4	date
+KAN_20250801_restructura	restructura_date5	date
+KAN_20250801_restructura	restructura_date6	date
+KAN_20250801_restructura	restructura_date7	date
+KAN_20250801_restructura	restructura_date8	date
+KAN_20250801_restructura	restructura_date9	date
+KAN_20250801_restructura	restructura_date10	date
+KAN_20250801_restructura	restructura_date11	date
+KAN_20250801_restructura	комментарий	nvarchar
+KAN_20250901_for_LGD_Fenix	account_number	nvarchar
+KAN_20250901_for_LGD_Fenix	IIN	nvarchar
+KAN_20250901_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20250901_for_LGD_Fenix	status	nvarchar
+KAN_20250901_for_LGD_Fenix	subproduct	nvarchar
+KAN_20250901_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20250901_for_LGD_Fenix	DURATION	nvarchar
+KAN_20250901_for_LGD_Fenix	CAR_PRICE	float
+KAN_20250901_for_LGD_Fenix	downPayment	float
+KAN_20250901_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20250901_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20250901_for_LGD_Fenix	activation_date	date
+KAN_20250901_for_LGD_Fenix	dead_convict	date
+KAN_20250901_for_LGD_Fenix	marcer	nvarchar
+KAN_20250901_for_LGD_Fenix	bankrupt_date	date
+KAN_20250901_for_LGD_Fenix	default_date	date
+KAN_20250901_for_LGD_Fenix	health_date2	date
+KAN_20250901_for_LGD_Fenix	default_date_old	date
+KAN_20250901_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20250901_for_LGD_Fenix	poci_date	date
+KAN_20250901_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20250901_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20250901_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20250901_for_LGD_Fenix	примечание 	nvarchar
+KAN_20250901_restructura	contract_number	nvarchar
+KAN_20250901_restructura	restructura_date	date
+KAN_20250901_restructura	restructura_date2	date
+KAN_20250901_restructura	restructura_date3	date
+KAN_20250901_restructura	restructura_date4	date
+KAN_20250901_restructura	restructura_date5	date
+KAN_20250901_restructura	restructura_date6	date
+KAN_20250901_restructura	restructura_date7	date
+KAN_20250901_restructura	restructura_date8	date
+KAN_20250901_restructura	restructura_date9	date
+KAN_20250901_restructura	restructura_date10	date
+KAN_20250901_restructura	restructura_date11	date
+KAN_20250901_restructura	комментарий	nvarchar
+KAN_20251001_for_LGD_Fenix	account_number	nvarchar
+KAN_20251001_for_LGD_Fenix	IIN	nvarchar
+KAN_20251001_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20251001_for_LGD_Fenix	status	nvarchar
+KAN_20251001_for_LGD_Fenix	subproduct	nvarchar
+KAN_20251001_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20251001_for_LGD_Fenix	DURATION	nvarchar
+KAN_20251001_for_LGD_Fenix	CAR_PRICE	float
+KAN_20251001_for_LGD_Fenix	downPayment	float
+KAN_20251001_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20251001_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20251001_for_LGD_Fenix	activation_date	date
+KAN_20251001_for_LGD_Fenix	dead_convict	date
+KAN_20251001_for_LGD_Fenix	marcer	nvarchar
+KAN_20251001_for_LGD_Fenix	bankrupt_date	date
+KAN_20251001_for_LGD_Fenix	default_date	date
+KAN_20251001_for_LGD_Fenix	health_date2	date
+KAN_20251001_for_LGD_Fenix	default_date_old	date
+KAN_20251001_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20251001_for_LGD_Fenix	poci_date	date
+KAN_20251001_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20251001_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20251001_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20251001_for_LGD_Fenix	примечание 	nvarchar
+KAN_20251001_restructura	contract_number	nvarchar
+KAN_20251001_restructura	restructura_date	date
+KAN_20251001_restructura	restructura_date2	date
+KAN_20251001_restructura	restructura_date3	date
+KAN_20251001_restructura	restructura_date4	date
+KAN_20251001_restructura	restructura_date5	date
+KAN_20251001_restructura	restructura_date6	date
+KAN_20251001_restructura	restructura_date7	date
+KAN_20251001_restructura	restructura_date8	date
+KAN_20251001_restructura	restructura_date9	date
+KAN_20251001_restructura	restructura_date10	date
+KAN_20251001_restructura	restructura_date11	date
+KAN_20251001_restructura	комментарий	nvarchar
+KAN_20251101_for_LGD_Fenix	account_number	nvarchar
+KAN_20251101_for_LGD_Fenix	IIN	nvarchar
+KAN_20251101_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20251101_for_LGD_Fenix	status	nvarchar
+KAN_20251101_for_LGD_Fenix	subproduct	nvarchar
+KAN_20251101_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20251101_for_LGD_Fenix	DURATION	nvarchar
+KAN_20251101_for_LGD_Fenix	CAR_PRICE	float
+KAN_20251101_for_LGD_Fenix	downPayment	float
+KAN_20251101_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20251101_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20251101_for_LGD_Fenix	activation_date	date
+KAN_20251101_for_LGD_Fenix	dead_convict	date
+KAN_20251101_for_LGD_Fenix	marcer	nvarchar
+KAN_20251101_for_LGD_Fenix	bankrupt_date	date
+KAN_20251101_for_LGD_Fenix	default_date	date
+KAN_20251101_for_LGD_Fenix	health_date2	date
+KAN_20251101_for_LGD_Fenix	default_date_old	date
+KAN_20251101_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20251101_for_LGD_Fenix	poci_date	date
+KAN_20251101_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20251101_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20251101_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20251101_for_LGD_Fenix	примечание 	nvarchar
+KAN_20251101_restructura	contract_number	nvarchar
+KAN_20251101_restructura	restructura_date	date
+KAN_20251101_restructura	restructura_date2	date
+KAN_20251101_restructura	restructura_date3	date
+KAN_20251101_restructura	restructura_date4	date
+KAN_20251101_restructura	restructura_date5	date
+KAN_20251101_restructura	restructura_date6	date
+KAN_20251101_restructura	restructura_date7	date
+KAN_20251101_restructura	restructura_date8	date
+KAN_20251101_restructura	restructura_date9	date
+KAN_20251101_restructura	restructura_date10	date
+KAN_20251101_restructura	restructura_date11	date
+KAN_20251101_restructura	комментарий	nvarchar
+KAN_20251201_for_LGD_Fenix	account_number	nvarchar
+KAN_20251201_for_LGD_Fenix	IIN	nvarchar
+KAN_20251201_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20251201_for_LGD_Fenix	status	nvarchar
+KAN_20251201_for_LGD_Fenix	subproduct	nvarchar
+KAN_20251201_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20251201_for_LGD_Fenix	DURATION	nvarchar
+KAN_20251201_for_LGD_Fenix	CAR_PRICE	float
+KAN_20251201_for_LGD_Fenix	downPayment	float
+KAN_20251201_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20251201_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20251201_for_LGD_Fenix	activation_date	date
+KAN_20251201_for_LGD_Fenix	dead_convict	date
+KAN_20251201_for_LGD_Fenix	marcer	nvarchar
+KAN_20251201_for_LGD_Fenix	bankrupt_date	date
+KAN_20251201_for_LGD_Fenix	default_date	date
+KAN_20251201_for_LGD_Fenix	health_date2	date
+KAN_20251201_for_LGD_Fenix	default_date_old	date
+KAN_20251201_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20251201_for_LGD_Fenix	poci_date	date
+KAN_20251201_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20251201_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20251201_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20251201_for_LGD_Fenix	примечание 	nvarchar
+KAN_20251201_restructura	contract_number	nvarchar
+KAN_20251201_restructura	restructura_date	date
+KAN_20251201_restructura	restructura_date2	date
+KAN_20251201_restructura	restructura_date3	date
+KAN_20251201_restructura	restructura_date4	date
+KAN_20251201_restructura	restructura_date5	date
+KAN_20251201_restructura	restructura_date6	date
+KAN_20251201_restructura	restructura_date7	date
+KAN_20251201_restructura	restructura_date8	date
+KAN_20251201_restructura	restructura_date9	date
+KAN_20251201_restructura	restructura_date10	date
+KAN_20251201_restructura	restructura_date11	date
+KAN_20251201_restructura	комментарий	nvarchar
+KAN_20260101_for_LGD_Fenix	account_number	nvarchar
+KAN_20260101_for_LGD_Fenix	IIN	nvarchar
+KAN_20260101_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20260101_for_LGD_Fenix	status	nvarchar
+KAN_20260101_for_LGD_Fenix	subproduct	nvarchar
+KAN_20260101_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20260101_for_LGD_Fenix	DURATION	nvarchar
+KAN_20260101_for_LGD_Fenix	CAR_PRICE	float
+KAN_20260101_for_LGD_Fenix	downPayment	float
+KAN_20260101_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20260101_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20260101_for_LGD_Fenix	activation_date	date
+KAN_20260101_for_LGD_Fenix	dead_convict	date
+KAN_20260101_for_LGD_Fenix	marcer	nvarchar
+KAN_20260101_for_LGD_Fenix	bankrupt_date	date
+KAN_20260101_for_LGD_Fenix	default_date	date
+KAN_20260101_for_LGD_Fenix	health_date2	date
+KAN_20260101_for_LGD_Fenix	default_date_old	date
+KAN_20260101_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20260101_for_LGD_Fenix	poci_date	date
+KAN_20260101_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20260101_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20260101_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20260101_for_LGD_Fenix	примечание 	nvarchar
+KAN_20260101_restructura	contract_number	nvarchar
+KAN_20260101_restructura	restructura_date	date
+KAN_20260101_restructura	restructura_date2	date
+KAN_20260101_restructura	restructura_date3	date
+KAN_20260101_restructura	restructura_date4	date
+KAN_20260101_restructura	restructura_date5	date
+KAN_20260101_restructura	restructura_date6	date
+KAN_20260101_restructura	restructura_date7	date
+KAN_20260101_restructura	restructura_date8	date
+KAN_20260101_restructura	restructura_date9	date
+KAN_20260101_restructura	restructura_date10	date
+KAN_20260101_restructura	restructura_date11	date
+KAN_20260101_restructura	комментарий	nvarchar
+KAN_20260201_for_LGD_Fenix	account_number	nvarchar
+KAN_20260201_for_LGD_Fenix	IIN	nvarchar
+KAN_20260201_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20260201_for_LGD_Fenix	status	nvarchar
+KAN_20260201_for_LGD_Fenix	subproduct	nvarchar
+KAN_20260201_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20260201_for_LGD_Fenix	DURATION	nvarchar
+KAN_20260201_for_LGD_Fenix	CAR_PRICE	float
+KAN_20260201_for_LGD_Fenix	downPayment	float
+KAN_20260201_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20260201_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20260201_for_LGD_Fenix	activation_date	date
+KAN_20260201_for_LGD_Fenix	dead_convict	date
+KAN_20260201_for_LGD_Fenix	marcer	nvarchar
+KAN_20260201_for_LGD_Fenix	bankrupt_date	date
+KAN_20260201_for_LGD_Fenix	default_date	date
+KAN_20260201_for_LGD_Fenix	health_date2	date
+KAN_20260201_for_LGD_Fenix	default_date_old	date
+KAN_20260201_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20260201_for_LGD_Fenix	poci_date	date
+KAN_20260201_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20260201_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20260201_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20260201_for_LGD_Fenix	примечание 	nvarchar
+KAN_20260201_restructura	contract_number	nvarchar
+KAN_20260201_restructura	restructura_date	date
+KAN_20260201_restructura	restructura_date2	date
+KAN_20260201_restructura	restructura_date3	date
+KAN_20260201_restructura	restructura_date4	date
+KAN_20260201_restructura	restructura_date5	date
+KAN_20260201_restructura	restructura_date6	date
+KAN_20260201_restructura	restructura_date7	date
+KAN_20260201_restructura	restructura_date8	date
+KAN_20260201_restructura	restructura_date9	date
+KAN_20260201_restructura	restructura_date10	date
+KAN_20260201_restructura	restructura_date11	date
+KAN_20260201_restructura	комментарий	nvarchar
+KAN_20260301_for_LGD_Fenix	account_number	nvarchar
+KAN_20260301_for_LGD_Fenix	IIN	nvarchar
+KAN_20260301_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20260301_for_LGD_Fenix	status	nvarchar
+KAN_20260301_for_LGD_Fenix	subproduct	nvarchar
+KAN_20260301_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20260301_for_LGD_Fenix	DURATION	nvarchar
+KAN_20260301_for_LGD_Fenix	CAR_PRICE	float
+KAN_20260301_for_LGD_Fenix	downPayment	float
+KAN_20260301_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20260301_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20260301_for_LGD_Fenix	activation_date	date
+KAN_20260301_for_LGD_Fenix	dead_convict	date
+KAN_20260301_for_LGD_Fenix	marcer	nvarchar
+KAN_20260301_for_LGD_Fenix	bankrupt_date	date
+KAN_20260301_for_LGD_Fenix	default_date	date
+KAN_20260301_for_LGD_Fenix	health_date2	date
+KAN_20260301_for_LGD_Fenix	default_date_old	date
+KAN_20260301_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20260301_for_LGD_Fenix	poci_date	date
+KAN_20260301_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20260301_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20260301_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20260301_for_LGD_Fenix	примечание 	nvarchar
+KAN_20260301_restructura	contract_number	nvarchar
+KAN_20260301_restructura	restructura_date	date
+KAN_20260301_restructura	restructura_date2	date
+KAN_20260301_restructura	restructura_date3	date
+KAN_20260301_restructura	restructura_date4	date
+KAN_20260301_restructura	restructura_date5	date
+KAN_20260301_restructura	restructura_date6	date
+KAN_20260301_restructura	restructura_date7	date
+KAN_20260301_restructura	restructura_date8	date
+KAN_20260301_restructura	restructura_date9	date
+KAN_20260301_restructura	restructura_date10	date
+KAN_20260301_restructura	restructura_date11	date
+KAN_20260301_restructura	комментарий	nvarchar
+KAN_20260401_for_LGD_Fenix	account_number	nvarchar
+KAN_20260401_for_LGD_Fenix	IIN	nvarchar
+KAN_20260401_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20260401_for_LGD_Fenix	status	nvarchar
+KAN_20260401_for_LGD_Fenix	subproduct	nvarchar
+KAN_20260401_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20260401_for_LGD_Fenix	DURATION	nvarchar
+KAN_20260401_for_LGD_Fenix	CAR_PRICE	float
+KAN_20260401_for_LGD_Fenix	downPayment	float
+KAN_20260401_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20260401_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20260401_for_LGD_Fenix	activation_date	date
+KAN_20260401_for_LGD_Fenix	dead_convict	date
+KAN_20260401_for_LGD_Fenix	marcer	nvarchar
+KAN_20260401_for_LGD_Fenix	bankrupt_date	date
+KAN_20260401_for_LGD_Fenix	default_date	date
+KAN_20260401_for_LGD_Fenix	health_date2	date
+KAN_20260401_for_LGD_Fenix	default_date_old	date
+KAN_20260401_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20260401_for_LGD_Fenix	poci_date	date
+KAN_20260401_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20260401_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20260401_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20260401_for_LGD_Fenix	примечание 	nvarchar
+KAN_20260401_restructura	contract_number	nvarchar
+KAN_20260401_restructura	restructura_date	date
+KAN_20260401_restructura	restructura_date2	date
+KAN_20260401_restructura	restructura_date3	date
+KAN_20260401_restructura	restructura_date4	date
+KAN_20260401_restructura	restructura_date5	date
+KAN_20260401_restructura	restructura_date6	date
+KAN_20260401_restructura	restructura_date7	date
+KAN_20260401_restructura	restructura_date8	date
+KAN_20260401_restructura	restructura_date9	date
+KAN_20260401_restructura	restructura_date10	date
+KAN_20260401_restructura	restructura_date11	date
+KAN_20260401_restructura	комментарий	nvarchar
+KAN_20260501_for_LGD_Fenix	account_number	nvarchar
+KAN_20260501_for_LGD_Fenix	IIN	nvarchar
+KAN_20260501_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20260501_for_LGD_Fenix	status	nvarchar
+KAN_20260501_for_LGD_Fenix	subproduct	nvarchar
+KAN_20260501_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20260501_for_LGD_Fenix	DURATION	nvarchar
+KAN_20260501_for_LGD_Fenix	CAR_PRICE	float
+KAN_20260501_for_LGD_Fenix	downPayment	float
+KAN_20260501_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20260501_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20260501_for_LGD_Fenix	activation_date	date
+KAN_20260501_for_LGD_Fenix	dead_convict	date
+KAN_20260501_for_LGD_Fenix	marcer	nvarchar
+KAN_20260501_for_LGD_Fenix	bankrupt_date	date
+KAN_20260501_for_LGD_Fenix	default_date	date
+KAN_20260501_for_LGD_Fenix	health_date2	date
+KAN_20260501_for_LGD_Fenix	default_date_old	date
+KAN_20260501_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20260501_for_LGD_Fenix	poci_date	date
+KAN_20260501_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20260501_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20260501_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20260501_for_LGD_Fenix	примечание 	nvarchar
+KAN_20260501_for_LGD_Fenix_old	account_number	nvarchar
+KAN_20260501_for_LGD_Fenix_old	IIN	nvarchar
+KAN_20260501_for_LGD_Fenix_old	FACT_CLOSE_DATE_b4	date
+KAN_20260501_for_LGD_Fenix_old	status	nvarchar
+KAN_20260501_for_LGD_Fenix_old	subproduct	nvarchar
+KAN_20260501_for_LGD_Fenix_old	TARIFF	nvarchar
+KAN_20260501_for_LGD_Fenix_old	DURATION	nvarchar
+KAN_20260501_for_LGD_Fenix_old	CAR_PRICE	float
+KAN_20260501_for_LGD_Fenix_old	downPayment	float
+KAN_20260501_for_LGD_Fenix_old	LOAN_AMOUNT	float
+KAN_20260501_for_LGD_Fenix_old	FIRST_PAYMENT_DATE	date
+KAN_20260501_for_LGD_Fenix_old	activation_date	date
+KAN_20260501_for_LGD_Fenix_old	dead_convict	date
+KAN_20260501_for_LGD_Fenix_old	marcer	nvarchar
+KAN_20260501_for_LGD_Fenix_old	bankrupt_date	date
+KAN_20260501_for_LGD_Fenix_old	default_date	date
+KAN_20260501_for_LGD_Fenix_old	health_date2	date
+KAN_20260501_for_LGD_Fenix_old	default_date_old	date
+KAN_20260501_for_LGD_Fenix_old	дата окончания реструктуры	date
+KAN_20260501_for_LGD_Fenix_old	poci_date	date
+KAN_20260501_for_LGD_Fenix_old	trigger_первый	nvarchar
+KAN_20260501_for_LGD_Fenix_old	trigger_последующий	nvarchar
+KAN_20260501_for_LGD_Fenix_old	trigger на тек дату	nvarchar
+KAN_20260501_for_LGD_Fenix_old	примечание 	nvarchar
+KAN_20260501_restructura	contract_number	nvarchar
+KAN_20260501_restructura	restructura_date	date
+KAN_20260501_restructura	restructura_date2	date
+KAN_20260501_restructura	restructura_date3	date
+KAN_20260501_restructura	restructura_date4	date
+KAN_20260501_restructura	restructura_date5	date
+KAN_20260501_restructura	restructura_date6	date
+KAN_20260501_restructura	restructura_date7	date
+KAN_20260501_restructura	restructura_date8	date
+KAN_20260501_restructura	restructura_date9	date
+KAN_20260501_restructura	restructura_date10	date
+KAN_20260501_restructura	restructura_date11	date
+KAN_20260501_restructura	комментарий	nvarchar
+KAN_20260601_for_LGD_Fenix	account_number	nvarchar
+KAN_20260601_for_LGD_Fenix	IIN	nvarchar
+KAN_20260601_for_LGD_Fenix	FACT_CLOSE_DATE_b4	date
+KAN_20260601_for_LGD_Fenix	status	nvarchar
+KAN_20260601_for_LGD_Fenix	subproduct	nvarchar
+KAN_20260601_for_LGD_Fenix	TARIFF	nvarchar
+KAN_20260601_for_LGD_Fenix	DURATION	nvarchar
+KAN_20260601_for_LGD_Fenix	CAR_PRICE	float
+KAN_20260601_for_LGD_Fenix	downPayment	float
+KAN_20260601_for_LGD_Fenix	LOAN_AMOUNT	float
+KAN_20260601_for_LGD_Fenix	FIRST_PAYMENT_DATE	date
+KAN_20260601_for_LGD_Fenix	activation_date	date
+KAN_20260601_for_LGD_Fenix	dead_convict	date
+KAN_20260601_for_LGD_Fenix	marcer	nvarchar
+KAN_20260601_for_LGD_Fenix	bankrupt_date	date
+KAN_20260601_for_LGD_Fenix	default_date	date
+KAN_20260601_for_LGD_Fenix	health_date2	date
+KAN_20260601_for_LGD_Fenix	default_date_old	date
+KAN_20260601_for_LGD_Fenix	дата окончания реструктуры	date
+KAN_20260601_for_LGD_Fenix	poci_date	date
+KAN_20260601_for_LGD_Fenix	trigger_первый	nvarchar
+KAN_20260601_for_LGD_Fenix	trigger_последующий	nvarchar
+KAN_20260601_for_LGD_Fenix	trigger на тек дату	nvarchar
+KAN_20260601_for_LGD_Fenix	примечание 	nvarchar
+KAN_20260601_restructura	contract_number	nvarchar
+KAN_20260601_restructura	restructura_date	date
+KAN_20260601_restructura	restructura_date2	date
+KAN_20260601_restructura	restructura_date3	date
+KAN_20260601_restructura	restructura_date4	date
+KAN_20260601_restructura	restructura_date5	date
+KAN_20260601_restructura	restructura_date6	date
+KAN_20260601_restructura	restructura_date7	date
+KAN_20260601_restructura	restructura_date8	date
+KAN_20260601_restructura	restructura_date9	date
+KAN_20260601_restructura	restructura_date10	date
+KAN_20260601_restructura	restructura_date11	date
+KAN_20260601_restructura	комментарий	nvarchar
+KAN_20260701_restructura	contract_number	nvarchar
+KAN_20260701_restructura	restructura_date	date
+KAN_20260701_restructura	restructura_date2	date
+KAN_20260701_restructura	restructura_date3	date
+KAN_20260701_restructura	restructura_date4	date
+KAN_20260701_restructura	restructura_date5	date
+KAN_20260701_restructura	restructura_date6	date
+KAN_20260701_restructura	restructura_date7	date
+KAN_20260701_restructura	restructura_date8	date
+KAN_20260701_restructura	restructura_date9	date
+KAN_20260701_restructura	restructura_date10	date
+KAN_20260701_restructura	restructura_date11	date
+KAN_20260701_restructura	комментарий	nvarchar
+KAN_Base_for_LGD_AQR_v2_2018_12_01	account_number	nvarchar
+KAN_Base_for_LGD_AQR_v2_2018_12_01	FACT_CLOSE_DATE_b4	nvarchar
+KAN_Base_for_LGD_AQR_v2_2018_12_01	status	nvarchar
+KAN_Base_for_LGD_AQR_v2_2018_12_01	subproduct	nvarchar
+KAN_Base_for_LGD_AQR_v2_2018_12_01	FIRST_PAYMENT_DATE	nvarchar
+KAN_Base_for_LGD_AQR_v2_2018_12_01	activation_date	nvarchar
+KAN_Base_for_LGD_AQR_v2_2018_12_01	def_date	date
+KAN_Base_for_LGD_AQR_v2_2018_12_01	healthy_date_2	date
+KAN_Base_for_LGD_AQR_v2_2018_12_01	healthy_date_1	date
+KAN_Base_for_LGD_AQR_v2_2018_12_01	def_date_old	date
+KAN_Base_for_LGD_AQR_v2_2018_12_01	min_def_date	date
+KAN_Base_for_LGD_AQR_v2_2018_12_01	def_after	date
+KAN_Base_for_LGD_AQR_v2_2019_12_01	account_number	nvarchar
+KAN_Base_for_LGD_AQR_v2_2019_12_01	FACT_CLOSE_DATE_b4	nvarchar
+KAN_Base_for_LGD_AQR_v2_2019_12_01	status	nvarchar
+KAN_Base_for_LGD_AQR_v2_2019_12_01	subproduct	nvarchar
+KAN_Base_for_LGD_AQR_v2_2019_12_01	FIRST_PAYMENT_DATE	nvarchar
+KAN_Base_for_LGD_AQR_v2_2019_12_01	activation_date	nvarchar
+KAN_Base_for_LGD_AQR_v2_2019_12_01	def_date	date
+KAN_Base_for_LGD_AQR_v2_2019_12_01	healthy_date_2	date
+KAN_Base_for_LGD_AQR_v2_2019_12_01	healthy_date_1	date
+KAN_Base_for_LGD_AQR_v2_2019_12_01	def_date_old	date
+KAN_Base_for_LGD_AQR_v2_2019_12_01	min_def_date	date
+KAN_Base_for_LGD_AQR_v2_2019_12_01	def_after	date
+KAN_Base_for_LGD_AQR_v2_2020_12_01	account_number	nvarchar
+KAN_Base_for_LGD_AQR_v2_2020_12_01	FACT_CLOSE_DATE_b4	nvarchar
+KAN_Base_for_LGD_AQR_v2_2020_12_01	status	nvarchar
+KAN_Base_for_LGD_AQR_v2_2020_12_01	subproduct	nvarchar
+KAN_Base_for_LGD_AQR_v2_2020_12_01	FIRST_PAYMENT_DATE	nvarchar
+KAN_Base_for_LGD_AQR_v2_2020_12_01	activation_date	nvarchar
+KAN_Base_for_LGD_AQR_v2_2020_12_01	def_date	date
+KAN_Base_for_LGD_AQR_v2_2020_12_01	healthy_date_2	date
+KAN_Base_for_LGD_AQR_v2_2020_12_01	healthy_date_1	date
+KAN_Base_for_LGD_AQR_v2_2020_12_01	def_date_old	date
+KAN_Base_for_LGD_AQR_v2_2020_12_01	min_def_date	date
+KAN_contract_basket	contract	nvarchar
+KAN_contract_basket	basket	numeric
+KAN_contract_basket	date	date
+KAN_dead_convict_AQR	contract	nvarchar
+KAN_dead_convict_AQR	marker	nvarchar
+KAN_dead_convict_AQR	status_date	date
+KAN_DEF_for_POCI	ACCOUNT_NUMBER	nvarchar
+KAN_for_LGD_Fenix_bi_di	account_number	nvarchar
+KAN_for_LGD_Fenix_bi_di	IIN	nvarchar
+KAN_for_LGD_Fenix_bi_di	FACT_CLOSE_DATE_b4	date
+KAN_for_LGD_Fenix_bi_di	status	nvarchar
+KAN_for_LGD_Fenix_bi_di	subproduct	nvarchar
+KAN_for_LGD_Fenix_bi_di	TARIFF	nvarchar
+KAN_for_LGD_Fenix_bi_di	DURATION	nvarchar
+KAN_for_LGD_Fenix_bi_di	CAR_PRICE	float
+KAN_for_LGD_Fenix_bi_di	downPayment	float
+KAN_for_LGD_Fenix_bi_di	LOAN_AMOUNT	float
+KAN_for_LGD_Fenix_bi_di	FIRST_PAYMENT_DATE	date
+KAN_for_LGD_Fenix_bi_di	activation_date	date
+KAN_for_LGD_Fenix_bi_di	dead_convict	date
+KAN_for_LGD_Fenix_bi_di	marcer	nvarchar
+KAN_for_LGD_Fenix_bi_di	bankrupt_date	date
+KAN_for_LGD_Fenix_bi_di	default_date	date
+KAN_for_LGD_Fenix_bi_di	health_date2	date
+KAN_for_LGD_Fenix_bi_di	default_date_old	date
+KAN_for_LGD_Fenix_bi_di	дата окончания реструктуры	date
+KAN_for_LGD_Fenix_bi_di	poci_date	date
+KAN_for_LGD_Fenix_bi_di	trigger_первый	nvarchar
+KAN_for_LGD_Fenix_bi_di	trigger_последующий	nvarchar
+KAN_for_LGD_Fenix_bi_di	trigger на тек дату	nvarchar
+KAN_for_LGD_Fenix_bi_di	примечание 	nvarchar
+KAN_min_def_macro_AQR	account_number	nvarchar
+KAN_min_def_macro_AQR	FACT_CLOSE_DATE_b4	date
+KAN_min_def_macro_AQR	subproduct	date
+KAN_min_def_macro_AQR	FIRST_PAYMENT_DATE	date
+KAN_min_def_macro_AQR	def_date	date
+KAN_min_def_macro_AQR	healthy_date_2	date
+KAN_min_def_macro_AQR	def_date_old	date
+KAN_min_def_macro_AQR	def_date_min	date
+KAN_min_def_macro_AQR	90+	date
+KAN_min_def_macro_AQR	dead_convict	date
+KAN_min_def_macro_AQR	restructura_date_1	date
+KAN_min_def_macro_AQR	restructura_date_2	date
+KAN_min_def_macro_AQR	restructura_date_3	date
+KAN_min_def_macro_AQR	restructura_date_4	date
+KAN_min_def_macro_AQR	restructura_date_5	date
+KAN_min_def_macro_AQR	restructura_date_6	date
+KAN_min_def_macro_AQR	restructura_date_7	date
+KAN_min_def_macro_AQR	restructura_date_8	date
+KAN_min_def_macro_AQR	TERMINATION_DATE	date
+KAN_min_def_macro_AQR	Write_off_date	date
+KAN_min_def_macro_AQR	sale_date	date
+KAN_min_def_macro_AQR	actual_date	date
+KAN_PD_LGD_Product_Basket	Product	nvarchar
+KAN_PD_LGD_Product_Basket	PD	nvarchar
+KAN_PD_LGD_Product_Basket	LGD	nvarchar
+KAN_PD_LGD_Product_Basket	LGD+TV	nvarchar
+KAN_PD_LGD_Product_Basket	Basket	nvarchar
+KAN_PD_LGD_Product_Basket	Date	date
+KAN_percent_basket	Product	nvarchar
+KAN_percent_basket	percent	float
+KAN_percent_basket	date	date
+KAN_percent_basket	basket	numeric
+KAN_restr_AQR	iin	nvarchar
+KAN_restr_AQR	contract_number	nvarchar
+KAN_restr_AQR	restr_date_final_1	date
+KAN_restr_AQR	restr_date_final_2	date
+KAN_restr_AQR	restr_date_final_3	date
+KAN_restr_AQR	restr_date_final_4	date
+KAN_restr_AQR	restr_date_final_5	date
+KAN_restr_AQR	restr_date_final_6	date
+KAN_restr_AQR	restr_date_final_7	date
+KAN_restr_AQR	restr_date_final_8	date
+KAN_restr_AQR	months_grace_period_1	numeric
+KAN_restr_AQR	months_grace_period_2	numeric
+KAN_restr_AQR	months_grace_period_3	numeric
+KAN_restr_AQR	months_grace_period_4	numeric
+KAN_restr_AQR	months_grace_period_5	numeric
+KAN_restr_AQR	months_grace_period_6	numeric
+KAN_restr_AQR	months_grace_period_7	numeric
+KAN_restr_AQR	months_grace_period_8	numeric
+KAN_restr_AQR	coronovirus	nvarchar
+KAN_sale_KA_AQR	IIN	nvarchar
+KAN_sale_KA_AQR	contract_number	nvarchar
+KAN_sale_KA_AQR	sale_date	date
+KAN_sale_KA_AQR	discount	float
+KAN_termin_AQR	contract	nvarchar
+KAN_termin_AQR	TERMINATION_DATE	date
+KAN_URPZ_DEAD_01_01_2019	account_number	nvarchar
+KAN_URPZ_DEAD_01_01_2019	default_date	date
+KAN_URPZ_DEAD_01_01_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_01_2020	default_date	date
+KAN_URPZ_DEAD_01_01_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_01_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_01_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_01_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_01_2021	default_date	date
+KAN_URPZ_DEAD_01_01_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_01_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_01_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_01_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_01_2022	default_date	date
+KAN_URPZ_DEAD_01_01_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_01_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_01_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_01_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_01_2023	default_date	date
+KAN_URPZ_DEAD_01_01_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_01_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_01_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_01_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_01_2024	default_date	date
+KAN_URPZ_DEAD_01_01_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_01_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_01_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_01_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_01_2025	default_date	date
+KAN_URPZ_DEAD_01_01_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_01_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_01_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_01_2026	contract	nvarchar
+KAN_URPZ_DEAD_01_01_2026	default_date	date
+KAN_URPZ_DEAD_01_01_2026	marcer	nvarchar
+KAN_URPZ_DEAD_01_01_2026	iin	nvarchar
+KAN_URPZ_DEAD_01_01_2026	комменты	nvarchar
+KAN_URPZ_DEAD_01_02_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2019	default_date	date
+KAN_URPZ_DEAD_01_02_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2020	default_date	date
+KAN_URPZ_DEAD_01_02_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_02_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_02_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2021	default_date	date
+KAN_URPZ_DEAD_01_02_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_02_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_02_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2022	default_date	date
+KAN_URPZ_DEAD_01_02_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_02_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_02_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2023	default_date	date
+KAN_URPZ_DEAD_01_02_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_02_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_02_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2024	default_date	date
+KAN_URPZ_DEAD_01_02_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_02_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_02_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2025	default_date	date
+KAN_URPZ_DEAD_01_02_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_02_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_02_2026	contract	nvarchar
+KAN_URPZ_DEAD_01_02_2026	default_date	date
+KAN_URPZ_DEAD_01_02_2026	marcer	nvarchar
+KAN_URPZ_DEAD_01_02_2026	iin	nvarchar
+KAN_URPZ_DEAD_01_02_2026	комменты	nvarchar
+KAN_URPZ_DEAD_01_03_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2019	default_date	date
+KAN_URPZ_DEAD_01_03_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2020	default_date	date
+KAN_URPZ_DEAD_01_03_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_03_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_03_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2021	default_date	date
+KAN_URPZ_DEAD_01_03_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_03_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_03_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2022	default_date	date
+KAN_URPZ_DEAD_01_03_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_03_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_03_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2023	default_date	date
+KAN_URPZ_DEAD_01_03_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_03_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_03_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2024	default_date	date
+KAN_URPZ_DEAD_01_03_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_03_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_03_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2025	default_date	date
+KAN_URPZ_DEAD_01_03_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_03_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_03_2026	contract	nvarchar
+KAN_URPZ_DEAD_01_03_2026	default_date	date
+KAN_URPZ_DEAD_01_03_2026	marcer	nvarchar
+KAN_URPZ_DEAD_01_03_2026	iin	nvarchar
+KAN_URPZ_DEAD_01_03_2026	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2019	default_date	date
+KAN_URPZ_DEAD_01_04_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2020	default_date	date
+KAN_URPZ_DEAD_01_04_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2021	default_date	date
+KAN_URPZ_DEAD_01_04_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2021	Столбец 5	nvarchar
+KAN_URPZ_DEAD_01_04_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2022	default_date	date
+KAN_URPZ_DEAD_01_04_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2023	default_date	date
+KAN_URPZ_DEAD_01_04_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2024	default_date	date
+KAN_URPZ_DEAD_01_04_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2025	default_date	date
+KAN_URPZ_DEAD_01_04_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_04_2026	contract	nvarchar
+KAN_URPZ_DEAD_01_04_2026	default_date	date
+KAN_URPZ_DEAD_01_04_2026	marcer	nvarchar
+KAN_URPZ_DEAD_01_04_2026	iin	nvarchar
+KAN_URPZ_DEAD_01_04_2026	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2019	default_date	date
+KAN_URPZ_DEAD_01_05_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2020	default_date	date
+KAN_URPZ_DEAD_01_05_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2021	default_date	date
+KAN_URPZ_DEAD_01_05_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2022	default_date	date
+KAN_URPZ_DEAD_01_05_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2023	default_date	date
+KAN_URPZ_DEAD_01_05_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2024	default_date	date
+KAN_URPZ_DEAD_01_05_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2025	default_date	date
+KAN_URPZ_DEAD_01_05_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_05_2026	contract	nvarchar
+KAN_URPZ_DEAD_01_05_2026	default_date	date
+KAN_URPZ_DEAD_01_05_2026	marcer	nvarchar
+KAN_URPZ_DEAD_01_05_2026	iin	nvarchar
+KAN_URPZ_DEAD_01_05_2026	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2019	default_date	date
+KAN_URPZ_DEAD_01_06_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2020	default_date	date
+KAN_URPZ_DEAD_01_06_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2021	default_date	date
+KAN_URPZ_DEAD_01_06_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2022	default_date	date
+KAN_URPZ_DEAD_01_06_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2023	default_date	date
+KAN_URPZ_DEAD_01_06_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2024	default_date	date
+KAN_URPZ_DEAD_01_06_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2025	default_date	date
+KAN_URPZ_DEAD_01_06_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_06_2026	contract	nvarchar
+KAN_URPZ_DEAD_01_06_2026	default_date	date
+KAN_URPZ_DEAD_01_06_2026	marcer	nvarchar
+KAN_URPZ_DEAD_01_06_2026	iin	nvarchar
+KAN_URPZ_DEAD_01_06_2026	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2019	default_date	date
+KAN_URPZ_DEAD_01_07_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2020	default_date	date
+KAN_URPZ_DEAD_01_07_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2021	default_date	date
+KAN_URPZ_DEAD_01_07_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2022	default_date	date
+KAN_URPZ_DEAD_01_07_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2023	default_date	date
+KAN_URPZ_DEAD_01_07_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2024	default_date	date
+KAN_URPZ_DEAD_01_07_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2025	default_date	date
+KAN_URPZ_DEAD_01_07_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_07_2026	contract	nvarchar
+KAN_URPZ_DEAD_01_07_2026	default_date	date
+KAN_URPZ_DEAD_01_07_2026	marcer	nvarchar
+KAN_URPZ_DEAD_01_07_2026	iin	nvarchar
+KAN_URPZ_DEAD_01_07_2026	комменты	nvarchar
+KAN_URPZ_DEAD_01_08_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_08_2019	default_date	date
+KAN_URPZ_DEAD_01_08_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_08_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_08_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_08_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_08_2020	default_date	date
+KAN_URPZ_DEAD_01_08_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_08_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_08_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_08_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_08_2021	default_date	date
+KAN_URPZ_DEAD_01_08_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_08_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_08_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_08_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_08_2022	default_date	date
+KAN_URPZ_DEAD_01_08_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_08_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_08_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_08_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_08_2023	default_date	date
+KAN_URPZ_DEAD_01_08_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_08_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_08_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_08_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_08_2024	default_date	date
+KAN_URPZ_DEAD_01_08_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_08_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_08_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_08_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_08_2025	default_date	date
+KAN_URPZ_DEAD_01_08_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_08_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_08_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_09_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_09_2019	default_date	date
+KAN_URPZ_DEAD_01_09_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_09_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_09_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_09_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_09_2020	default_date	date
+KAN_URPZ_DEAD_01_09_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_09_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_09_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_09_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_09_2021	default_date	date
+KAN_URPZ_DEAD_01_09_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_09_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_09_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_09_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_09_2022	default_date	date
+KAN_URPZ_DEAD_01_09_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_09_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_09_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_09_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_09_2023	default_date	date
+KAN_URPZ_DEAD_01_09_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_09_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_09_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_09_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_09_2024	default_date	date
+KAN_URPZ_DEAD_01_09_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_09_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_09_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_09_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_09_2025	default_date	date
+KAN_URPZ_DEAD_01_09_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_09_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_09_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_10_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_10_2019	default_date	date
+KAN_URPZ_DEAD_01_10_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_10_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_10_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_10_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_10_2020	default_date	date
+KAN_URPZ_DEAD_01_10_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_10_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_10_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_10_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_10_2021	default_date	date
+KAN_URPZ_DEAD_01_10_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_10_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_10_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_10_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_10_2022	default_date	date
+KAN_URPZ_DEAD_01_10_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_10_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_10_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_10_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_10_2023	default_date	date
+KAN_URPZ_DEAD_01_10_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_10_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_10_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_10_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_10_2024	default_date	date
+KAN_URPZ_DEAD_01_10_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_10_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_10_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_10_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_10_2025	default_date	date
+KAN_URPZ_DEAD_01_10_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_10_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_10_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_11_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_11_2019	default_date	date
+KAN_URPZ_DEAD_01_11_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_11_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_11_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_11_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_11_2020	default_date	date
+KAN_URPZ_DEAD_01_11_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_11_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_11_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_11_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_11_2021	default_date	date
+KAN_URPZ_DEAD_01_11_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_11_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_11_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_11_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_11_2022	default_date	date
+KAN_URPZ_DEAD_01_11_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_11_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_11_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_11_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_11_2023	default_date	date
+KAN_URPZ_DEAD_01_11_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_11_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_11_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_11_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_11_2024	default_date	date
+KAN_URPZ_DEAD_01_11_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_11_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_11_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_11_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_11_2025	default_date	date
+KAN_URPZ_DEAD_01_11_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_11_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_11_2025	комменты	nvarchar
+KAN_URPZ_DEAD_01_12_2019	contract	nvarchar
+KAN_URPZ_DEAD_01_12_2019	default_date	date
+KAN_URPZ_DEAD_01_12_2019	marcer	nvarchar
+KAN_URPZ_DEAD_01_12_2019	iin	nvarchar
+KAN_URPZ_DEAD_01_12_2019	комменты	nvarchar
+KAN_URPZ_DEAD_01_12_2020	contract	nvarchar
+KAN_URPZ_DEAD_01_12_2020	default_date	date
+KAN_URPZ_DEAD_01_12_2020	marcer	nvarchar
+KAN_URPZ_DEAD_01_12_2020	iin	nvarchar
+KAN_URPZ_DEAD_01_12_2020	комменты	nvarchar
+KAN_URPZ_DEAD_01_12_2021	contract	nvarchar
+KAN_URPZ_DEAD_01_12_2021	default_date	date
+KAN_URPZ_DEAD_01_12_2021	marcer	nvarchar
+KAN_URPZ_DEAD_01_12_2021	iin	nvarchar
+KAN_URPZ_DEAD_01_12_2021	комменты	nvarchar
+KAN_URPZ_DEAD_01_12_2022	contract	nvarchar
+KAN_URPZ_DEAD_01_12_2022	default_date	date
+KAN_URPZ_DEAD_01_12_2022	marcer	nvarchar
+KAN_URPZ_DEAD_01_12_2022	iin	nvarchar
+KAN_URPZ_DEAD_01_12_2022	комменты	nvarchar
+KAN_URPZ_DEAD_01_12_2023	contract	nvarchar
+KAN_URPZ_DEAD_01_12_2023	default_date	date
+KAN_URPZ_DEAD_01_12_2023	marcer	nvarchar
+KAN_URPZ_DEAD_01_12_2023	iin	nvarchar
+KAN_URPZ_DEAD_01_12_2023	комменты	nvarchar
+KAN_URPZ_DEAD_01_12_2024	contract	nvarchar
+KAN_URPZ_DEAD_01_12_2024	default_date	date
+KAN_URPZ_DEAD_01_12_2024	marcer	nvarchar
+KAN_URPZ_DEAD_01_12_2024	iin	nvarchar
+KAN_URPZ_DEAD_01_12_2024	комменты	nvarchar
+KAN_URPZ_DEAD_01_12_2025	contract	nvarchar
+KAN_URPZ_DEAD_01_12_2025	default_date	date
+KAN_URPZ_DEAD_01_12_2025	marcer	nvarchar
+KAN_URPZ_DEAD_01_12_2025	iin	nvarchar
+KAN_URPZ_DEAD_01_12_2025	комменты	nvarchar
+KAN_write_off_AQR	CONTRACT_NUMBER	nvarchar
+KAN_write_off_AQR	IIN	nvarchar
+KAN_write_off_AQR	Write_off_date	date
+
+table_name	column_name	data_type
+kan_0101_rus	Account_Number	nvarchar
+kan_0101_rus	Default_Date	date
+kan_0101_rus	Health_Date2	date
+kan_0101_rus	Old_Default_Date	date
+kan_0101_rus	Max_Restructuring_Actual	date
+kan_0101_rus	Restructuring_End_Date	date
+kan_0101_rus	POCI_Date	date
+kan_0101_rus	Trigger_First	nvarchar
+kan_0101_rus	Trigger_Second	nvarchar
+kan_0101_rus	Trigger_Current_Date	nvarchar
+kan_0106_rus	Account_Number	nvarchar
+kan_0106_rus	Default_Date	date
+kan_0106_rus	Health_Date2	date
+kan_0106_rus	Old_Default_Date	date
+kan_0106_rus	Max_Restructuring_Actual	date
+kan_0106_rus	Restructuring_End_Date	date
+kan_0106_rus	POCI_Date	date
+kan_0106_rus	Trigger_First	nvarchar
+kan_0106_rus	Trigger_Second	nvarchar
+kan_0106_rus	Trigger_Current_Date	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	account_number	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	IIN	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	FACT_CLOSE_DATE_b4	date
+KAN_20250301_for_LGD_Fenix_DI_BI	status	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	subproduct	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	TARIFF	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	DURATION	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	CAR_PRICE	float
+KAN_20250301_for_LGD_Fenix_DI_BI	downPayment	float
+KAN_20250301_for_LGD_Fenix_DI_BI	LOAN_AMOUNT	float
+KAN_20250301_for_LGD_Fenix_DI_BI	FIRST_PAYMENT_DATE	date
+KAN_20250301_for_LGD_Fenix_DI_BI	activation_date	date
+KAN_20250301_for_LGD_Fenix_DI_BI	dead_convict	date
+KAN_20250301_for_LGD_Fenix_DI_BI	marcer	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	bankrupt_date	date
+KAN_20250301_for_LGD_Fenix_DI_BI	default_date	date
+KAN_20250301_for_LGD_Fenix_DI_BI	health_date2	date
+KAN_20250301_for_LGD_Fenix_DI_BI	default_date_old	date
+KAN_20250301_for_LGD_Fenix_DI_BI	дата окончания реструктуры	date
+KAN_20250301_for_LGD_Fenix_DI_BI	poci_date	date
+KAN_20250301_for_LGD_Fenix_DI_BI	trigger_первый	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	trigger_последующий	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	trigger на тек дату	nvarchar
+KAN_20250301_for_LGD_Fenix_DI_BI	примечание 	nvarchar
+KAN_all_retsr	contract_number	nvarchar
+KAN_all_retsr	date_restruk	date
+KAN_all_retsr	date_restruk2	date
+KAN_all_retsr	restruk_X	nvarchar
+KAN_all_retsr	fin_uhud	nvarchar
+KAN_all_retsr	primechanie	nvarchar
+KAN_all_retsr	covid	nvarchar
+KAN_all_retsr	date_restruk_end	date
+KAN_all_retsr	date_restruk_end2	date
+KAN_all_retsr	port	nvarchar
+KAN_all_retsr_covid	contract_number	nvarchar
+KAN_all_retsr_covid	date_restruk	nvarchar
+KAN_all_retsr_covid	date_restruk2	nvarchar
+KAN_all_retsr_covid	restruk_X	nvarchar
+KAN_all_retsr_covid	fin_uhud	nvarchar
+KAN_all_retsr_covid	primechanie	nvarchar
+KAN_all_retsr_covid	covid	nvarchar
+KAN_all_retsr_covid	date_restruk_end	nvarchar
+KAN_all_retsr_covid	date_restruk_end2	nvarchar
+KAN_all_retsr_covid	port	nvarchar
+KAN_restr_after_covid_07_10	contract	nvarchar
+KAN_restr_after_covid_07_10	rest_date	date
+KAN_restr_after_covid_07_10	port	nvarchar
+KAN_restr_after_covid_07_10	fin_uhud	nvarchar
+*/
+
+-------------------------------------------------------------------------------
+-- 2. Profile the 4 known candidates: row count, how many have a restructuring
+--    end date at all, and the date's own range (sanity: does it look like a
+--    real per-snapshot value, or a stale/frozen one?).
+--    ⚠ DB prefixes are a GUESS based on where the naming pattern matches the
+--    already-confirmed table (KAN_* → IFRS9, kan_*_rus → CL_PORTFOLIO). If a
+--    line errors with "invalid object name", move it to the other DB and re-run.
+-------------------------------------------------------------------------------
+SELECT 'KAN_20260601_for_LGD_Fenix' AS source_table,
+       COUNT(*)                                       AS rows_total,
+       COUNT([дата окончания реструктуры])             AS rows_with_restr_end_date,
+       MIN([дата окончания реструктуры])                AS min_date,
+       MAX([дата окончания реструктуры])                AS max_date
+FROM [IFRS9].[dbo].[KAN_20260601_for_LGD_Fenix]
+UNION ALL
+SELECT 'KAN_20250301_for_LGD_Fenix_DI_BI',
+       COUNT(*), COUNT([дата окончания реструктуры]),
+       MIN([дата окончания реструктуры]), MAX([дата окончания реструктуры])
+FROM [IFRS9].[dbo].[KAN_20250301_for_LGD_Fenix_DI_BI]
+UNION ALL
+SELECT 'kan_0101_rus',
+       COUNT(*), COUNT([Restructuring_End_Date]),
+       MIN([Restructuring_End_Date]), MAX([Restructuring_End_Date])
+FROM [CL_PORTFOLIO].[dbo].[kan_0101_rus]
+UNION ALL
+SELECT 'kan_0106_rus',
+       COUNT(*), COUNT([Restructuring_End_Date]),
+       MIN([Restructuring_End_Date]), MAX([Restructuring_End_Date])
+FROM [CL_PORTFOLIO].[dbo].[kan_0106_rus];
+
+/*
+Msg 208, Level 16, State 1, Line 1
+Invalid object name 'IFRS9.dbo.KAN_20250301_for_LGD_Fenix_DI_BI'.
+
+
+source_table	rows_total	rows_with_restr_end_date	min_date	max_date
+KAN_20260601_for_LGD_Fenix	652169	192376	2015-10-01	2027-02-01
+kan_0101_rus	600598	321120	1899-12-30	2027-11-01
+kan_0106_rus	619822	177760	2015-10-01	2027-11-01
+*/
+
+-------------------------------------------------------------------------------
+-- 3. Hunt for suspension-period / cancellation inside the RS restructuring
+--    EVENT log (one row per field change — FIELD_NAME/FIELD_VALUE pairs).
+--    If a "приостан.../suspens.../моратор.../отмен.../cancel..." value shows
+--    up here, this table is the raw per-event source for §4 of
+--    stage3_raw_extract.sql (RS-sourced loans only — Fenix/CL would need
+--    their own equivalent, if one exists).
+-------------------------------------------------------------------------------
+SELECT DISTINCT [FIELD_NAME]
+FROM [CL_PORTFOLIO].[dbo].[Реструктуризация_RS$]
+ORDER BY [FIELD_NAME];
+
+/*FIELD_NAME
+Наличие реструктуризации*/
+-------------------------------------------------------------------------------
+-- 4. [Dictionaries] mart — only run if it appeared in §0c's sys.databases
+--    list (stage3_raw_extract.sql). `restructuring_v2` is documented as an
+--    EVENT table (one row per restructuring event) — exactly the shape
+--    needed for "last restructurization" + "cancellation", covering all
+--    source systems at once, if this login can actually reach it.
+-------------------------------------------------------------------------------
+SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE
+FROM [Dictionaries].INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'restructuring_v2'
+ORDER BY ORDINAL_POSITION;
+
+/*
+TABLE_NAME	COLUMN_NAME	DATA_TYPE
+restructuring_v2	dlcr_gid	bigint
+restructuring_v2	dlcr$source	nvarchar
+restructuring_v2	loan_id	nvarchar
+restructuring_v2	restructuring_date	date
+restructuring_v2	new_interest_rate	float
+restructuring_v2	days_past_due_at_restructuring	float
+restructuring_v2	new_maturity_date	date
+restructuring_v2	financial_deterioration_flag	nvarchar
+restructuring_v2	payment_deferral	float
+restructuring_v2	canc_date	date
+restructuring_v2	grace_od_begin_date	date
+restructuring_v2	grace_int_begin_date	date
+restructuring_v2	grace_od_end_date	date
+restructuring_v2	grace_int_end_date	date
+restructuring_v2	report_date	date
+*/
+-------------------------------------------------------------------------------
+-- Notes
+-------------------------------------------------------------------------------
+-- * Goal: pick ONE restructuring-end-date source with (a) full coverage across
+--   the trailing 12 report months and (b) a low NULL rate, before the 12-month
+--   safe-zone/re-default simulation is built on top of it. Whichever of §1-4
+--   wins, the actual monthly loan-by-loan extract (mirroring stage3_
+--   raw_extract.sql's pattern, one raw SELECT * per @AsOf) comes next.
+-- * Nothing here computes a threshold or a re-default rate yet — that's
+--   blocked on picking the source (this script) plus two methodology calls
+--   (restructuring-covered clean months in/out of the safe-zone pool; re-default
+--   monitoring horizon) that are the analyst's call, not a data question.
