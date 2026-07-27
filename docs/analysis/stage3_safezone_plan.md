@@ -161,15 +161,29 @@ counts match before moving to Phase C.
       observation opportunity, so the re-default rate falls mechanically
       toward the recent end and an elbow read off that curve is a
       censoring artifact, not a signal.
-      *Proposal:* fix a common horizon **K=6 months** from the portfolio
-      date (symmetric with the 6-month lookback); the main matrix uses only
-      cohorts with full runway — 08.2025–01.2026, six comparable columns —
-      and the remaining six are reported separately, labelled incomplete,
-      never plotted on the same line.
-- [ ] Build the **threshold × report-month re-default-rate matrix** over the
-      comparable cohorts, split further by restructuring state — and report
-      the `unknown` share per cell, since a split built mostly on `unknown`
-      months is not evidence about restructuring either way.
+      **Settled 27.07.2026: compute all three of K = 3, 6, 9** rather than
+      pick one. Each is a defensible reading of "how long must a loan stay
+      clean before the cure is durable", and the trade-off is visible in the
+      data rather than argued about — a longer horizon is stricter evidence
+      but costs cohorts, because only months with a full K of forward data
+      are comparable:
+
+      | K | Comparable cohorts | Which |
+      |---|---|---|
+      | 3 | 9 | 08.2025 – 04.2026 |
+      | 6 | 6 | 08.2025 – 01.2026 |
+      | 9 | 3 | 08.2025 – 10.2025 |
+
+      If the elbow sits at the same `n` under all three, the threshold is a
+      property of the portfolio and the finding is robust — which is the
+      answer worth having in front of a regulator. If it moves with K, `n*`
+      must always be quoted together with the horizon it was measured on.
+- [x] **Threshold × cohort matrices built** (`redefault_matrix`) for each K,
+      returning rate, denominator and censored-out count together — a rate
+      without its base invites reading 100% off two loans.
+- [ ] Split the matrix by restructuring state, reporting the `unknown` share
+      per cell: a split built mostly on `unknown` months is not evidence
+      about restructuring in either direction.
 - [ ] Visualize: re-default % vs. n, one line per report month (or a summary
       band) — pick the threshold at the **elbow** where re-default stops
       being flat and starts climbing, rather than a hard-coded cutoff.
@@ -211,8 +225,21 @@ counts match before moving to Phase C.
   `not_active`. Any restructured-vs-not comparison must report the `unknown`
   share alongside it; a segment whose `restr_unknown_pct` is material does
   not support a conclusion about restructuring, in either direction.
-- Re-default = first later month `category` returns to `'3'` **for any
-  reason** — first hit counts, no sustained-months requirement.
+- Re-default = first later month with **DPD ≥ 91** (`STAGE3_DPD_TRIGGER`) —
+  first hit counts, no sustained-months requirement.
+  *Revised 27.07.2026.* This item previously read "first later month
+  `category` returns to `'3'`", which is degenerate on this population: these
+  loans are **in** Stage 3 at the observation month precisely because the
+  current cure rule has not released them, so `category` is still `'3'` at
+  M+1 and every flagged loan would score as a re-default. The question being
+  asked is counterfactual — *had we cured this loan, would it have
+  deteriorated back to Stage 3 severity?* — and a DPD trigger answers it
+  without depending on the cure mechanics the study exists to change.
+  The category-based version is retained as a **cross-check**
+  (`redefault_category`: the loan must first leave Stage 3, then return). It
+  measures something real but only over loans today's rule already released
+  — a smaller, self-selected population — so it validates direction, never
+  sets the threshold.
 - Hypothesis 2's "downward trend" = **strict monotonic non-increasing** DPD
   across all 6 months.
 - A loan that exits the panel via sale/write-off/forgiveness (per
