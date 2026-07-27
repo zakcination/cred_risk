@@ -113,24 +113,24 @@ counts match before moving to Phase C.
       Real run 27.07.2026: **22 902 rows, 22 494 distinct contracts** across
       six months (08/10/12·2025, 04/05/06·2026) from the
       «Приложение №1 (Credilogic)» annexes.
-- [ ] **Carry the coverage tiers into every Phase C output.** Censoring is
-      *not* uniform across the panel and the results must say so:
-
-      | Tier | Months | What is visible |
-      |---|---|---|
-      | full | 12.2025 | sales **and** write-offs |
-      | partial | 08, 10·2025, 04, 05, 06·2026 | write-offs/forgiveness only |
-      | none | 09, 11·2025, 01, 02, 03, 07·2026 | nothing |
-
-      The gap is not a rounding detail. December is the one month with both
-      sources, and there sales outnumbered write-offs **21 341 to 5 016** —
-      so in the five "partial" months the invisible half is plausibly the
-      larger one. Confirmed 27.07.2026: no sale register exists for any month
-      other than 12.2025, and none is coming.
-      Consequence: for every month outside the "full" tier the re-default
-      rate is a **lower bound**, and must be labelled that way on the chart
-      and in the write-up — never averaged together with 12.2025 into one
-      unqualified number.
+- [x] **Sales resolved — no gap.** There is no sale register outside 12.2025
+      because **there were no sales outside 12.2025** (БРМ, 27.07.2026).
+      That distinction decides the whole question: "no source" would leave
+      every other month's re-default rate a lower bound; "no events" makes it
+      exact. The confirmation is recorded in the notebook as a dated,
+      attributed constant (`SALES_DID_NOT_OCCUR`), not folded into an
+      assumption — an auditor is entitled to see which of the two we relied
+      on. Worth stating why it mattered: in 12.2025, the one month with both
+      sources, sales outnumbered write-offs **21 341 to 5 016**, so had sales
+      been happening unseen elsewhere, the invisible half would have been the
+      larger one.
+- [ ] **Confirm the six write-off-free months** — 09, 11·2025 and 01, 02,
+      03, 07·2026 have no rows in the archive, but no confirmation that no
+      batch ran either, so they stand at `НЕ ПОДТВЕРЖДЕНО`. Once confirmed
+      they go into `WRITEOFF_DID_NOT_OCCUR` and the coverage table reads
+      "полное" across all twelve months — at which point the lower-bound
+      caveat disappears from Phase C entirely. Until then those six months
+      carry it.
 - [ ] ⚠ **Open question — do the annexes also contain restorations?** The
       archive is «списание-**восстановление**», and 64 contracts appear in two
       or more months. If restorations are mixed in, some of those 22k loans
@@ -218,8 +218,11 @@ counts match before moving to Phase C.
   throughout: the Credilogic annexes carry no date in their filenames), so
   M+1 is also the finest boundary the data supports.
 - Where a contract has several events, the **first** one sets the boundary.
-- **A month with no censoring source is logged as "НЕТ ИСТОЧНИКА", never as
-  zero events.** The coverage table is built from the panel's month list, not
-  from the CSV's contents, so a missing month appears as a row rather than
-  disappearing. "No events happened" and "we cannot see events" are different
-  claims and only the second is true for 6 of the 12 panel months.
+- **"No source" and "no events" are recorded as different things.** The
+  coverage table is built from the panel's month list, not from the CSV's
+  contents, so a month absent from the file appears as a row with its own
+  status rather than disappearing. A month counts as fully covered only when
+  it either has events on record **or** has a dated, attributed confirmation
+  that none occurred (`SALES_DID_NOT_OCCUR`, `WRITEOFF_DID_NOT_OCCUR`).
+  Anything else is `НЕ ПОДТВЕРЖДЕНО` and makes that month's re-default rate a
+  lower bound. An empty month is never silently read as a clean month.
