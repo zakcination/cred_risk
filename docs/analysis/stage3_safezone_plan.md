@@ -193,6 +193,31 @@ counts match before moving to Phase C.
 - [x] **Threshold × cohort matrices built** (`redefault_matrix`) for each K,
       returning rate, denominator and censored-out count together — a rate
       without its base invites reading 100% off two loans.
+- [x] **First real run 27.07.2026 — two defects found, both now closed in code.**
+      - *The `category` cross-check was returning exactly 0.0% on all twelve
+        cohorts.* Not "small, as expected" — empty. One missing value anywhere
+        in the column makes pandas read it as `float64`, after which
+        `astype(str)` yields `"3.0"`, every comparison to `"3"` is False,
+        `exits` matches every row and `returned` matches none. The printed
+        commentary explained a small number, so an empty set read as a finding.
+        `_norm_category` strips the `.0`, and the run now raises if `"3"` is
+        absent from the normalised column rather than reporting 0.0%.
+      - *`censoring_events.csv` only ever contained the Credilogic write-off
+        annexes.* The December sales (`Prodaja&Proschenie_12_2025`, 21 341
+        contracts) are not in it, so those loans carry no boundary and score as
+        **survivors**. The coverage table still read `полное` — correctly, since
+        it audits whether a source exists, not whether its rows reached the
+        censoring set. Those are different questions and the table only ever
+        answered the first.
+- [x] **The silent-exit bracket** (`censored_from_silent`, `MATRIX_BOUNDS`).
+      The fix for the above is deliberately **not** "treat every disappearance
+      as an exit": a loan repaid in full and closed also disappears, and
+      censoring it deletes a real survivor. So the run reports two matrices —
+      disappearance-means-survived (lower bound on re-default) and
+      disappearance-means-unobserved (upper bound) — and the truth sits between
+      them in proportion to how many departures were repayments rather than
+      sales. If the bracket is narrow the sales register need not be loaded at
+      all; if it is wide, loading it is a precondition for quoting any rate.
 - [x] **Split the matrix by restructuring state** — built
       (`redefault_split_matrix`), with the `unknown` share reported per cell
       (threshold × cohort) and pooled, plus an explicit verdict per threshold.
@@ -232,16 +257,36 @@ counts match before moving to Phase C.
 
 ## Phase D — Task #2: size the candidate list, pick the rule
 
-- [ ] Apply `n*` to the **latest** 6-month window to build the current
-      recovery candidate list.
-- [ ] **Hypothesis 1 (straight-line):** DPD ≤ n* for all 6 months. Break down
-      by delinquent-months-count (1–6) with count / balance / provisions.
-- [ ] **Hypothesis 2 (downward-trend, more conservative):** strictly
-      monotonic non-increasing DPD across the 6 months
-      (`dpd(m-6) ≥ … ≥ dpd(m-1)`), regardless of whether it ever hit zero.
-- [ ] Compare H1 vs. H2: overlap, size, balance, provisions, and cross-check
-      each against Phase C's re-default matrix for the segment each
-      hypothesis would have flagged historically.
+- [x] **Built** (`build_candidates`, `rule_sets`, `phase_d_detail`) — runs for
+      any `n`, pending only the locked `n*`. Reports count, **balance and
+      provisions in ₸** against РБ's 12 bn, which is the form the original ask
+      was in and which Phase C's output did not have at all.
+- [x] **The target set is `max_dpd ∈ [1, n]`, not `≤ n`.** A loan at
+      `max_dpd = 0` cures under the *strict* rule already; relaxing releases
+      nobody there. Counting it toward the 12 bn comparison would credit the
+      relaxation with loans it does not free. Paired with `dpd_asof ≤
+      CURE_ENTRY_DPD` — the overdue has to be repaid *now*, or this is not a
+      cure question.
+- [x] **Hypothesis 1 (straight-line):** DPD ≤ n* for all 6 months, broken down
+      by delinquent-months-count with count / balance / provisions.
+- [x] **Hypothesis 2 (downward-trend)** — implemented exactly as locked
+      ("regardless of whether it ever hit zero"), **and that is a problem worth
+      settling before it is quoted.** As written the rule admits 500 → 400 →
+      300: the trend is perfect and the loan is in deep default. On the
+      synthetic check every single loan H2 admitted was one no cure rule should
+      release. `H2+` is therefore computed alongside it — same trend plus H1's
+      requirement that the overdue be cleared now. Both are printed; choosing
+      between them is a decision, not an implementation detail.
+      *Note the rule is independent of `n` entirely* — it is a shape test, not
+      a threshold, so its population does not move as the threshold is tuned.
+- [x] Compare H1 vs. H2: overlap, size, balance, provisions, and cross-check
+      against Phase C's re-default matrix — the historical rate at the matching
+      `n` is applied to today's population to state roughly how many of the
+      released loans would come back, flagged explicitly as a transfer of a
+      historical share and **not** a forecast (re-default plausibly correlates
+      with balance, and that decomposition has not been tested).
+- [x] Window sensitivity 3 vs 6 months (`CANDIDATE_WINDOWS`) — part of the
+      original ask, previously not built.
 - [ ] **Final decision:** recommended rule (H1 / H2 / hybrid), resulting
       population (count / balance / provisions), vs. Retail Business's 12bn ₸
       estimate.
