@@ -85,13 +85,26 @@ counts match before moving to Phase C.
 - [x] Load the 4 raw extracts into pandas.
 - [x] Per `portfolio_asof`, slice each loan's 6-month lookback window from the
       flat DPD/category panel (`build_lookback_dpd`).
-- [x] Compute `restr_active_pct` per loan/window (share of the 6 months
-      covered by an active, non-cancelled grace period — checks ANY
-      qualifying restructuring event's `grace_od_*`/`grace_int_*` window
-      against each `snap_date`, excludes events with `canc_date ≤ snap_date`).
-      Report **% of the population with a restructuring event defined vs.
-      not**, per month — the transparency metric
-      (`restructuring_coverage_summary`).
+- [x] Classify each loan-month into **three** states, not a boolean
+      (`classify_restructuring`): `active` — a qualifying, non-cancelled
+      event's `grace_od_*`/`grace_int_*` window covers the `snap_date`;
+      `unknown` — a qualifying event exists but carries **no usable grace
+      dates** to test against; `not_active` — no qualifying event at all, or
+      every one has dates and the snapshot falls outside all of them.
+      Yields `restr_active_pct` **and** `restr_unknown_pct` per loan/window
+      (`compute_restr_state_pct`), denominated on months actually observed,
+      not on a fixed 6.
+      *Why three:* an undated event scored as `False` reports a genuinely
+      restructured loan as "no payment holiday" — silently biasing the whole
+      restructured-vs-not comparison in Phase C on a denominator of unknown
+      quality. `restr_unknown_pct` is a **data-quality** reading, never a
+      risk reading.
+- [x] Report the transparency metric as **two** numbers, not one
+      (`restructuring_coverage_summary`), per month: `pct_with_event` — does
+      the loan have a restructuring event at all; `pct_event_dated` — of
+      those, how many carry usable grace dates. `pct_with_event` alone
+      answers the weaker question: a loan can have an event on record and
+      still be unanswerable.
 
 ## Phase C — Task #1: find the safe-zone threshold
 
@@ -105,11 +118,25 @@ counts match before moving to Phase C.
 - [ ] For `n ∈ {0, 3, 7, 10, …, 30}`: flag "provisionally recovered" loans per
       portfolio month (DPD ≤ n for the whole 6-month window). Restructuring-
       covered months stay **in** the pool, flagged — not excluded.
-- [ ] For each flagged loan, scan forward (up to the latest available report
-      date) for the first month `category` returns to `'3'` for **any**
-      reason (not just DPD≥91) → re-default flag + months-to-redefault.
-- [ ] Build the **threshold × report-month re-default-rate matrix**
-      (12 columns), split further by restructuring-covered vs not.
+- [ ] For each flagged loan, scan forward for the first month `category`
+      returns to `'3'` for **any** reason (not just DPD≥91) → re-default
+      flag + months-to-redefault.
+      ⚠ **Open decision — settle before writing this step.** `@LastAsOf`
+      equals the newest portfolio date, so forward runway is 11 months for
+      the 08.2025 cohort and **zero** for 07.2026. Scanning "up to the
+      latest available report date" gives every column a different
+      observation opportunity, so the re-default rate falls mechanically
+      toward the recent end and an elbow read off that curve is a
+      censoring artifact, not a signal.
+      *Proposal:* fix a common horizon **K=6 months** from the portfolio
+      date (symmetric with the 6-month lookback); the main matrix uses only
+      cohorts with full runway — 08.2025–01.2026, six comparable columns —
+      and the remaining six are reported separately, labelled incomplete,
+      never plotted on the same line.
+- [ ] Build the **threshold × report-month re-default-rate matrix** over the
+      comparable cohorts, split further by restructuring state — and report
+      the `unknown` share per cell, since a split built mostly on `unknown`
+      months is not evidence about restructuring either way.
 - [ ] Visualize: re-default % vs. n, one line per report month (or a summary
       band) — pick the threshold at the **elbow** where re-default stops
       being flat and starts climbing, rather than a hard-coded cutoff.
@@ -145,6 +172,12 @@ counts match before moving to Phase C.
 
 - Restructuring-covered clean months: **kept in the pool, flagged**
   (`restr_active_pct`) — not excluded.
+- Restructuring coverage is **three-valued**, never boolean: `active` /
+  `not_active` / `unknown`. A restructuring event whose grace dates are not
+  populated makes that month `unknown` — it is never collapsed into
+  `not_active`. Any restructured-vs-not comparison must report the `unknown`
+  share alongside it; a segment whose `restr_unknown_pct` is material does
+  not support a conclusion about restructuring, in either direction.
 - Re-default = first later month `category` returns to `'3'` **for any
   reason** — first hit counts, no sustained-months requirement.
 - Hypothesis 2's "downward trend" = **strict monotonic non-increasing** DPD
