@@ -33,19 +33,40 @@ this exists only for December 2025
 `Prodaja&Proschenie_12_2025`); the other months (082025, 102025, 04-06/2026,
 confirmed so far) only exist as this Excel archive.
 
+**Какие файлы читать.** По умолчанию — все `.xlsx`. Для сбора списка прощений
+и списаний нужны только «Приложение №1» — для этого есть `--prilozhenie`
+(фильтр по имени + номер контракта в 1-й колонке). Регулярка ловит все
+варианты написания номера: `№1`, `No1`, `N1`, `#1` и просто `1`.
+
+**Где искать номер контракта.** Шапка у файлов архива на разных строках, поэтому
+она **ищется**: скрипт сканирует верх листа в поисках ячейки со словом
+«контракт»/«договор»/«займ» и берёт колонку под ней. Не нашлась — откат на
+`--header-row`/`--contract-col`, и это печатается строкой `[INFO]`. Жёстко
+задать значения без поиска — `--no-auto-detect`.
+
 ### Usage
 
 ```bash
 pip install pandas openpyxl
 
+# 1) сначала посмотреть на структуру, ничего не извлекая
+python scripts/writeoff_restoration_scan.py --prilozhenie --inspect
+
+# 2) собрать список прощений/списаний из «Приложение №1»
+python scripts/writeoff_restoration_scan.py --prilozhenie
+
+# весь архив целиком (прежнее поведение)
 python scripts/writeoff_restoration_scan.py
 # defaults: base-dir R:\!!!ukr1\списание-восстановление, years 2025 2026,
-# header row 7 (Excel, 1-indexed), contract column 2 (Excel, 1-indexed),
 # out C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.csv
 
-# override any of those if a particular month's file differs:
-python scripts/writeoff_restoration_scan.py --header-row 5 --contract-col 2 --out my_events.csv
+# ручное задание разметки, если автопоиск не сработал
+python scripts/writeoff_restoration_scan.py --header-row 5 --contract-col 0 --no-auto-detect
 ```
+
+**`--inspect` стоит запускать первым** на любом незнакомом наборе файлов: он
+печатает верхний левый угол каждого листа и то, что скрипт в нём распознал, —
+это дешевле, чем потом разбираться, почему в CSV попали не те значения.
 
 From a Jupyter cell, call `run_scan()` directly instead of the CLI (`%run`
 leaks ipykernel's own launch args like `--f=...kernel-....json` into
@@ -55,9 +76,17 @@ the function directly skips argument parsing entirely):
 ```python
 import sys
 sys.path.append(r"..\scripts")   # adjust to wherever scripts/ is from the notebook
-from writeoff_restoration_scan import run_scan
+from writeoff_restoration_scan import run_scan, PRILOZHENIE_1
 
-df = run_scan(years=["2025", "2026"], out=r"C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.csv")
+# посмотреть структуру
+run_scan(name_pattern=PRILOZHENIE_1, inspect=True)
+
+# собрать список прощений/списаний
+df = run_scan(
+    name_pattern=PRILOZHENIE_1,
+    contract_col=0,
+    out=r"C:\project_mz\surau\DPDRelaxing\raw_data\censoring_events.csv",
+)
 ```
 
 Prints per-file/per-sheet diagnostics as it goes (files found per year, rows
