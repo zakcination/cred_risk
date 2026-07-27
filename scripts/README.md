@@ -10,8 +10,20 @@ contain confidential figures, so it always goes to `data/` (git-ignored).
 
 ПРОСТЫМ ЯЗЫКОМ: обходит `R:\!!!ukr1\списание-восстановление\{2025,2026}\...`,
 читает каждый `.xlsx` (шапка — 7-я строка листа), берёт только 2-ю колонку
-(«Контракт») и дату — сначала из НАЗВАНИЯ ЛИСТА, если там нет — из ИМЕНИ ФАЙЛА
-(«...на 29.04.2026 года...» → `2026-04-29`) — и складывает всё в один CSV.
+(«Контракт») и дату операции — и складывает всё в один CSV.
+
+**Как определяется дата.** Месяц берётся из ПАПКИ (`\2025\12.2025\...`), имя
+листа/файла может только уточнить ДЕНЬ внутри этого месяца. Причина не
+косметическая: в архиве есть файлы, скопированные с прошлого месяца без
+переименования листа — `SERVICING_tag11_20251229.xlsx` с листом
+`SERVICING_tag11_20251030`. Приоритет «сначала лист» проставил бы декабрьскому
+списанию октябрьскую дату; папка так не ошибается, а расхождение печатается
+строкой `[INFO] ... trusting the folder (stale copied name?)`.
+
+Распознаются `29.04.2026`, компактный `20251229` (семейство `SERVICING_tag11_*`)
+и словами («30 декабря»). Если день установить не удалось, а папка известна —
+ставится 1-е число с пометкой `date_precision='month'`; для censoring этого
+достаточно, сверка идёт с помесячными срезами.
 Это сырьё для censoring-логики в
 [`docs/analysis/stage3_safezone_plan.md`](../docs/analysis/stage3_safezone_plan.md):
 займы, которые продали/списали/простили, не должны засчитываться как
@@ -57,9 +69,17 @@ shared — real files may still differ; adjust `--header-row`/`--contract-col`
 per the printed warnings if a specific month doesn't match.
 
 ### Output columns
-`contract_number, event_date, source_file, source_sheet` — deliberately
-minimal (just the loan id + the date it happened, per what's needed for
-censoring), traceable back to the source file/sheet for spot-checking.
+`contract_number, event_date, date_precision, date_source, source_file,
+source_sheet` — the loan id + when it happened, plus how confidently that date
+was established (`day`/`month`, and whether it came from the sheet name, the
+file name or the folder), traceable back to the source for spot-checking.
+
+Two summaries print at the end and both are worth reading before using the CSV:
+**rows by month** (does every month of the analysis panel have events, or is one
+silently missing?) and **how the dates were resolved** (a large `folder/month`
+share means most events are only month-accurate). Any file that yielded zero
+rows is listed explicitly — a file present but empty is a coverage gap, not a
+non-event.
 
 ## `stage3_dpd_chart.py` — Stage 3 post-default DPD projection
 
