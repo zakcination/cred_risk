@@ -279,6 +279,30 @@ counts match before moving to Phase C.
       between them is a decision, not an implementation detail.
       *Note the rule is independent of `n` entirely* — it is a shape test, not
       a threshold, so its population does not move as the threshold is tuned.
+- [x] **`H2` now names two different rules, and they are kept apart in code.**
+      A second candidate arrived 28.07.2026: a **sloped threshold** running from
+      `n` in the first window month down to `n/2` at the as-of month. That is
+      not the locked shape test, so both live under explicit keys —
+      `H2T` (trend) and `H2K` (corridor), with `RULE_NAMES` carrying the display
+      text. Leaving both as "H2" is how a figure ends up produced by whichever
+      cell happened to run last.
+      They are opposite in structure, which is the part that matters for the
+      choice: **`H2K ⊆ H1` always** — the line is never above `n`, so the
+      corridor can only tighten the flat threshold — while `H2T` is not nested
+      in `H1` at all and picks up high-but-falling DPD that a flat rule never
+      sees. Hence the observed contrast: H1 and H2T overlap on 2 loans, whereas
+      H2K is a strict subset of H1.
+      Implemented inside `rule_sets` rather than as a separate pass. The test
+      "`dpd(m) ≤ n·shape(m)` for every month" is equivalent to
+      "`n ≥ max_m dpd(m)/shape(m)`", so `build_candidates` stores that single
+      `corridor_need` per loan and every threshold becomes one comparison — no
+      re-reading the panel per `n`, and the rule flows into the side-by-side
+      table, the money totals and the charts without a parallel code path.
+- [ ] **Decide which `H2` goes into the recommended rule.** No re-default rate
+      exists for the corridor: Phase C's matrix is built on the flat threshold,
+      and its rate does not transfer to a differently-shaped population. Either
+      re-run the cohorts under the corridor, or state plainly that the corridor
+      is being chosen on shape and volume alone.
 - [x] Compare H1 vs. H2: overlap, size, balance, provisions, and cross-check
       against Phase C's re-default matrix — the historical rate at the matching
       `n` is applied to today's population to state roughly how many of the
