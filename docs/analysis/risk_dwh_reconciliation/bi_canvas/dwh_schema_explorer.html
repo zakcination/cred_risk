@@ -734,7 +734,9 @@
     '#10': {severity:'open',     label:'184/4520 событий: дата погашения раньше даты реструктуризации'},
     '#11': {severity:'pending',  label:'4 события списания только в новой ветке, 11.6 млн₸'},
     '#12': {severity:'critical', label:'458/637 RS_7130: все балансы равны нулю, 116–134 млрд₸ — постдатирует FINDINGS.md'},
-    '#13': {severity:'pending',  label:'расхождение состава loans_active vs PORTFOLIO_RS, 3 договора'}
+    '#13': {severity:'pending',  label:'расхождение состава loans_active vs PORTFOLIO_RS, 3 договора'},
+    '#14': {severity:'open',     label:'S17: interest DPD 100% NULL на всех 79 617 matched — целое измерение потеряно, 5 965 дог. (2.36 млрд) были 90+ по interest в OLD'},
+    '#15': {severity:'pending',  label:'S17 ONLY_NEW 18771 (8.26 млн) сидит на 18 договорах из 10 979 — узкое место, не расследовано построчно'}
   };
   var SEVERITY_VAR = { critical:'--st-critical', open:'--st-serious', pending:'--st-warning', doc:'--st-good' };
   var SEVERITY_FG_VAR = { critical:'--st-critical-fg', open:'--st-serious-fg', pending:'--st-warning-fg', doc:'--st-good-fg' };
@@ -815,7 +817,95 @@
     { id:'e8', status:'external', name:'loans_active vs PORTFOLIO_RS (наш #13)', formula:'3 договора: 2 только в новой (нет старой истории), 1 только в старой (закрыт, есть остаток)',
       inputs:['old_rs.contractnumber','old_rs.contract_id','new_loans_active.l_loan_status'], evidence:'переписка 29–30.07.2026 — постдатирует FINDINGS.md; гипотеза Кадиржана об обрезании столбца не проверена', findings:['#13'] },
     { id:'e9', status:'external', name:'restructuring_v2 — дубли и аномалии (наш #8/#9/#10)', formula:'12 несопоставленных строк; 184/4520 событий с датой погашения раньше даты реструктуризации',
-      inputs:['new_restructuring.new_maturity_date'], evidence:'переписка 27–28.07.2026 — постдатирует FINDINGS.md', findings:['#9','#10'] }
+      inputs:['new_restructuring.new_maturity_date'], evidence:'переписка 27–28.07.2026 — постдатирует FINDINGS.md', findings:['#9','#10'] },
+
+    /* ============================================================
+       g1–g6 — синхронизация холста с FINDINGS.md (Шаг 2, 30.07.2026).
+       Не новое исследование: уже установленные факты, отсутствовавшие
+       на холсте как процессы (зона provisions/DPD/90+/стадийность —
+       см. Шаг 0 в bi_canvas/README.md). status='proven' только там, где
+       FINDINGS.md сам маркирует CONFIRMED; методологические решения
+       людей (не данные) — 'external', не выше.
+       ============================================================ */
+    { id:'g1', status:'proven', version:1, name:'S03 provisions +30.6 млрд — валентный сплит (не единая "новая выше")',
+      formula:'MATCHED (234 367 дог.) Δ = +30.58 млрд:\n  1428: +28.23 млрд -> модель/переоценка живой книги (99.4% в статусе Открытый)\n  18771: +2.35 млрд -> 85% ВНУТРИ MATCHED, не population (ETL-атрибуция НЕ подтверждена)\nONLY_OLD (2 907, статус V) несёт 8.51 млрд старых 1428, корректно не перенесённых',
+      inputs:['old_cl2.provisions_total','new_loan_account.la_account_1428','new_loan_account.la_account_18771'],
+      evidence:'FINDINGS.md §4/§6 (S03) — CONFIRMED на 237 274 строках', slice:'2026-07-01, S03 (237 274 договора)',
+      note:'Валентность 1428 (модель точнее или старая недорезервирует?) НЕ присвоена — нужен бух/IFRS9-эталон, FINDINGS §7 п.1. "1428=модель,18771=ETL" тоже не подтверждена как чистая атрибуция.',
+      findings:[] },
+    { id:'g2', status:'proven', version:1, name:'S17 DPD июнь->июль — смена расчёта, не лаг отчётности (4-way proof)',
+      formula:'match_pct((new_dpd-1), old_dpd) СРЕДИ jointly-non-null, 4 пары:\n  июль-old x июль-new (тот же месяц): 78.92%\n  июнь-old x июнь-new (тот же месяц): 0.036%\n  июнь-old x июль-new (лаг -1мес):     1.40%\n  июль-old x июнь-new (лаг +1мес):     0.44%\nКросс-пары ~= июньский baseline -> лаг отчётности ИСКЛЮЧЁН',
+      inputs:['old_fenix.contractnumber','new_loan_account.days_past_due'],
+      evidence:'FINDINGS.md §6 (S17) — CONFIRMED, 4-way cross-pairing', slice:'2026-06-01 и 2026-07-01, S17',
+      note:'Валентность (какой месяц точнее) НЕ присвоена — факт смены расчёта доказан, факт корректности июля — нет. Тот же метод не прогнан для S01 (FINDINGS §9.5 п.7) — см. новый процесс h-s01dpd ниже.',
+      sql:'-- FINDINGS.md §6, структура запроса (реконструкция для повторного прогона)\n;WITH old_dpd AS (\n  SELECT contractnumber, actual_date, [dpd] AS old_dpd\n  FROM CL_PORTFOLIO.dbo.PORTFOLIO_Fenix\n  WHERE actual_date IN (\'2026-06-01\',\'2026-07-01\')\n),\nnew_dpd AS (\n  SELECT la.la_dog_num, la.la_reporting_date, la.days_past_due - 1 AS new_dpd_adj\n  FROM Dictionaries.risk_analytics.loan_account la\n  WHERE la.la_source = \'S17\'\n    AND la.la_reporting_date IN (\'2026-06-01\',\'2026-07-01\')\n)\n-- 4 UNION ALL пары (см. g2 formula) -> match_pct = matched / both_nonnull\nOPTION (MAXDOP 1);',
+      findings:[] },
+    { id:'g3', status:'proven', version:1, name:'S17 90+ теряется на 932 дог. (273.0 млн) — воспроизведено и разложено',
+      formula:'247 дог. (NEW=NULL, потеряны полностью, 32.6 млн)\n+ 685 дог. (NEW<=90, понижены, 240.4 млн)\n= 932 / 273.0 млн',
+      inputs:['old_fenix.max_overdue_days','new_loan_account.days_past_due'],
+      evidence:'FINDINGS.md §6 (S17) — CONFIRMED', slice:'2026-07-01, S17',
+      note:'ПРАВКА из FINDINGS: "0 ложных 90+" была переоценкой — SQL three-valued logic прячет переход OLD-NULL->NEW-90+ в NEITHER, не в ONLY_NEW_90_PLUS. Величина этого подмножества НЕ измерена — см. новый процесс h-oldnull90 ниже.',
+      findings:['#12'] },
+    { id:'g4', status:'proven', version:1, name:'S17 interest DPD = 100% NULL — целое измерение просрочки потеряно',
+      formula:'days_past_due_interest IS NULL на ВСЕХ 79 617 matched (не "почти все").\nИз них 9 815 дог. (3.87 млрд) у OLD имели positive interest-просрочку,\nвключая 5 965 (2.36 млрд) именно 90+ по interest.',
+      inputs:['new_loan_account.days_past_due_interest'],
+      evidence:'FINDINGS.md §6/§7 п.14 — CONFIRMED, материальный OPEN-вопрос (не техническая объяснимость)', slice:'2026-07-01, S17',
+      note:'Не проверено, S17-специфично это или системно по всем source (loan_account.days_past_due_interest в принципе редко заполнен?) — см. новый процесс h-interestdpd-scope ниже.',
+      findings:['#14'] },
+    { id:'g5', status:'external', version:1, name:'Поле-источник Stage 3: category = \'3\'',
+      formula:'IFRS 9 Stage 3 := category = \'3\'\n(delinquency bucket, НЕ отдельная колонка стадии)',
+      inputs:[],
+      evidence:'PR #18 §6, подтверждено Мирасом 27.07.2026 — закрывает открытое решение stage3_cure_analysis.md, висевшее с 17.07',
+      note:'МЕТОДОЛОГИЧЕСКОЕ РЕШЕНИЕ ЧЕЛОВЕКА, не независимо перепроверено на данных этой сессией -> status=external, не proven (правило Шага 2). category находится в Stage 3 cure pool (sql/stage3_*.sql), НЕ входит ни в одну из таблиц, смоделированных на этом холсте (нет отдельной "IFRS stage" колонки нигде в 29 каталогизированных таблицах) — это само по себе аргумент к открытому вопросу FINDINGS §7 п.5 (нормативное поле для 90+/стадии не выбрано).',
+      findings:[] },
+    { id:'g6', status:'proven', version:1, name:'delinquency_bucket формируется независимо от DPD (S17)',
+      formula:'Basket корректен 99.98% (79 604/79 617) при DPD-полях, в основном пустых\n(interest DPD 100% NULL, principal DPD массово NULL) ->\nbucket считается НЕ из days_past_due_*, а из другого источника/правила',
+      inputs:['new_loan_account.delinquency_bucket','new_loan_account.days_past_due'],
+      evidence:'FINDINGS.md §6 (S17 basket 99.98%) — CONFIRMED для S17', slice:'2026-07-01, S17',
+      note:'Не проверено, тот же паттерн в S01/S03 (системное свойство mart) или S17-квирк — см. новый процесс h-bucket-scope ниже. Прямо усиливает открытый вопрос FINDINGS §7 п.5: DPD или delinquency_bucket — нормативный источник для 90+?',
+      findings:[] },
+
+    /* ============================================================
+       h-* — Шаг 3, НОВОЕ самостоятельное исследование (30.07.2026).
+       СПРОЕКТИРОВАНО, НЕ ПРОГНАНО: у этой сессии нет прямого доступа к
+       RISKDWHDB / SQL Server (весь проект всю дорогу работал по схеме
+       "агент проектирует запрос -> человек прогоняет -> вставляет вывод
+       обратно"). status='hypothesis' до результата — честно, не 'proven'
+       и не 'external', это не чужая находка, а наш непроверенный запрос.
+       Прогнать и вставить вывод сюда же (обновить status/history/version).
+       ============================================================ */
+    { id:'h-s01dpd', status:'hypothesis', version:1, name:'S01 DPD июнь->июль — тот же 4-way тест, что закрыл S17 (FINDINGS §9.5 п.7)',
+      formula:'4-way cross-pairing match_pct(old_dpd, new_dpd-1) для S01,\nпо аналогии с g2. Если июль-июль >> июнь-июнь при низких кросс-парах ->\nсмена расчёта DPD (как S17). Если кросс-пары тоже высокие -> скорее лаг.',
+      inputs:['old_rs.dpd','new_loan_account.days_past_due'],
+      evidence:'НЕ ВЫПОЛНЕНО — SQL спроектирован 30.07.2026, ожидает прогона на RISKDWHDB', slice:'2026-06-01 и 2026-07-01, S01',
+      note:'FINDINGS §6 (S01) уже фиксирует "июнь->июль скачок 60%" как OPEN — этот запрос должен закрыть его причиной, как §9.5 п.7 и требует.',
+      sql:'DECLARE @TolDays int = 0;\n\n;WITH old_rs AS (\n  SELECT contract_id, actual_date, dpd\n  FROM CL_PORTFOLIO.dbo.PORTFOLIO_RS\n  WHERE actual_date IN (\'2026-06-01\',\'2026-07-01\')\n),\nnew_la AS (\n  SELECT l.l_loan_id, la.la_reporting_date, la.days_past_due - 1 AS dpd_adj\n  FROM Dictionaries.risk_analytics.loan_account la\n  JOIN Dictionaries.risk_analytics.loans l\n    ON l.l_gid = la.la_gid AND l.l_source = la.la_source\n  WHERE la.la_source = \'S01\'\n    AND la.la_reporting_date IN (\'2026-06-01\',\'2026-07-01\')\n),\npairs AS (\n  SELECT \'jun_old-jun_new\' AS pairing, COUNT(*) AS both_nonnull,\n         SUM(CASE WHEN ABS(o.dpd-n.dpd_adj)<=@TolDays THEN 1 ELSE 0 END) AS matched\n  FROM old_rs o JOIN new_la n ON n.l_loan_id = o.contract_id\n  WHERE o.actual_date=\'2026-06-01\' AND n.la_reporting_date=\'2026-06-01\'\n    AND o.dpd IS NOT NULL AND n.dpd_adj IS NOT NULL\n  UNION ALL\n  SELECT \'jul_old-jul_new\', COUNT(*), SUM(CASE WHEN ABS(o.dpd-n.dpd_adj)<=@TolDays THEN 1 ELSE 0 END)\n  FROM old_rs o JOIN new_la n ON n.l_loan_id=o.contract_id\n  WHERE o.actual_date=\'2026-07-01\' AND n.la_reporting_date=\'2026-07-01\'\n    AND o.dpd IS NOT NULL AND n.dpd_adj IS NOT NULL\n  UNION ALL\n  SELECT \'jun_old-jul_new\', COUNT(*), SUM(CASE WHEN ABS(o.dpd-n.dpd_adj)<=@TolDays THEN 1 ELSE 0 END)\n  FROM old_rs o JOIN new_la n ON n.l_loan_id=o.contract_id\n  WHERE o.actual_date=\'2026-06-01\' AND n.la_reporting_date=\'2026-07-01\'\n    AND o.dpd IS NOT NULL AND n.dpd_adj IS NOT NULL\n  UNION ALL\n  SELECT \'jul_old-jun_new\', COUNT(*), SUM(CASE WHEN ABS(o.dpd-n.dpd_adj)<=@TolDays THEN 1 ELSE 0 END)\n  FROM old_rs o JOIN new_la n ON n.l_loan_id=o.contract_id\n  WHERE o.actual_date=\'2026-07-01\' AND n.la_reporting_date=\'2026-06-01\'\n    AND o.dpd IS NOT NULL AND n.dpd_adj IS NOT NULL\n)\nSELECT pairing, both_nonnull, matched,\n       CAST(100.0*matched/NULLIF(both_nonnull,0) AS decimal(6,3)) AS match_pct\nFROM pairs\nOPTION (MAXDOP 1);',
+      findings:[] },
+    { id:'h-90boundary', status:'hypothesis', version:1, name:'90+ граница: сколько договоров ровно на dpd=90 (>90 vs >=90 материальность)',
+      formula:'COUNT/SUM(balance) при days_past_due-1 = 90, по всем source.\nМал count -> граница неважна для отчётности. Велик -> нужен S2T ДО отчётности.',
+      inputs:['new_loan_account.days_past_due','new_loan_account.principal_balance_debt'],
+      evidence:'НЕ ВЫПОЛНЕНО — SQL спроектирован 30.07.2026', slice:'2026-07-01, все source',
+      note:'Закрывает открытый вопрос из адверсариального ревью §9.4 п.6 (">90 vs >=90 не подтверждено S2T") количественно, не только методологически.',
+      sql:'SELECT la_source,\n       COUNT(*) AS rows_at_dpd_90,\n       SUM(principal_balance_debt) AS balance_at_dpd_90\nFROM Dictionaries.risk_analytics.loan_account\nWHERE la_reporting_date = \'2026-07-01\'\n  AND days_past_due - 1 = 90\nGROUP BY la_source\nOPTION (MAXDOP 1);',
+      findings:[] },
+    { id:'h-oldnull90', status:'hypothesis', version:1, name:'S17: OLD-NULL -> NEW-90+ подмножество (не измерено в FINDINGS §6)',
+      formula:'Договоры где OLD max_overdue_days IS NULL, но NEW (days_past_due-1) > 90.\nFINDINGS §6 явно фиксирует: SQL three-valued logic прячет этот переход в\nNEITHER, величина НЕ измерена — этот запрос закрывает пробел напрямую.',
+      inputs:['old_fenix.max_overdue_days','new_loan_account.days_past_due'],
+      evidence:'НЕ ВЫПОЛНЕНО — SQL спроектирован 30.07.2026, закрывает пробел из FINDINGS §6/§9.4 п.6', slice:'2026-07-01, S17',
+      sql:'SELECT COUNT(*) AS old_null_new_90plus_count,\n       SUM(la.principal_balance_debt) AS old_null_new_90plus_balance\nFROM Dictionaries.risk_analytics.loan_account la\nJOIN Dictionaries.risk_analytics.loans l\n  ON l.l_gid = la.la_gid AND l.l_source = la.la_source\nJOIN CL_PORTFOLIO.dbo.PORTFOLIO_Fenix f\n  ON f.contractnumber = l.l_loan_number\nWHERE la.la_source = \'S17\'\n  AND la.la_reporting_date = \'2026-07-01\'\n  AND f.actual_date = \'2026-07-01\'\n  AND f.max_overdue_days IS NULL\n  AND (la.days_past_due - 1) > 90\nOPTION (MAXDOP 1);',
+      findings:[] },
+    { id:'h-interestdpd-scope', status:'hypothesis', version:1, name:'Interest DPD NULL-rate по всем source — S17-специфично или системно?',
+      formula:'NULL-rate days_past_due_interest по la_source. Если S01/S02/S03 тоже\nмассово NULL -> системное свойство mart, не S17-квирк -> усиливает #14.',
+      inputs:['new_loan_account.days_past_due_interest'],
+      evidence:'НЕ ВЫПОЛНЕНО — SQL спроектирован 30.07.2026, расширяет g4/#14 на весь mart', slice:'2026-07-01, все source',
+      sql:'SELECT la_source,\n       COUNT(*) AS rows_total,\n       SUM(CASE WHEN days_past_due_interest IS NULL THEN 1 ELSE 0 END) AS interest_dpd_null,\n       CAST(100.0*SUM(CASE WHEN days_past_due_interest IS NULL THEN 1 ELSE 0 END)/COUNT(*) AS decimal(6,2)) AS null_pct\nFROM Dictionaries.risk_analytics.loan_account\nWHERE la_reporting_date = \'2026-07-01\'\nGROUP BY la_source\nOPTION (MAXDOP 1);',
+      findings:[] },
+    { id:'h-bucket-scope', status:'hypothesis', version:1, name:'bucket-независим-от-DPD — S17-специфично или системно?',
+      formula:'Доля delinquency_bucket заполнен при days_past_due IS NULL, по source.\nЕсли S01/S03 тоже высокая доля -> расширяет g6 на весь mart, не только S17.',
+      inputs:['new_loan_account.delinquency_bucket','new_loan_account.days_past_due'],
+      evidence:'НЕ ВЫПОЛНЕНО — SQL спроектирован 30.07.2026, расширяет g6 на весь mart', slice:'2026-07-01, все source',
+      sql:'SELECT la_source,\n       COUNT(*) AS rows_total,\n       SUM(CASE WHEN delinquency_bucket IS NOT NULL THEN 1 ELSE 0 END) AS bucket_filled,\n       SUM(CASE WHEN days_past_due IS NOT NULL THEN 1 ELSE 0 END) AS dpd_filled,\n       SUM(CASE WHEN delinquency_bucket IS NOT NULL AND days_past_due IS NULL THEN 1 ELSE 0 END) AS bucket_without_dpd\nFROM Dictionaries.risk_analytics.loan_account\nWHERE la_reporting_date = \'2026-07-01\'\nGROUP BY la_source\nOPTION (MAXDOP 1);',
+      findings:[] }
   ];
 
   var TABLES_BY_ID = {}; TABLES.forEach(function(t){ TABLES_BY_ID[t.id]=t; t.lane = (t.side==='old')?1:3; });
