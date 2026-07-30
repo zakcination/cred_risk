@@ -220,7 +220,7 @@
     <p class="eyebrow"><svg class="ic ic-lg" style="vertical-align:-4px;margin-right:6px;"><use href="#ic-check"/></svg>Risk DWH &middot; BI-холст процессов &middot; v4 &middot; live schema</p>
     <h1>Все 19 таблиц Dictionary + все 10 таблиц CL_PORTFOLIO — 100% реальная схема</h1>
     <p class="thesis">
-      <code>dwh_schema_introspection.sql</code> вернулся с полным выводом — <b>каждая</b> таблица на этом
+      <code>schema_introspection.sql</code> вернулся с полным выводом — <b>каждая</b> таблица на этом
       холсте теперь показывает настоящие столбцы и типы из <code>INFORMATION_SCHEMA</code>, а не
       реконструкцию по тестовым SQL. Ограничений PK/FK/UNIQUE в базе <b>нет ни одного</b> — все ключи
       логические, ровно как показывал Issue #8. Точка слева от столбца — статус сверки:
@@ -329,7 +329,7 @@
   var SCOPE_LABEL = { old:'только старая', cross:'сквозной', new:'только новая', freeform:'методология' };
   var DOT_CLASS = { proven:'mapped-proven', hypothesis:'mapped-hyp', external:'mapped-external', refuted:'mapped-refuted' };
   function icon(id, cls){ return '<svg class="ic'+(cls?' '+cls:'')+'"><use href="#'+id+'"/></svg>'; }
-  function esc(s){ return String(s); }
+  function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   function col(name, type, extra){ var o = {name:name, type:type}; if (extra) for (var k in extra) o[k]=extra[k]; return o; }
 
   /* ============================================================
@@ -341,7 +341,7 @@
      ============================================================ */
   var TABLES = [
     { id:'old_rs', side:'old', name:'PORTFOLIO_RS', role:'S01 · живой источник', catalogued:true,
-      grain:'file_names+id+actual_date (NOT NULL); S01 (RS retail core)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'file_names+id+actual_date (NOT NULL); S01 (RS retail core)', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('file_names','varchar(20)'), col('id','int'), col('actual_date','date',{note:'отчётная дата'}),
         col('filial','varchar(100)'), col('contractnumber','varchar(100)',{role:'key',note:'S01 контрольный номер — НЕ основной old↔new ключ (см. contract_id)'}),
@@ -365,7 +365,7 @@
         col('kurs_valut','varchar(max)'), col('Indicator','varchar(50)'), col('1431','decimal(18,2)')
       ]},
     { id:'old_cl2', side:'old', name:'CL_PORTFOLIO_2', role:'S03 · живой источник', catalogued:true,
-      grain:'contract-level, S03 (CrediLogic, основной ориджинейшн)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract-level, S03 (CrediLogic, основной ориджинейшн)', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('contract_number','varchar(30)',{role:'key',note:'→ loans.l_loan_number (raw); l_loan_id даёт 0 совпадений, FINDINGS §1'}),
         col('status','varchar(100)'), col('granting_date','date'), col('first_pmt_date','date'),
@@ -393,7 +393,7 @@
         col('DISCOUNT_1485','numeric(30,4)'), col('DISCOUNT_17731','numeric(30,4)'), col('DISCOUNT_17732','numeric(30,4)')
       ]},
     { id:'old_fenix', side:'old', name:'PORTFOLIO_Fenix', role:'S17 · живой источник', catalogued:true,
-      grain:'file_names+id+actual_date (NOT NULL); S17 (Fenix)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'file_names+id+actual_date (NOT NULL); S17 (Fenix)', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('file_names','varchar(20)'), col('id','int'), col('actual_date','date'), col('filial','varchar(100)'),
         col('contractnumber','varchar(100)',{role:'key',note:'→ loan_account.la_dog_num + source=S17 + date, FINDINGS §1'}),
@@ -415,7 +415,7 @@
         col('Pozitiv_1773','numeric(30,4)'), col('dis_1430','numeric(30,4)'), col('KHD_1434','numeric(30,4)'), col('Basket','varchar(20)'), col('ifrs_1845','numeric(30,4)')
       ]},
     { id:'old_way4', side:'old', name:'PORTFOLIO_CREDITCARDS_WAY4', role:'S02 · union 1/3', catalogued:true,
-      grain:'contract-level, S02, union member (overlap с MIGR_WAY4/SMART_CARD = 0)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract-level, S02, union member (overlap с MIGR_WAY4/SMART_CARD = 0)', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('contract_number','varchar(20)',{role:'key',note:'→ loans.l_loan_number, покрытие 97.96% (S02 union)'}),
         col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
@@ -436,7 +436,7 @@
         col('ifrs18770_DEB','varchar(max)'), col('ifrs18771_WTRAF_i_PENII','varchar(max)'), col('limit','numeric(30,4)'), col('unused_limit','numeric(30,4)')
       ]},
     { id:'old_migrway4', side:'old', name:'PORTFOLIO_CREDITCARDS_MIGR_WAY4', role:'S02 · union 2/3', catalogued:true,
-      grain:'contract_number + date', evidence:'CASE_RUN_MIGR_WAY4_020 + dwh_schema_introspection.sql',
+      grain:'contract_number + date', evidence:'CASE_RUN_MIGR_WAY4_020 + schema_introspection.sql',
       columns:[
         col('contract_number','varchar(20)',{role:'key',note:'бизнес-ключ → loans.l_loan_number, покрытие 97.96%'}),
         col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
@@ -458,7 +458,7 @@
         col('unused_limit','numeric(30,4)',{note:'→ l_unutilized_limit — правило гипотеза, см. #6/e6'}), col('IBAN','varchar(max)',{note:'PII'})
       ]},
     { id:'old_smartcard', side:'old', name:'PORTFOLIO_CREDITCARDS_SMART_CARD', role:'S02 · union 3/3', catalogued:true,
-      grain:'contract-level, S02, union member', evidence:'dwh_schema_introspection.sql, 30.07.2026; DWH-02 — 44 договора вне master, 90.96 млн₸',
+      grain:'contract-level, S02, union member', evidence:'schema_introspection.sql, 30.07.2026; DWH-02 — 44 договора вне master, 90.96 млн₸',
       columns:[
         col('contract_number','varchar(20)',{role:'key'}), col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
         col('outstanding','float'), col('outstanding_overdue','float'), col('interest','float'), col('overdue_interest','float'),
@@ -478,7 +478,7 @@
         col('COMM_1841','varchar(max)'), col('COMM_1821','varchar(max)'), col('IBAN','varchar(max)',{note:'PII'})
       ]},
     { id:'old_offbalance', side:'old', name:'PORTFOLIO_OFF_BALANCE', role:'resolution · Class VI (забаланс)', catalogued:true,
-      grain:'contract × date, внебалансовые обязательства', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract × date, внебалансовые обязательства', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('contract_number','varchar(20)',{role:'key'}), col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
         col('outstanding','float'), col('outstanding_overdue','float'), col('interest','float'), col('overdue_interest','float'),
@@ -497,7 +497,7 @@
         col('ifrs18770','varchar(max)'), col('ifrs18771','varchar(max)'), col('SELLING_DATE','date')
       ]},
     { id:'old_rs7130', side:'old', name:'PORTFOLIO_RS_7130', role:'resolution · Class VII (списание)', catalogued:true,
-      grain:'file_names (NOT NULL) + actual_date + contract', evidence:'CASE_RUN_RS_7130_009_CONTRACT_PROOF + dwh_schema_introspection.sql',
+      grain:'file_names (NOT NULL) + actual_date + contract', evidence:'CASE_RUN_RS_7130_009_CONTRACT_PROOF + schema_introspection.sql',
       note:'Ранее ошибочно объединена с живым PORTFOLIO_RS в этом холсте — по FINDINGS.md это отдельная resolution-таблица (счёт 7130), теперь разделены.',
       columns:[
         col('file_names','varchar(20)'), col('actual_date','date'), col('customer','varchar(220)',{note:'PII'}),
@@ -509,7 +509,7 @@
         col('sum_ostatok','numeric(30,4)',{note:'сравнивается с loan_account.total_balance_debt, см. #12/e7'})
       ]},
     { id:'old_spisCL', side:'old', name:'spis_v_ubytok_CL', role:'resolution · Class VII (S03)', catalogued:true,
-      grain:'contract_number + date_spis', evidence:'CASE_RUN_WRITEOFF_CL_010 + dwh_schema_introspection.sql',
+      grain:'contract_number + date_spis', evidence:'CASE_RUN_WRITEOFF_CL_010 + schema_introspection.sql',
       columns:[
         col('date','date',{note:'отчётная дата среза'}), col('contract_number','varchar(max)',{role:'key'}),
         col('summ_spis_v_tg','float',{note:'f13: сверка 73/73 события, точное совпадение'}), col('summ_spis_val','float'),
@@ -517,14 +517,14 @@
         col('ifrs_1428','float'), col('product','varchar(max)'), col('tag','varchar(max)'), col('marker','varchar(max)'), col('date_marker','date')
       ]},
     { id:'old_spisRS', side:'old', name:'spis_v_ubytok_RS', role:'resolution · Class VII (S01)', catalogued:true,
-      grain:'contract_number + date_spis (зеркало spis_v_ubytok_CL для S01)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract_number + date_spis (зеркало spis_v_ubytok_CL для S01)', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('date','date'), col('contract_number','varchar(max)',{role:'key'}), col('summ_spis_v_tg','float'), col('summ_spis_val','float'),
         col('date_spis','date'), col('operation_name','varchar(max)'), col('kurs','varchar(max)'), col('ifrs_1428','float')
       ]},
 
     { id:'new_borrower', side:'new', name:'borrower', role:'P0 · Dim · кто клиент', catalogued:true,
-      grain:'1 / borrower · b_borrower_id', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'1 / borrower · b_borrower_id', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('b_borrower_id','bigint',{role:'key',note:'цель FK из loans.l_borrower_id — но тот varchar(255), а этот bigint! разнотипный join, см. заметку в шапке'}),
         col('b_iin_bin','varchar(15)',{note:'PII — сверяется с PORTFOLIO_Fenix.iin, см. #2/DWH-14'}),
@@ -541,7 +541,7 @@
         col('b_active_loans_count','int'), col('b_closed_loans_count','int'), col('b_report_date','date'), col('b_source','varchar(100)')
       ]},
     { id:'new_loans', side:'new', name:'loans', role:'P0 · Dim · какой кредит', catalogued:true,
-      grain:'1 / l_gid (l_report_date — маркер состояния, не ключ снимка)', evidence:'dwh_schema_introspection.sql, 30.07.2026; FINDINGS.md §1/§2',
+      grain:'1 / l_gid (l_report_date — маркер состояния, не ключ снимка)', evidence:'schema_introspection.sql, 30.07.2026; FINDINGS.md §1/§2',
       note:'#8: 70 дублей по логическому ключу (l_gid,l_loan_number) — 0 ограничений БД (подтверждено интроспекцией). Grain по l_gid внутри одной даты — ПОВТОРНО ОТКРЫТ 17.07 (FINDINGS §2/§9.6).',
       columns:[
         col('l_start_date','date'), col('l_end_date','date'), col('dlcr_dprt_gid','bigint'),
@@ -564,7 +564,7 @@
         col('l_segment','varchar(100)'), col('l_financial_consultant','varchar(100)')
       ]},
     { id:'new_loan_account', side:'new', name:'loan_account', role:'P0 · Snap · сколько должен', catalogued:true,
-      grain:'la_gid × la_reporting_date × la_source (контроль la_dog_num)', evidence:'dwh_schema_introspection.sql, 30.07.2026; FINDINGS.md §1/§3',
+      grain:'la_gid × la_reporting_date × la_source (контроль la_dog_num)', evidence:'schema_introspection.sql, 30.07.2026; FINDINGS.md §1/§3',
       note:'Определяет population марта — у loans снимка нет. Grain чист по S01/S02/S03; S17 — 1 коллизия dog_num/снимок.',
       columns:[
         col('la_dog_num','nvarchar(35)',{note:'контроль = l_loan_number, не ключ'}), col('la_source','nvarchar(3)'),
@@ -583,24 +583,24 @@
         col('currency_reserve_percentage','numeric(18,2)'), col('currency_exchange_rate','numeric(18,2)'), col('la_status','nvarchar(100)')
       ]},
     { id:'new_repayment_schedule', side:'new', name:'repayment_schedule', role:'P1 · Snap/plan · график платежей', catalogued:true,
-      grain:'contract × installment', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract × installment', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('rs_loan_id','bigint',{role:'fk',fkRef:'loans (по loan_id)'}), col('rs_borrower_id','bigint',{role:'fk',fkRef:'borrower.b_borrower_id'}),
         col('rs_currency','varchar(255)'), col('rs_repayment_date','date'), col('rs_principal_repayment_amount','numeric(18,2)'),
         col('rs_interest_repayment_amount','numeric(18,2)'), col('rs_source','varchar(10)'), col('rs_dog_num','varchar(255)',{role:'key'}), col('rs_report_date','date')
       ]},
     { id:'new_payments', side:'new', name:'payments', role:'P1 · Event · факт платежа', catalogued:true,
-      grain:'1 / payment', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'1 / payment', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[ col('p_CREDIT_ACCOUNT','varchar(100)',{role:'key'}), col('p_VALUE_DATE','date'), col('p_total','float'), col('p_source','varchar(10)') ]},
     { id:'new_payments_wiring', side:'new', name:'payments_wiring', role:'P1 · Event · разложение платежа', catalogued:true,
-      grain:'1 / payment component', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'1 / payment component', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('CREDIT_ACCOUNT','varchar(100)',{role:'key'}), col('VALUE_DATE','date'), col('OD','float'), col('PROSR_OD','float'),
         col('PERC','float'), col('PROSR_PERC','float'), col('PROSR_PROSR_PERC','float'), col('KOMIS','float'),
         col('total','float'), col('source','varchar(10)'), col('deposit','float'), col('min_pay','float')
       ]},
     { id:'new_pledges', side:'new', name:'pledges', role:'P1 · Dim · залог', catalogued:true,
-      grain:'collateral / contract', evidence:'dwh_schema_introspection.sql, 30.07.2026; переписка Issue #3/#4',
+      grain:'collateral / contract', evidence:'schema_introspection.sql, 30.07.2026; переписка Issue #3/#4',
       note:'Три кандидата на join-ключ теперь видны одновременно: c_loan_gid (bigint), c_loan_id (bigint), c_contract_number (nvarchar150). Валидированный путь — c_source+c_loan_gid = l_source+l_gid (см. #4).',
       columns:[
         col('c_loan_gid','bigint',{role:'fk',fkRef:'loans.l_gid — ВАЛИДИРОВАННЫЙ путь (не l_collateral_id), см. #4/f-join'}),
@@ -615,13 +615,13 @@
         col('nok_last_appraised_value','float'), col('nok_accreditation_status','nvarchar(150)'), col('nok_appraised_currency_code','nvarchar(150)'), col('c_reporting_date','date')
       ]},
     { id:'new_ratings', side:'new', name:'ratings', role:'P1 · Dim (версионный) · рейтинг риска', catalogued:true,
-      grain:'borrower/contract × date', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'borrower/contract × date', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('r_dog_num','varchar(255)',{role:'key'}), col('r_source','varchar(255)'), col('r_deal_gid','bigint'),
         col('r_client_rating','varchar(255)'), col('r_client_rating_date','date'), col('r_loan_rating','varchar(255)'), col('r_loan_rating_date','date'), col('r_report_date','date')
       ]},
     { id:'new_restructuring', side:'new', name:'restructuring_v2', role:'P1 · Event · меняли ли условия', catalogued:true,
-      grain:'restructuring event', evidence:'dwh_schema_introspection.sql, 30.07.2026; переписка Issue #8/#9/#10 (постдатирует FINDINGS.md)',
+      grain:'restructuring event', evidence:'schema_introspection.sql, 30.07.2026; переписка Issue #8/#9/#10 (постдатирует FINDINGS.md)',
       columns:[
         col('dlcr_gid','bigint',{role:'fk',fkRef:'loans.l_gid'}), col('dlcr$source','nvarchar(3)'), col('loan_id','nvarchar(35)',{role:'fk',fkRef:'loans.l_loan_id'}),
         col('restructuring_date','date'), col('new_interest_rate','float'), col('days_past_due_at_restructuring','float'),
@@ -630,14 +630,14 @@
         col('grace_od_begin_date','date'), col('grace_int_begin_date','date'), col('grace_od_end_date','date'), col('grace_int_end_date','date'), col('report_date','date')
       ]},
     { id:'new_writeoff', side:'new', name:'writeoff', role:'P1 · Event · списание долга', catalogued:true,
-      grain:'w_dlcrp_dlcr_gid (84 строки на весь S01+S03 — grain «случай» под вопросом, FINDINGS §7 п.11)', evidence:'CASE_RUN_WRITEOFF_CL_010 + dwh_schema_introspection.sql',
+      grain:'w_dlcrp_dlcr_gid (84 строки на весь S01+S03 — grain «случай» под вопросом, FINDINGS §7 п.11)', evidence:'CASE_RUN_WRITEOFF_CL_010 + schema_introspection.sql',
       columns:[
         col('w_dm_z10$report_date','date'), col('w_dlcr_dog_num','varchar(35)',{role:'key',note:'связывается со старым contract_number, f13'}),
         col('w_dlcr$source','varchar(3)',{note:'домен только S01/S03 — resolution-пайплайн не покрывает S02/S17'}),
         col('w_dlcrp_dlcr_gid','bigint'), col('w_dlcrp_write_off_amount','numeric(18,2)'), col('w_dlcrp_operation_is_write_off','date')
       ]},
     { id:'new_collections', side:'new', name:'collections', role:'P1 · Event · передали во взыскание', catalogued:true,
-      grain:'32 659 строк, без поля source в старой сверке — здесь c_loan_id/c_dog_num', evidence:'dwh_schema_introspection.sql, 30.07.2026; FINDINGS.md §5',
+      grain:'32 659 строк, без поля source в старой сверке — здесь c_loan_id/c_dog_num', evidence:'schema_introspection.sql, 30.07.2026; FINDINGS.md §5',
       columns:[
         col('c_loan_id','bigint',{role:'fk'}), col('c_product_type','nvarchar(50)'), col('c_dog_num','nvarchar(50)',{role:'key'}),
         col('c_sale_date','date'), col('c_collector_company_name','nvarchar(4000)'), col('c_repurchase_flag','nvarchar(1)'), col('c_sale_amount','numeric(18,2)'),
@@ -645,26 +645,26 @@
         col('c_total_balance_debt','numeric(18,2)'), col('c_reporting_date','date')
       ]},
     { id:'new_bankrupt', side:'new', name:'bankrupt', role:'P1 · Event/flag · банкротство', catalogued:true,
-      grain:'1 / borrower', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'1 / borrower', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('b_dog_gid','bigint',{role:'fk'}), col('b_dog_num','nvarchar(50)',{role:'key'}), col('b_source','nvarchar(50)'),
         col('b_record_load_date','date'), col('b_record_expiry_date','date'), col('b_bankrupt_date','date'), col('b_iin','nvarchar(15)',{note:'PII'})
       ]},
     { id:'new_interest_rates', side:'new', name:'interest_rates', role:'P1 · Dim · ставки', catalogued:true,
-      grain:'contract · dlcr_dog_num', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract · dlcr_dog_num', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('report_date','date'), col('dlcr_dog_num','nvarchar(35)',{role:'key'}), col('dlcr$source','nvarchar(3)'), col('loan_id','bigint',{role:'fk'}),
         col('interest_rate','numeric(17,2)'), col('initial_nominal_rate','numeric(17,2)'), col('effective_rate','numeric(18,9)',{note:'ГЭСВ/APR'}), col('initial_effective_rate','numeric(17,2)')
       ]},
     { id:'new_offbalance', side:'new', name:'offbalance', role:'P2 · Snap · внебаланс', catalogued:true,
-      grain:'contract × date, Class VI', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract × date, Class VI', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('o_reporting_date','date'), col('o_loan_num','nvarchar(50)',{role:'key'}), col('o_source','nvarchar(10)'), col('o_loan_id','bigint',{role:'fk'}),
         col('o_account_1411/1424/17400/17410/17401/17411/18794/18795/1818/1838/1434/1435/1773 (13 счетов)','float',{match:['o_account_1411','o_account_1424','o_account_17400','o_account_17410','o_account_17401','o_account_17411','o_account_18794','o_account_18795','o_account_1818','o_account_1838','o_account_1434','o_account_1435','o_account_1773']}),
         col('o_total_balance_debt','float')
       ]},
     { id:'new_guarantees', side:'new', name:'guarantees', role:'P2 · Dim/Event · гарантии', catalogued:true,
-      grain:'guarantee / contract', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'guarantee / contract', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('g_report_date','date'), col('g_gid','bigint',{role:'key'}), col('g_clnt_gid','bigint',{role:'fk'}), col('g_source','nvarchar(3)'),
         col('g_branch','nvarchar(12)'), col('g_guarantee_agreement_id','nvarchar(50)'), col('g_guarantee_agreement_number','nvarchar(30)'),
@@ -681,7 +681,7 @@
         col('g_credit_department_code','nvarchar(50)'), col('g_segment','nvarchar(2)'), col('g_financial_consultant','nvarchar(255)')
       ]},
     { id:'new_credit_lines', side:'new', name:'credit_lines', role:'P2 · Dim/Snap · лимиты', catalogued:true,
-      grain:'line / contract', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'line / contract', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('cl_dog_id','varchar(2000)',{role:'key'}), col('cl_dog_num','varchar(35)'), col('cl_client_code','varchar(255)'),
         col('cl_client_full_name','nvarchar(255)',{note:'PII'}), col('cl_curr_code','varchar(3)'), col('cl_open_date','date'), col('cl_close_date','date'),
@@ -693,7 +693,7 @@
         col('cl_product_type','nvarchar(255)'), col('cl_dep_code','nvarchar(255)'), col('cl_report_date','date'), col('cl_load_date','date'), col('cl_currency_rate','decimal(38,4)')
       ]},
     { id:'new_refinance', side:'new', name:'refinance', role:'P2 · Event · рефинанс', catalogued:true,
-      grain:'old → new link', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'old → new link', evidence:'schema_introspection.sql, 30.07.2026',
       columns:[
         col('ref_id','numeric(18,0)',{role:'key'}), col('ref_loan_id','nvarchar(255)',{role:'fk'}), col('ref_flag','nvarchar(255)'),
         col('ref_new_agreement_number','nvarchar(255)'), col('ref_status_new_agreement_number','nvarchar(255)'),
@@ -701,7 +701,7 @@
         col('ref_sum_refinance','float'), col('ref_company_marker_id','varchar(255)'), col('ref_date','date'), col('ref_source','varchar(3)')
       ]},
     { id:'new_loans_active', side:'new', name:'loans_active', role:'View · только действующие', catalogued:true,
-      grain:'та же структура, что loans (37 из 39 полей) — фильтр не документирован', evidence:'dwh_schema_introspection.sql, 30.07.2026; переписка Issue #13',
+      grain:'та же структура, что loans (37 из 39 полей) — фильтр не документирован', evidence:'schema_introspection.sql, 30.07.2026; переписка Issue #13',
       note:'Правило включения закрытых договоров с остаточным балансом не подтверждено, см. #13/e8.',
       columns:[
         col('l_start_date','date'), col('l_end_date','date'), col('dlcr_dprt_gid','bigint'), col('l_source','varchar(10)'),
@@ -717,7 +717,7 @@
         col('l_credit_object','varchar(255)'), col('l_credit_purpose','varchar(255)'), col('l_reward_rate_type','varchar(255)')
       ]},
     { id:'new_brm', side:'new', name:'brm_all_data', role:'View · итоговая витрина БРМ', catalogued:true,
-      grain:'contract_number × actual_date × source — только 3 поля видны на этом срезе схемы', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      grain:'contract_number × actual_date × source — только 3 поля видны на этом срезе схемы', evidence:'schema_introspection.sql, 30.07.2026',
       note:'Открытый вопрос: это ли финальная витрина потребления? Что в неё преджойнено, на какой грануляр­ности? (FINDINGS §11 п.7). 3 столбца — не полный охват, возможно view поверх остальных 18 таблиц вычисляется на лету.',
       columns:[ col('contract_number','varchar(100)',{role:'key'}), col('actual_date','date'), col('source','varchar(100)') ]}
   ];
