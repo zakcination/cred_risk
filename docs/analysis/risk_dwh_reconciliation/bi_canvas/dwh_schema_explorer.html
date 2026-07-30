@@ -1,0 +1,1138 @@
+<title>Risk DWH — BI-холст процессов</title>
+<style>
+  :root {
+    --paper: #eef2ee; --paper-raised: #ffffff;
+    --ink: #16211d; --ink-soft: #46534b; --ink-faint: #7c8a86;
+    --line: #c7d1c9; --line-soft: #dbe3dc;
+    --accent: #1f6b74; --accent-soft: #dfe9e8;
+    --st-good: #0ca30c;      --st-good-fg: #f3fdf3;
+    --st-warning: #fab219;   --st-warning-fg: #4a3005;
+    --st-serious: #ec835a;   --st-serious-fg: #3d1508;
+    --st-critical: #d03b3b;  --st-critical-fg: #fdf1f0;
+    --font-display: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root { --paper:#101613; --paper-raised:#161f1b; --ink:#e8efe9; --ink-soft:#a9b8b0; --ink-faint:#6f7d76; --line:#33413a; --line-soft:#263029; --accent:#5cb3ae; --accent-soft:#1c2f2d; } }
+  :root[data-theme="dark"] { --paper:#101613; --paper-raised:#161f1b; --ink:#e8efe9; --ink-soft:#a9b8b0; --ink-faint:#6f7d76; --line:#33413a; --line-soft:#263029; --accent:#5cb3ae; --accent-soft:#1c2f2d; }
+  :root[data-theme="light"] { --paper:#eef2ee; --paper-raised:#ffffff; --ink:#16211d; --ink-soft:#46534b; --ink-faint:#7c8a86; --line:#c7d1c9; --line-soft:#dbe3dc; --accent:#1f6b74; --accent-soft:#dfe9e8; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); }
+  body { padding: clamp(14px, 2.4vw, 32px); }
+  .sheet { max-width: 1440px; margin: 0 auto; display:flex; flex-direction:column; gap:16px; }
+  .ic { width:13px; height:13px; flex:none; vertical-align:-2px; } .ic-sm{width:11px;height:11px;} .ic-lg{width:20px;height:20px;}
+  .eyebrow { font-family: var(--font-mono); font-size: 11.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--accent); margin:0 0 6px; }
+  h1 { font-family: var(--font-display); font-weight:600; font-size: clamp(23px,2.8vw,30px); line-height:1.14; margin:0 0 8px; text-wrap:balance; }
+  .thesis { font-size:13.5px; line-height:1.55; max-width:92ch; color:var(--ink-soft); margin:0 0 4px; }
+  .thesis code { font-family: var(--font-mono); font-size: .92em; background: var(--accent-soft); padding:1px 5px; border-radius:3px; }
+  .thesis b { color:var(--ink); font-weight:600; }
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+  @media (max-width:820px){ .stats{ grid-template-columns:repeat(2,1fr); } }
+  .tile { background:var(--paper-raised); border:1px solid var(--line); border-radius:6px; padding:12px 13px; display:flex; flex-direction:column; gap:7px; transition:border-color .15s ease; }
+  .tile:hover { border-color:var(--accent); }
+  .tile-head { display:flex; align-items:center; gap:7px; color:var(--ink-faint); }
+  .tile-head .ic { color:var(--accent); }
+  .tile-head span { font-family:var(--font-mono); font-size:10px; letter-spacing:.07em; text-transform:uppercase; }
+  .tile-value { font-family:var(--font-display); font-size:24px; font-weight:600; font-variant-numeric:tabular-nums; line-height:1; }
+  .tile-sub { font-size:11px; color:var(--ink-soft); }
+  .tile-legend { display:flex; flex-wrap:wrap; gap:7px 11px; margin-top:1px; }
+  .tile-legend .li { display:flex; align-items:center; gap:5px; font-family:var(--font-mono); font-size:10.5px; color:var(--ink-soft); }
+  .tile-legend .dot { width:9px; height:9px; border-radius:50%; flex:none; }
+  .matrix-panel { background:var(--paper-raised); border:1px solid var(--line); border-radius:6px; padding:14px 16px; }
+  .matrix-panel h2 { font-family:var(--font-display); font-size:17px; margin:0 0 3px; }
+  .matrix-panel .sub { font-size:11.5px; color:var(--ink-soft); margin:0 0 12px; }
+  table.dash { width:100%; border-collapse:collapse; font-size:12px; }
+  table.dash th { font-family:var(--font-mono); font-size:9.5px; letter-spacing:.05em; text-transform:uppercase; text-align:left; color:var(--ink-faint); padding:5px 8px; border-bottom:1px solid var(--line); }
+  table.dash td { padding:5px 8px; border-bottom:1px solid var(--line-soft); vertical-align:middle; }
+  table.dash td.name { font-family:var(--font-mono); font-weight:600; white-space:nowrap; }
+  table.dash td.num { font-family:var(--font-mono); font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+  .dash-bar { display:flex; height:7px; border-radius:4px; overflow:hidden; background:var(--line-soft); min-width:90px; }
+  .dash-bar span { display:block; height:100%; }
+  .dash-scroll { max-height:340px; overflow-y:auto; }
+  .qstatus { font-family:var(--font-mono); font-size:9px; letter-spacing:.03em; text-transform:uppercase; padding:1px 6px; border-radius:3px; white-space:nowrap; flex:none; margin-top:1px; }
+  table.matrix { width:100%; border-collapse:collapse; font-size:12.5px; }
+  table.matrix th { font-family:var(--font-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; text-align:left; color:var(--ink-faint); padding:6px 10px; border-bottom:1px solid var(--line); }
+  table.matrix td { padding:7px 10px; border-bottom:1px solid var(--line-soft); vertical-align:top; }
+  table.matrix td.src { font-family:var(--font-mono); font-weight:700; }
+  .cell { display:flex; align-items:flex-start; gap:6px; } .cell .ic{margin-top:2px;flex:none;}
+  .cell.ok { color:var(--st-good); } .cell.bad { color:var(--st-serious); } .cell.blocked { color:var(--ink-faint); }
+  .cell-note { font-size:11px; color:var(--ink-soft); }
+  .questions-panel { background:var(--paper-raised); border:1px solid var(--line); border-radius:6px; padding:14px 16px; }
+  .questions-panel h2 { font-family:var(--font-display); font-size:17px; margin:0 0 3px; }
+  .questions-panel .sub { font-size:11.5px; color:var(--ink-soft); margin:0 0 12px; }
+  .qlist { display:flex; flex-direction:column; max-height:260px; overflow-y:auto; }
+  .qitem { display:flex; gap:10px; padding:7px 4px; border-top:1px solid var(--line-soft); font-size:12.5px; }
+  .qitem:first-child { border-top:none; }
+  .qnum { font-family:var(--font-mono); font-size:11px; color:var(--accent); flex:none; width:20px; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 16px; font-size:11px; color:var(--ink-soft); }
+  .legend .item { display:flex; align-items:center; gap:5px; } .legend .swatch{width:10px;height:10px;border-radius:2px;flex:none;} .legend .line{width:16px;height:2px;flex:none;}
+  .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .btn { font-family: var(--font-mono); font-size:11px; letter-spacing:.03em; text-transform:uppercase; padding:6px 11px; border-radius:4px; border:1px solid var(--line); background:var(--paper-raised); color:var(--ink-soft); cursor:pointer; display:inline-flex; align-items:center; gap:6px; }
+  .btn:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--paper-raised); }
+  .btn.on { background:var(--accent); border-color:var(--accent); color:var(--paper-raised); }
+  .spacer { flex:1; } .zoom-group{display:flex;gap:2px;} .zoom-group .btn{padding:6px 10px;}
+  .isolate-banner { display:none; align-items:center; justify-content:space-between; gap:10px; background:var(--accent-soft); border:1px dashed var(--accent); border-radius:4px; padding:7px 12px; font-family:var(--font-mono); font-size:11.5px; color:var(--accent); }
+  .isolate-banner.show { display:flex; } .isolate-banner button.btn{padding:4px 9px;}
+  .canvas-viewport { position:relative; height:70vh; min-height:460px; overflow:hidden; border:1px solid var(--line); border-radius:6px; background:var(--paper-raised); background-image: linear-gradient(var(--line-soft) 1px, transparent 1px), linear-gradient(90deg, var(--line-soft) 1px, transparent 1px); background-size: 26px 26px; touch-action:none; cursor:grab; transition:height .18s ease; }
+  .canvas-viewport.panning { cursor:grabbing; }
+  .sheet.expanded > *:not(.layout-wide) { display:none; }
+  .sheet.expanded .layout-wide > *:not(.canvas-block) { display:none; }
+  .sheet.expanded .layout-wide { grid-template-columns: 1fr; }
+  .sheet.expanded .canvas-block { gap:8px; }
+  .sheet.expanded .canvas-viewport { height:88vh; }
+  .canvas-viewport:fullscreen, .canvas-viewport:-webkit-full-screen { height:100vh; border-radius:0; }
+  .canvas-block-head { display:flex; align-items:center; gap:8px; }
+  .canvas-block-head h2 { font-family:var(--font-display); font-size:16px; margin:0; flex:1; }
+
+  /* ---------- wide-monitor layout: 27" 16:9 (~2560px) and 21:9 ultrawide (~3440px) ---------- */
+  .layout-wide { display:flex; flex-direction:column; gap:16px; }
+  .sidebar { display:flex; flex-direction:column; gap:16px; min-width:0; }
+
+  @media (min-width: 1600px) {
+    body { padding-left: clamp(24px, 3vw, 64px); padding-right: clamp(24px, 3vw, 64px); }
+    .sheet { max-width: 2400px; }
+    .layout-wide { display:grid; grid-template-columns: minmax(0,1fr) 420px; align-items:start; gap:20px; }
+    .canvas-block { grid-column:1; grid-row:1; min-width:0; }
+    .sidebar { grid-column:2; grid-row:1; position:sticky; top:16px; max-height:calc(100vh - 32px); overflow-y:auto; padding-right:6px; }
+    .canvas-viewport { height:calc(100vh - 210px); min-height:640px; }
+  }
+
+  /* 21:9 ultrawide gets a slightly roomier sidebar and title block; canvas (1fr) absorbs the rest */
+  @media (min-width: 2600px) {
+    .sheet { max-width: 3000px; }
+    .layout-wide { grid-template-columns: minmax(0,1fr) 480px; }
+    .canvas-viewport { height:calc(100vh - 190px); }
+  }
+  .canvas-inner { position:absolute; top:0; left:0; transform-origin:0 0; will-change:transform; }
+  svg.edges { position:absolute; top:0; left:0; pointer-events:none; overflow:visible; }
+  .lane-label { position:absolute; top:14px; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); width:250px; line-height:1.3; }
+  .shelf-label { position:absolute; font-family:var(--font-mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); }
+  .node { position:absolute; width:250px; background:var(--paper-raised); border:1px solid var(--line); border-radius:5px; cursor:grab; user-select:none; box-shadow:0 1px 2px rgba(0,0,0,.06); transition:opacity .15s ease, box-shadow .15s ease; overflow:hidden; }
+  .node:active { cursor:grabbing; } .node:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}
+  .node.dimmed { opacity:.2; } .node.hit{box-shadow:0 0 0 2px var(--accent);}
+  .n-head { padding:8px 10px; }
+  .n-name { font-family:var(--font-mono); font-weight:700; font-size:11.2px; line-height:1.3; color:var(--ink); display:flex; gap:6px; align-items:flex-start; }
+  .n-name .ic { margin-top:1px; color:var(--ink-faint); }
+  .n-badges { display:flex; flex-wrap:wrap; gap:4px; margin-top:6px; }
+  .badge { font-family:var(--font-mono); font-size:8.7px; letter-spacing:.02em; text-transform:uppercase; padding:2px 6px; border-radius:3px; border:1px solid var(--line); color:var(--ink-soft); white-space:nowrap; display:inline-flex; align-items:center; gap:3px; }
+  .node.table-node.side-old .badge.side { border-color:var(--accent); color:var(--accent); }
+  .node.table-node.side-new .badge.side { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
+  .badge.tier-p0 { background:var(--ink); color:var(--paper-raised); border-color:var(--ink); }
+  .n-cols { border-top:1px solid var(--line-soft); max-height:none; }
+  .n-col-row { display:flex; align-items:center; gap:6px; padding:3.5px 10px; font-family:var(--font-mono); font-size:10px; border-top:1px solid var(--line-soft); }
+  .n-col-row:first-child { border-top:none; }
+  .n-col-dot { width:7px; height:7px; border-radius:50%; flex:none; border:1px solid var(--ink-faint); background:transparent; }
+  .n-col-dot.mapped-proven { background:var(--st-good); border-color:var(--st-good); }
+  .n-col-dot.mapped-hyp { background:var(--st-warning); border-color:var(--st-warning); }
+  .n-col-dot.mapped-external { background:var(--st-warning); border-color:var(--st-warning); border-style:dashed; }
+  .n-col-dot.mapped-refuted { background:var(--ink-faint); border-color:var(--ink-faint); }
+  .n-col-name { flex:1; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .n-col-type { color:var(--ink-faint); font-size:8.7px; flex:none; }
+  .n-col-tag { font-size:7.8px; padding:0 4px; border-radius:2px; flex:none; }
+  .n-col-tag.key { background:var(--ink); color:var(--paper-raised); }
+  .n-col-tag.fk { border:1px solid var(--accent); color:var(--accent); }
+  .n-foot { padding:5px 10px 7px; font-family:var(--font-mono); font-size:9px; color:var(--ink-faint); border-top:1px solid var(--line-soft); }
+  .node.process-node .n-head { padding:9px 10px 8px; }
+  .node.process-node[data-status="proven"] { border-left:4px solid var(--st-good); }
+  .node.process-node[data-status="hypothesis"] { border-left:4px solid var(--st-warning); }
+  .node.process-node[data-status="external"] { border-left:4px dashed var(--st-warning); }
+  .node.process-node[data-status="refuted"] { border-left:4px solid var(--ink-faint); }
+  .node.process-node[data-status="refuted"] .n-name { text-decoration:line-through; text-decoration-color:var(--ink-faint); }
+  .node.process-node[data-builtin="false"] { border-style:dashed; }
+  .node.placeholder { border-style:dashed; color:var(--ink-faint); text-align:center; display:flex; align-items:center; justify-content:center; gap:6px; min-height:52px; font-family:var(--font-mono); font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; padding:9px; }
+  .node.placeholder:hover { border-color:var(--accent); color:var(--accent); }
+  .badge.st-good { background:color-mix(in srgb, var(--st-good) 16%, var(--paper-raised)); color:var(--st-good); border-color:transparent; }
+  .badge.st-warning { background:color-mix(in srgb, var(--st-warning) 22%, var(--paper-raised)); color:var(--st-warning-fg); border-color:transparent; }
+  .badge.st-neutral { background:var(--line-soft); color:var(--ink-faint); border-color:transparent; }
+  .badge.draft { background:var(--accent-soft); color:var(--accent); border-color:transparent; }
+  .drawer { position:fixed; top:0; right:0; bottom:0; width:min(440px, 92vw); background:var(--paper-raised); border-left:1px solid var(--line); transform:translateX(100%); transition:transform .2s ease; z-index:40; display:flex; flex-direction:column; box-shadow:-8px 0 24px rgba(0,0,0,.12); }
+  .drawer.open { transform:translateX(0); }
+  .drawer-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; padding:16px 16px 10px; border-bottom:1px solid var(--line-soft); }
+  .drawer-head h3 { font-family:var(--font-display); font-size:16.5px; margin:0; }
+  .drawer-close { background:none; border:none; color:var(--ink-faint); font-size:18px; cursor:pointer; line-height:1; padding:2px 6px; }
+  .drawer-body { padding:14px 16px 24px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:10px; }
+  .drawer-body .t-grain, .drawer-body .t-evidence, .drawer-body .calc-meta { font-family:var(--font-mono); font-size:11.5px; color:var(--ink-faint); }
+  .drawer-body .t-note, .drawer-body .calc-note { font-size:11.5px; color:var(--st-warning-fg); }
+  .col-row { display:flex; flex-direction:column; gap:2px; padding:6px 8px; border-radius:4px; border:1px solid var(--line-soft); }
+  .col-head { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+  .col-name { font-family:var(--font-mono); font-size:11.5px; color:var(--ink); }
+  .col-type { font-family:var(--font-mono); font-size:9.5px; color:var(--ink-faint); }
+  .role-tag { font-family:var(--font-mono); font-size:9px; letter-spacing:.03em; padding:1px 5px 1px 4px; border-radius:2px; display:inline-flex; align-items:center; gap:3px; }
+  .role-key { background:var(--ink); color:var(--paper-raised); } .role-fk{border:1px solid var(--accent);color:var(--accent);}
+  .col-note { font-size:10.5px; color:var(--ink-soft); font-style:italic; }
+  .formula { font-family:var(--font-mono); font-size:12px; background:var(--accent-soft); color:var(--ink); border-radius:4px; padding:8px 10px; white-space:pre-wrap; line-height:1.5; margin:0; }
+  .chip-row { display:flex; flex-wrap:wrap; gap:5px; }
+  .input-chip { font-family:var(--font-mono); font-size:10px; background:var(--paper); border:1px solid var(--line); color:var(--ink-soft); padding:2px 7px; border-radius:3px; }
+  .finding-chip { font-family:var(--font-mono); font-size:10px; padding:2px 7px; border-radius:3px; font-weight:600; }
+  .status-chip { font-family:var(--font-mono); font-size:10px; letter-spacing:.03em; text-transform:uppercase; padding:3px 9px; border-radius:3px; align-self:flex-start; display:inline-flex; align-items:center; gap:5px; }
+  .scope-tag { font-family:var(--font-mono); font-size:9.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-faint); border:1px solid var(--line); border-radius:3px; padding:2px 6px; align-self:flex-start; }
+  .drawer-sub { font-family:var(--font-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-faint); margin:4px 0 -4px; }
+  .sql-block { font-family:var(--font-mono); font-size:11px; background:var(--ink); color:#d8e4de; border-radius:4px; padding:10px 12px; white-space:pre; overflow-x:auto; line-height:1.5; margin:0; }
+  .history-list { display:flex; flex-direction:column; gap:6px; }
+  .history-item { display:flex; gap:8px; font-size:11.5px; }
+  .history-date { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-faint); flex:none; width:72px; }
+  .version-badge { font-family:var(--font-mono); font-size:10px; background:var(--line-soft); color:var(--ink-soft); padding:2px 7px; border-radius:3px; align-self:flex-start; }
+  .backdrop { position:fixed; inset:0; background:rgba(10,14,12,.45); z-index:49; display:none; } .backdrop.show{display:block;}
+  .modal { position:fixed; z-index:50; top:50%; left:50%; transform:translate(-50%,-50%); width:min(560px,92vw); max-height:86vh; overflow-y:auto; background:var(--paper-raised); border:1px solid var(--line); border-radius:8px; padding:20px; display:none; box-shadow: 0 12px 32px rgba(0,0,0,.2); }
+  .modal.show { display:block; }
+  .modal h3 { font-family:var(--font-display); font-size:19px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+  .modal .hint { font-size:12px; color:var(--ink-soft); margin:0 0 14px; }
+  .field { display:flex; flex-direction:column; gap:5px; margin-bottom:12px; }
+  .field label { font-family:var(--font-mono); font-size:10.5px; letter-spacing:.04em; text-transform:uppercase; color:var(--ink-faint); }
+  .field input[type="text"], .field textarea, .field select { font-family:var(--font-body); font-size:13px; padding:8px 10px; border:1px solid var(--line); border-radius:4px; background:var(--paper); color:var(--ink); resize:vertical; }
+  .field textarea { min-height:64px; font-family:var(--font-mono); font-size:12px; }
+  .scope-picker { display:flex; gap:6px; } .scope-picker .btn{flex:1;justify-content:center;}
+  .col-picker { display:flex; flex-wrap:wrap; gap:6px; max-height:160px; overflow-y:auto; padding:8px; border:1px solid var(--line-soft); border-radius:4px; }
+  .col-picker .pick-chip { font-family:var(--font-mono); font-size:10.5px; padding:3px 8px; border-radius:3px; border:1px solid var(--line); color:var(--ink-soft); cursor:pointer; background:var(--paper-raised); }
+  .col-picker .pick-chip.on { background:var(--accent); border-color:var(--accent); color:var(--paper-raised); }
+  .selected-row { display:flex; flex-wrap:wrap; gap:5px; min-height:22px; }
+  .modal-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }
+  .toast { position:fixed; bottom:18px; left:50%; transform:translateX(-50%) translateY(8px); background:var(--ink); color:var(--paper); font-family:var(--font-mono); font-size:12px; padding:8px 14px; border-radius:5px; opacity:0; pointer-events:none; transition:opacity .18s ease, transform .18s ease; z-index:60; }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+  footer.note { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); border-top:1px solid var(--line); padding-top:10px; }
+</style>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="ic-table" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.66 3.58 3 8 3s8-1.34 8-3v-13"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></symbol>
+  <symbol id="ic-process" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="2.3"/><circle cx="19" cy="6" r="2.3"/><circle cx="19" cy="18" r="2.3"/><path d="M7.1 10.8 16.9 6.9M7.1 13.2 16.9 17.1"/></symbol>
+  <symbol id="ic-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12 20 3"/><path d="M16.5 6.5 19 9"/><path d="M13.3 9.3 15.3 11.3"/></symbol>
+  <symbol id="ic-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5 14.5 9.5"/><path d="M8 16c-2.2 0-4-1.8-4-4s1.8-4 4-4h2"/><path d="M16 8c2.2 0 4 1.8 4 4s-1.8 4-4 4h-2"/></symbol>
+  <symbol id="ic-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12.3 10.7 15 16 9.3"/></symbol>
+  <symbol id="ic-flask" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3h4"/><path d="M10 3v6.2L4.9 18a2 2 0 0 0 1.7 3h10.8a2 2 0 0 0 1.7-3L14 9.2V3"/><path d="M8.2 15h7.6"/></symbol>
+  <symbol id="ic-flag" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 21V4"/><path d="M6 5h12l-3.2 4L18 13H6"/></symbol>
+  <symbol id="ic-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 9l6 6"/><path d="M15 9l-6 6"/></symbol>
+  <symbol id="ic-zoomin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.3 15.3 20 20"/><path d="M10.5 7.8v5.4M7.8 10.5h5.4"/></symbol>
+  <symbol id="ic-zoomout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.3 15.3 20 20"/><path d="M7.8 10.5h5.4"/></symbol>
+  <symbol id="ic-reset" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 1 2.6 5.9"/><path d="M4 18v-5h5"/></symbol>
+  <symbol id="ic-download" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11.5"/><path d="M7.3 11 12 15.7 16.7 11"/><path d="M4.5 19h15"/></symbol>
+  <symbol id="ic-upload" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3.5"/><path d="M7.3 8 12 3.3 16.7 8"/><path d="M4.5 19h15"/></symbol>
+  <symbol id="ic-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7.8v8.4M7.8 12h8.4"/></symbol>
+  <symbol id="ic-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5 5.3 16 15.8 5.5l2.7 2.7L8 18.7l-3.5.8Z"/><path d="M13.7 7.6 16.4 10.3"/></symbol>
+  <symbol id="ic-warn" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 21.5 20h-19Z"/><path d="M12 9.5v5"/><circle cx="12" cy="17.2" r="0.9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="ic-question" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.3 9.3a2.7 2.7 0 1 1 3.9 2.4c-.8.5-1.2 1-1.2 2"/><circle cx="12" cy="17" r="0.9" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="ic-grid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="6.5" height="6.5" rx="1"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1"/></symbol>
+</svg>
+
+<div class="sheet">
+  <header>
+    <p class="eyebrow"><svg class="ic ic-lg" style="vertical-align:-4px;margin-right:6px;"><use href="#ic-check"/></svg>Risk DWH &middot; BI-холст процессов &middot; v4 &middot; live schema</p>
+    <h1>Все 19 таблиц Dictionary + все 10 таблиц CL_PORTFOLIO — 100% реальная схема</h1>
+    <p class="thesis">
+      <code>dwh_schema_introspection.sql</code> вернулся с полным выводом — <b>каждая</b> таблица на этом
+      холсте теперь показывает настоящие столбцы и типы из <code>INFORMATION_SCHEMA</code>, а не
+      реконструкцию по тестовым SQL. Ограничений PK/FK/UNIQUE в базе <b>нет ни одного</b> — все ключи
+      логические, ровно как показывал Issue #8. Точка слева от столбца — статус сверки:
+      <b style="color:var(--st-good)">●</b> доказано, <b style="color:var(--st-warning-fg)">●</b> гипотеза/внешняя
+      проверка, <span style="color:var(--ink-faint)">●</span> опровергнуто, пустой кружок — колонка ещё не
+      тронута ни одним процессом.
+    </p>
+    <p class="thesis">
+      Живая схема уже поймала находку: <code>loans.l_borrower_id</code> объявлен <code>varchar(255)</code>,
+      а <code>borrower.b_borrower_id</code> — <code>bigint</code>. Разнотипный join — вероятная причина
+      части несовпадений из #1/DWH-13, отдельно от вопроса существования строки.
+    </p>
+  </header>
+
+  <div class="stats" id="statsRow"></div>
+
+  <div class="layout-wide">
+  <aside class="sidebar">
+
+  <div class="matrix-panel">
+    <h2>Сверка по источникам</h2>
+    <p class="sub">FINDINGS.md §4/§6 — прогресс по каждому <code>la_source</code> на 01.07.2026. Progress tracking №1.</p>
+    <div style="overflow-x:auto"><table class="matrix"><thead><tr><th>Source</th><th>Периметр (old/new/matched)</th><th>Баланс</th><th>Provisions</th><th>DPD</th></tr></thead><tbody id="matrixBody"></tbody></table></div>
+  </div>
+
+  <div class="matrix-panel">
+    <h2>Дашборд по таблицам Dictionary</h2>
+    <p class="sub">Только новые таблицы — это DWH, в который переезжаем, и его готовность мы отслеживаем. CL_PORTFOLIO — эталон для сверки, а не то, что проверяется на готовность, поэтому здесь не участвует. Сколько полей в каждой таблице уже проверено и готово к работе, сколько ещё в процессе, сколько вообще не тронуто ни одним процессом. Отсортировано по доле проверенного.</p>
+    <div class="dash-scroll"><table class="dash"><thead><tr><th>Таблица (Dictionary)</th><th>Всего полей</th><th style="text-align:right">Готово</th><th style="text-align:right">В работе</th><th style="text-align:right">Проблема</th><th style="text-align:right">Не тронуто</th><th>Доля</th></tr></thead><tbody id="dashBody"></tbody></table></div>
+  </div>
+
+  <div class="questions-panel">
+    <h2><svg class="ic ic-lg"><use href="#ic-question"/></svg> Реестр открытых вопросов к S2T (FINDINGS.md §7)</h2>
+    <p class="sub">15 пунктов, требующих ответа автора mart-а — формулировки упрощены для внутренней рабочей сверки. Метка справа — есть ли у нас самих доказанный данными ответ. 9 пунктов дополнены вводными внутреннего RAG-бота по методологии AQR — это контекст «как должно быть», а не независимое подтверждение того, как реализовано в mart-е, поэтому статус остался «частично», не «закрыто».</p>
+    <div class="qlist" id="qList"></div>
+  </div>
+
+  <div class="legend">
+    <span class="item"><svg class="ic"><use href="#ic-key"/></svg>КЛЮЧ (логический — 0 ограничений БД, см. #8)</span>
+    <span class="item"><svg class="ic"><use href="#ic-link"/></svg>ВК</span>
+    <span class="item"><span class="line" style="background:var(--st-good)"></span>доказано (FINDINGS CONFIRMED)</span>
+    <span class="item"><span class="line" style="background:var(--st-warning)"></span>гипотеза / внешняя проверка</span>
+    <span class="item"><span class="line" style="background:var(--ink-faint)"></span>опровергнуто</span>
+    <span class="item"><svg class="ic"><use href="#ic-pencil"/></svg>пунктир на процессе — черновик</span>
+  </div>
+
+  </aside>
+  <div class="canvas-block">
+  <div class="canvas-block-head">
+    <h2>Холст</h2>
+    <button class="btn" id="expandToggle" title="Развернуть на всю страницу"><svg class="ic"><use href="#ic-grid"/></svg>На всю страницу</button>
+    <button class="btn" id="fullscreenToggle" title="Полноэкранный режим (браузер)"><svg class="ic"><use href="#ic-zoomin"/></svg>Fullscreen</button>
+  </div>
+  <div class="toolbar">
+    <div class="zoom-group">
+      <button class="btn" id="zoomOut" title="Уменьшить"><svg class="ic"><use href="#ic-zoomout"/></svg></button>
+      <button class="btn" id="zoomReset" title="Сбросить масштаб"><svg class="ic"><use href="#ic-reset"/></svg>Сброс</button>
+      <button class="btn" id="zoomIn" title="Увеличить"><svg class="ic"><use href="#ic-zoomin"/></svg></button>
+    </div>
+    <button class="btn primary" id="quickAdd"><svg class="ic"><use href="#ic-plus"/></svg>Новый черновик</button>
+    <button class="btn" id="exportBtn"><svg class="ic"><use href="#ic-download"/></svg>Экспорт JSON</button>
+    <button class="btn" id="importBtn"><svg class="ic"><use href="#ic-upload"/></svg>Импорт JSON</button>
+    <input type="file" id="importFile" accept="application/json" style="display:none" />
+    <div class="spacer"></div>
+    <div class="isolate-banner" id="isolateBanner"><span id="isolateBannerText"></span><button class="btn" id="clearIsolate"><svg class="ic"><use href="#ic-x"/></svg>Очистить</button></div>
+  </div>
+
+  <div class="canvas-viewport" id="viewport"><div class="canvas-inner" id="canvasInner"></div></div>
+  </div>
+
+  </div>
+
+  <footer class="note">
+    Снимок FINDINGS.md — 01.07.2026 &middot; живая схема — 30.07.2026 (INFORMATION_SCHEMA) &middot; источники CL_PORTFOLIO.dbo (10 таблиц, 0 не каталогизировано) &middot;
+    назначение Dictionaries.risk_analytics (19 таблиц, 0 не каталогизировано). Статусная палитра провалидирована skill-ом dataviz.
+  </footer>
+</div>
+
+<div class="backdrop" id="backdrop"></div>
+<aside class="drawer" id="drawer"><div class="drawer-head"><h3 id="drawerTitle"></h3><button class="drawer-close" id="drawerClose">&times;</button></div><div class="drawer-body" id="drawerBody"></div></aside>
+
+<div class="modal" id="addModal">
+  <h3><svg class="ic ic-lg"><use href="#ic-pencil"/></svg>Новый черновик процесса</h3>
+  <p class="hint">Черновик по умолчанию — гипотеза, ещё не реализованная в SQL.</p>
+  <div class="field"><label>Название</label><input type="text" id="fName" placeholder="например: la_status vs l_loan_status" /></div>
+  <div class="field"><label>Область охвата</label><div class="scope-picker">
+    <button class="btn scope-opt" data-scope="old">Только старая</button>
+    <button class="btn scope-opt" data-scope="cross">Сквозной</button>
+    <button class="btn scope-opt" data-scope="new">Только новая</button>
+  </div></div>
+  <div class="field"><label>Формула / описание</label><textarea id="fFormula" placeholder="что вычисляет или проверяет этот процесс"></textarea></div>
+  <div class="field"><label>Столбцы</label><div class="col-picker" id="colPicker"></div><div class="selected-row" id="selectedRow"></div></div>
+  <div class="field"><label>Статус</label><select id="fStatus"><option value="hypothesis">Гипотеза</option><option value="proven">Доказано</option><option value="external">Внешняя проверка</option><option value="refuted">Опровергнуто</option></select></div>
+  <div class="field"><label>Источник / примечание</label><input type="text" id="fEvidence" placeholder="кто, когда, почему" /></div>
+  <div class="modal-actions"><button class="btn" id="cancelAdd">Отмена</button><button class="btn primary" id="saveAdd"><svg class="ic"><use href="#ic-plus"/></svg>Добавить на схему</button></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  var SIDE_LABEL = { old:'СТАРАЯ', new:'НОВАЯ' };
+  var STATUS_LABEL = { proven:'ДОКАЗАНО', hypothesis:'ГИПОТЕЗА', external:'ВНЕШНЯЯ ПРОВЕРКА', refuted:'ОПРОВЕРГНУТО' };
+  var STATUS_ICON = { proven:'ic-check', hypothesis:'ic-flask', external:'ic-flag', refuted:'ic-x' };
+  var STATUS_BADGE_CLASS = { proven:'st-good', hypothesis:'st-warning', external:'st-warning', refuted:'st-neutral' };
+  var SCOPE_LABEL = { old:'только старая', cross:'сквозной', new:'только новая', freeform:'методология' };
+  var DOT_CLASS = { proven:'mapped-proven', hypothesis:'mapped-hyp', external:'mapped-external', refuted:'mapped-refuted' };
+  function icon(id, cls){ return '<svg class="ic'+(cls?' '+cls:'')+'"><use href="#'+id+'"/></svg>'; }
+  function esc(s){ return String(s); }
+  function col(name, type, extra){ var o = {name:name, type:type}; if (extra) for (var k in extra) o[k]=extra[k]; return o; }
+
+  /* ============================================================
+     TABLES — live INFORMATION_SCHEMA dump, 30.07.2026.
+     10 old (CL_PORTFOLIO.dbo) + 19 new (Dictionaries.risk_analytics).
+     No PK/FK/UNIQUE constraints exist in either DB — every KEY/FK
+     tag below is a LOGICAL key proven by coverage (FINDINGS.md §1),
+     never a DB-enforced constraint.
+     ============================================================ */
+  var TABLES = [
+    { id:'old_rs', side:'old', name:'PORTFOLIO_RS', role:'S01 · живой источник', catalogued:true,
+      grain:'file_names+id+actual_date (NOT NULL); S01 (RS retail core)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('file_names','varchar(20)'), col('id','int'), col('actual_date','date',{note:'отчётная дата'}),
+        col('filial','varchar(100)'), col('contractnumber','varchar(100)',{role:'key',note:'S01 контрольный номер — НЕ основной old↔new ключ (см. contract_id)'}),
+        col('Client','varchar(220)',{note:'PII'}), col('contract_id','varchar(20)',{role:'key',note:'основной ключ: → loans.l_loan_id (FINDINGS §1)'}),
+        col('iin','varchar(20)',{note:'PII'}), col('rnn','varchar(20)',{note:'PII'}),
+        col('financing_date','date'), col('open_date','date'), col('close_date','date'),
+        col('Limit','numeric(30,4)'), col('outstanding','numeric(30,4)'), col('outstanding_overdue','numeric(30,4)'),
+        col('interest','numeric(30,4)'), col('overdue_interest','numeric(30,4)'), col('accrued_interest_on_overdue_outstanding','numeric(30,4)'),
+        col('commissions','numeric(30,4)'), col('overdue_commissions','numeric(30,4)'), col('penalties','numeric(30,4)'),
+        col('discount_1434','numeric(30,4)'), col('discount_1435','numeric(30,4)'), col('discount_1773','numeric(30,4)'), col('discount_2794','numeric(30,4)'),
+        col('Total_outstanding','numeric(30,4)'), col('ifrs_balance','numeric(30,4)',{note:'S17-style formula, see f9'}), col('ifrs_persent','numeric(30,4)'), col('ifrs_1428','numeric(30,4)'),
+        col('_1860','numeric(30,4)'), col('_1860_Kik','numeric(30,4)'), col('_1877','numeric(30,4)'),
+        col('overdue_days_principal','numeric(30,4)'), col('overdue_days_interest','numeric(30,4)'), col('max_overdue_days','numeric(30,4)'),
+        col('producttype','varchar(150)'), col('Segment','varchar(20)'), col('credittype','varchar(20)'), col('activity_sphere','varchar(20)'),
+        col('target_prod','varchar(120)'), col('fin_degradation','varchar(20)'), col('Restr_flag','varchar(20)'), col('Sector','varchar(200)'),
+        col('clienttype','varchar(20)'), col('FK','varchar(70)'), col('Affil','varchar(20)'), col('Resident','varchar(20)'),
+        col('Eff_prs','numeric(30,4)'), col('Creditamount','numeric(30,4)'), col('persent','numeric(30,4)'),
+        col('Pozitiv_1773','numeric(30,4)'), col('dis_1430','numeric(30,4)'), col('KHD_1434','numeric(30,4)'), col('Basket','varchar(20)'),
+        col('ifrs_1845','numeric(30,4)'), col('cur_inc_hedj','varchar(20)'), col('curr','varchar(20)'),
+        col('dpd','numeric(18,0)',{note:'old dpd, S01'}), col('deb_1877_prov','numeric(30,4)',{note:'source for new 18771 = deb_1877_prov + _1877, FINDINGS §3'}),
+        col('kurs_valut','varchar(max)'), col('Indicator','varchar(50)'), col('1431','decimal(18,2)')
+      ]},
+    { id:'old_cl2', side:'old', name:'CL_PORTFOLIO_2', role:'S03 · живой источник', catalogued:true,
+      grain:'contract-level, S03 (CrediLogic, основной ориджинейшн)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('contract_number','varchar(30)',{role:'key',note:'→ loans.l_loan_number (raw); l_loan_id даёт 0 совпадений, FINDINGS §1'}),
+        col('status','varchar(100)'), col('granting_date','date'), col('first_pmt_date','date'),
+        col('outstanding','numeric(30,4)',{note:'часть f1 outstanding=1401+1403+1411+1417'}), col('outstanding_overdue','numeric(30,4)'),
+        col('interest','numeric(30,4)'), col('overdue_interest','numeric(30,4)'),
+        col('accrued_interest_on_overdue_outstanding','numeric(30,4)'), col('overdue_interest_on_overdue_outstanding','numeric(30,4)'),
+        col('penalties','numeric(30,4)'), col('termination_commissions','numeric(30,4)'), col('loan_servicing_commissions','numeric(30,4)'),
+        col('overdue_commissions_income','numeric(30,4)'), col('overdue_days_principal','numeric(30,4)'), col('overdue_days_interest','numeric(30,4)'),
+        col('dpd','numeric(30,4)',{note:'dpd = days_past_due − 1, off-by-one, FINDINGS §7/KB §7'}), col('category','numeric(30,4)'), col('percent','numeric(30,4)'),
+        col('ifrs','numeric(30,4)'), col('provisions_calculated','numeric(30,4)',{note:'legacy recompute, KB §8 finding #1'}),
+        col('loan_purpose','varchar(200)'), col('subproduct','varchar(100)'),
+        col('discount_1434','numeric(30,4)'), col('discount_1435','numeric(30,4)'), col('discount_1773','numeric(30,4)'), col('fees_1860','numeric(30,4)'),
+        col('attribute_marker','varchar(100)'), col('date_of_attribute_marker','date'), col('filial','varchar(100)'), col('merchant_city','varchar(100)'),
+        col('LoanDuration','numeric(30,4)'), col('FKLogin','varchar(200)'), col('IIN','varchar(30)',{note:'PII'}), col('CARBRAND','varchar(100)'),
+        col('teh_overdfraft','numeric(30,4)'), col('overdue_commissions','numeric(30,4)'), col('overdue_penalties','numeric(30,4)'),
+        col('od','numeric(30,4)',{note:'f2: od = outstanding + 1424, CONFIRMED'}), col('balance','numeric(30,4)',{note:'f3: gross exposure, CONFIRMED'}),
+        col('product','varchar(100)'), col('basket','varchar(100)'), col('90+','varchar(20)'), col('90+sum','numeric(30,4)'),
+        col('fin_date_short','varchar(50)'), col('date','date',{note:'отчётная дата'}), col('tag','varchar(10)'), col('tag_1','varchar(100)',{note:'=CREDILOGIC для S03'}),
+        col('rezident','varchar(100)'), col('valuta','varchar(100)'), col('fiziki/yuriki','varchar(100)'),
+        col('IFRS1877','numeric(30,4)'), col('IFRS1845','numeric(30,4)'), col('maxDPD','numeric(30,4)'),
+        col('ifrs18770_DEB','numeric(30,4)'), col('ifrs18771_WTRAF_i_PENII','numeric(30,4)'), col('OD_percent','numeric(35,4)'),
+        col('tarif','varchar(max)'), col('discount_1774','numeric(30,4)'), col('discount_1775','numeric(30,4)'), col('discount_1784','numeric(30,4)'),
+        col('balance_with_discount','numeric(30,4)',{note:'EAD, KB §7'}), col('provisions_total','numeric(30,4)',{note:'f4: =1428+1845+18771, CONFIRMED all 237,274 rows'}),
+        col('DISCOUNT_1484','numeric(30,4)'), col('DISCOUNT_14341','numeric(30,4)'), col('DISCOUNT_14342','numeric(30,4)'),
+        col('DISCOUNT_1485','numeric(30,4)'), col('DISCOUNT_17731','numeric(30,4)'), col('DISCOUNT_17732','numeric(30,4)')
+      ]},
+    { id:'old_fenix', side:'old', name:'PORTFOLIO_Fenix', role:'S17 · живой источник', catalogued:true,
+      grain:'file_names+id+actual_date (NOT NULL); S17 (Fenix)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('file_names','varchar(20)'), col('id','int'), col('actual_date','date'), col('filial','varchar(100)'),
+        col('contractnumber','varchar(100)',{role:'key',note:'→ loan_account.la_dog_num + source=S17 + date, FINDINGS §1'}),
+        col('Client','varchar(220)',{note:'PII'}), col('contract_id','varchar(20)',{note:'непригоден для S17: не уникален, до 33 договоров/id'}),
+        col('iin','varchar(20)',{note:'PII — сверяется с borrower.b_iin_bin, см. #2/DWH-14'}), col('rnn','varchar(20)',{note:'PII'}),
+        col('curr','varchar(20)'), col('financing_date','date'), col('open_date','date'), col('close_date','date'),
+        col('Limit','numeric(30,4)'), col('outstanding','numeric(30,4)'), col('outstanding_overdue','numeric(30,4)'),
+        col('interest','numeric(30,4)'), col('overdue_interest','numeric(30,4)'), col('overdue_interest_on_overdue_outstanding','numeric(30,4)'),
+        col('commissions','numeric(30,4)'), col('overdue_commissions','numeric(30,4)'), col('penalties','numeric(30,4)'),
+        col('discount_1434','numeric(30,4)'), col('discount_1435','numeric(30,4)'), col('discount_1773','numeric(30,4)'), col('discount_2794','numeric(30,4)'),
+        col('Total_outstanding','numeric(30,4)'), col('ifrs_balance','numeric(30,4)',{note:'f-formula: outstanding+outstanding_overdue+interest+overdue_interest+penalties = 100%, FINDINGS §3'}),
+        col('ifrs_persent','numeric(30,4)'), col('ifrs_1428','numeric(30,4)'),
+        col('_1860','numeric(30,4)'), col('_1860_Kik','numeric(30,4)'), col('_1877','numeric(30,4)',{note:'=0.00 на всех 79 617 matched — реклассификация исключена, FINDINGS §6'}),
+        col('overdue_days_principal','numeric(30,4)'), col('overdue_days_interest','numeric(30,4)',{note:'S17: interest DPD 100% NULL на new-стороне, целое измерение потеряно'}), col('max_overdue_days','numeric(30,4)'),
+        col('producttype','varchar(150)'), col('Segment','varchar(20)'), col('credittype','varchar(20)'), col('activity_sphere','varchar(20)'),
+        col('target_prod','varchar(120)'), col('fin_degradation','varchar(20)'), col('Restr_flag','varchar(20)'), col('Sector','varchar(200)'),
+        col('clienttype','varchar(20)'), col('FK','varchar(70)'), col('Affil','varchar(20)'), col('Resident','varchar(20)'), col('cur_inc_hedj','varchar(20)'),
+        col('Eff_prs','numeric(30,4)'), col('Creditamount','numeric(30,4)'), col('persent','numeric(30,4)'),
+        col('Pozitiv_1773','numeric(30,4)'), col('dis_1430','numeric(30,4)'), col('KHD_1434','numeric(30,4)'), col('Basket','varchar(20)'), col('ifrs_1845','numeric(30,4)')
+      ]},
+    { id:'old_way4', side:'old', name:'PORTFOLIO_CREDITCARDS_WAY4', role:'S02 · union 1/3', catalogued:true,
+      grain:'contract-level, S02, union member (overlap с MIGR_WAY4/SMART_CARD = 0)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('contract_number','varchar(20)',{role:'key',note:'→ loans.l_loan_number, покрытие 97.96% (S02 union)'}),
+        col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
+        col('outstanding','float'), col('outstanding_overdue','float'), col('interest','float'), col('overdue_interest','float'),
+        col('accrued_interest_on_overdue_outstanding','float'), col('overdue_interest_on_overdue_outstanding','float'),
+        col('penalties','float'), col('termination_commissions','float'), col('loan_servicing_commissions','float'), col('overdue_commissions_income','float'),
+        col('overdue_days_principal','varchar(max)'), col('overdue_days_interest','varchar(max)'), col('dpd','float'),
+        col('category','varchar(max)'), col('percent','varchar(max)'), col('ifrs','varchar(max)'), col('provisions_calculated','varchar(max)'),
+        col('loan_purpose','varchar(max)'), col('subproduct','varchar(max)'),
+        col('discount_1434','varchar(max)'), col('discount_1435','varchar(max)'), col('discount_1773','varchar(max)'), col('fees_1860','varchar(max)'),
+        col('attribute_marker','varchar(max)'), col('date_of_attribute_marker','varchar(max)'), col('filial','varchar(max)'), col('merchant_city','varchar(max)'),
+        col('LoanDuration','varchar(max)'), col('FKLogin','varchar(max)'), col('IIN','varchar(max)',{note:'PII'}), col('CARBRAND','varchar(max)'),
+        col('teh_overdfraft','varchar(max)'), col('overdue_commissions','varchar(max)'), col('overdue_penalties','varchar(max)'),
+        col('od','float'), col('balance','float'), col('product','varchar(max)',{note:'l_product_type NULL на всех 27 825 S02 — измерение отсутствует в mart, disproven d3'}),
+        col('basket','varchar(max)'), col('90+','varchar(max)'), col('90+sum','varchar(max)'), col('fin_date_short','varchar(max)'),
+        col('date','date',{note:'отчётная дата'}), col('tag','varchar(max)'), col('tag_1','varchar(max)'), col('rezident','varchar(max)'), col('valuta','varchar(max)'),
+        col('fiziki/yuriki','varchar(max)'), col('IFRS1877','varchar(max)'), col('IFRS1845','varchar(max)'), col('maxDPD','float'),
+        col('ifrs18770_DEB','varchar(max)'), col('ifrs18771_WTRAF_i_PENII','varchar(max)'), col('limit','numeric(30,4)'), col('unused_limit','numeric(30,4)')
+      ]},
+    { id:'old_migrway4', side:'old', name:'PORTFOLIO_CREDITCARDS_MIGR_WAY4', role:'S02 · union 2/3', catalogued:true,
+      grain:'contract_number + date', evidence:'CASE_RUN_MIGR_WAY4_020 + dwh_schema_introspection.sql',
+      columns:[
+        col('contract_number','varchar(20)',{role:'key',note:'бизнес-ключ → loans.l_loan_number, покрытие 97.96%'}),
+        col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
+        col('outstanding','float'), col('outstanding_overdue','float'), col('interest','float'), col('overdue_interest','float'),
+        col('accrued_interest_on_overdue_outstanding','float'), col('overdue_interest_on_overdue_outstanding','float'),
+        col('penalties','float'), col('termination_commissions','float'), col('loan_servicing_commissions','float'), col('overdue_commissions_income','float'),
+        col('overdue_days_principal','varchar(max)'), col('overdue_days_interest','varchar(max)'), col('dpd','float'),
+        col('category','varchar(max)'), col('percent','varchar(max)'), col('ifrs','varchar(max)'), col('provisions_calculated','varchar(max)'),
+        col('loan_purpose','varchar(max)'), col('subproduct','varchar(max)'),
+        col('discount_1434','varchar(max)'), col('discount_1435','varchar(max)'), col('discount_1773','varchar(max)'), col('fees_1860','varchar(max)'),
+        col('attribute_marker','varchar(max)'), col('date_of_attribute_marker','varchar(max)'), col('filial','varchar(max)'), col('merchant_city','varchar(max)'),
+        col('LoanDuration','varchar(max)'), col('FKLogin','varchar(max)'), col('IIN','varchar(max)',{note:'PII'}), col('CARBRAND','varchar(max)'),
+        col('teh_overdfraft','varchar(max)'), col('overdue_commissions','varchar(max)'), col('overdue_penalties','varchar(max)'),
+        col('od','float'), col('balance','float'), col('product','varchar(max)'), col('basket','varchar(max)'), col('90+','varchar(max)'), col('90+sum','varchar(max)'),
+        col('fin_date_short','varchar(max)'), col('date','date',{note:'отчётная дата среза'}), col('tag','varchar(max)'), col('tag_1','varchar(max)'),
+        col('rezident','varchar(max)'), col('valuta','varchar(max)'), col('fiziki yuriki','varchar(max)'),
+        col('IFRS1877','varchar(max)'), col('IFRS1845','varchar(max)'), col('maxDPD','float'), col('ifrs18770_DEB','varchar(max)'), col('ifrs18771_WTRAF_i_PENII','varchar(max)'),
+        col('limit','numeric(30,4)',{note:'→ loans.l_loan_amount (доказано, c2); НЕ → l_limit (опровергнуто, d6)'}),
+        col('unused_limit','numeric(30,4)',{note:'→ l_unutilized_limit — правило гипотеза, см. #6/e6'}), col('IBAN','varchar(max)',{note:'PII'})
+      ]},
+    { id:'old_smartcard', side:'old', name:'PORTFOLIO_CREDITCARDS_SMART_CARD', role:'S02 · union 3/3', catalogued:true,
+      grain:'contract-level, S02, union member', evidence:'dwh_schema_introspection.sql, 30.07.2026; DWH-02 — 44 договора вне master, 90.96 млн₸',
+      columns:[
+        col('contract_number','varchar(20)',{role:'key'}), col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
+        col('outstanding','float'), col('outstanding_overdue','float'), col('interest','float'), col('overdue_interest','float'),
+        col('accrued_interest_on_overdue_outstanding','float'), col('overdue_interest_on_overdue_outstanding','float'),
+        col('penalties','float'), col('termination_commissions','float'), col('loan_servicing_commissions','float'), col('overdue_commissions_income','float'),
+        col('overdue_days_principal','varchar(max)'), col('overdue_days_interest','varchar(max)'), col('dpd','float'),
+        col('category','varchar(max)'), col('percent','varchar(max)'), col('ifrs','varchar(max)'), col('provisions_calculated','varchar(max)'),
+        col('loan_purpose','varchar(max)'), col('subproduct','varchar(max)'),
+        col('discount_1434','varchar(max)'), col('discount_1435','varchar(max)'), col('discount_1773','varchar(max)'), col('fees_1860','varchar(max)'),
+        col('attribute_marker','varchar(max)'), col('date_of_attribute_marker','varchar(max)'), col('filial','varchar(max)'), col('merchant_city','varchar(max)'),
+        col('LoanDuration','varchar(max)'), col('FKLogin','varchar(max)'), col('IIN','varchar(max)',{note:'PII'}), col('CARBRAND','varchar(max)'),
+        col('teh_overdfraft','varchar(max)'), col('overdue_commissions','varchar(max)'), col('overdue_penalties','varchar(max)'),
+        col('od','float'), col('balance','float'), col('product','varchar(max)'), col('basket','varchar(max)'), col('90+','varchar(max)'), col('90+sum','varchar(max)'),
+        col('fin_date_short','varchar(max)'), col('date','date'), col('tag','varchar(max)'), col('tag_1','varchar(max)'), col('rezident','varchar(max)'), col('valuta','varchar(max)'),
+        col('fiziki yuriki','varchar(max)'), col('IFRS1877','varchar(max)'), col('IFRS1845','varchar(max)'), col('maxDPD','float'),
+        col('ifrs18770_DEB','varchar(max)'), col('ifrs18771_WTRAF_i_PENII','varchar(max)'), col('limit','numeric(30,4)'), col('unused_limit','numeric(30,4)'),
+        col('COMM_1841','varchar(max)'), col('COMM_1821','varchar(max)'), col('IBAN','varchar(max)',{note:'PII'})
+      ]},
+    { id:'old_offbalance', side:'old', name:'PORTFOLIO_OFF_BALANCE', role:'resolution · Class VI (забаланс)', catalogued:true,
+      grain:'contract × date, внебалансовые обязательства', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('contract_number','varchar(20)',{role:'key'}), col('status','varchar(max)'), col('granting_date','varchar(max)'), col('first_pmt_date','varchar(max)'),
+        col('outstanding','float'), col('outstanding_overdue','float'), col('interest','float'), col('overdue_interest','float'),
+        col('accrued_interest_on_overdue_outstanding','float'), col('overdue_interest_on_overdue_outstanding','float'),
+        col('penalties','float'), col('termination_commissions','float'), col('loan_servicing_commissions','float'), col('overdue_commissions_income','float'),
+        col('overdue_days_principal','varchar(max)'), col('overdue_days_interest','varchar(max)'), col('dpd','float'),
+        col('category','varchar(max)'), col('percent','varchar(max)'), col('ifrs','varchar(max)'), col('provisions_calculated','varchar(max)'),
+        col('loan_purpose','varchar(max)'), col('subproduct','varchar(max)'),
+        col('discount_1434','varchar(max)'), col('discount_1435','varchar(max)'), col('discount_1773','varchar(max)'), col('fees_1860','varchar(max)'),
+        col('attribute_marker','varchar(max)'), col('date_of_attribute_marker','varchar(max)'), col('filial','varchar(max)'), col('merchant_city','varchar(max)'),
+        col('LoanDuration','varchar(max)'), col('FKLogin','varchar(max)'), col('IIN','varchar(max)',{note:'PII'}), col('CARBRAND','varchar(max)'),
+        col('teh_overdfraft','varchar(max)'), col('overdue_commissions','varchar(max)'), col('overdue_penalties','varchar(max)'),
+        col('od','float'), col('balance','float'), col('product','varchar(max)'), col('basket','varchar(max)'), col('90+','varchar(max)'), col('90+sum','varchar(max)'),
+        col('fin_date_short','varchar(max)'), col('date','date'), col('tag','varchar(max)'), col('tag_1','varchar(max)'), col('rezident','varchar(1)'), col('valuta','varchar(max)'),
+        col('fiziki/yuriki','varchar(max)'), col('IFRS1877','varchar(max)'), col('IFRS1845','varchar(max)'), col('maxDPD','float'),
+        col('ifrs18770','varchar(max)'), col('ifrs18771','varchar(max)'), col('SELLING_DATE','date')
+      ]},
+    { id:'old_rs7130', side:'old', name:'PORTFOLIO_RS_7130', role:'resolution · Class VII (списание)', catalogued:true,
+      grain:'file_names (NOT NULL) + actual_date + contract', evidence:'CASE_RUN_RS_7130_009_CONTRACT_PROOF + dwh_schema_introspection.sql',
+      note:'Ранее ошибочно объединена с живым PORTFOLIO_RS в этом холсте — по FINDINGS.md это отдельная resolution-таблица (счёт 7130), теперь разделены.',
+      columns:[
+        col('file_names','varchar(20)'), col('actual_date','date'), col('customer','varchar(220)',{note:'PII'}),
+        col('contract','varchar(30)',{role:'key'}), col('interest','numeric(30,4)'),
+        col('outstanding','numeric(30,4)',{note:'сравнивается с loan_account.principal_balance_debt, см. #12/e7'}),
+        col('commission','numeric(30,4)'), col('penalty','numeric(30,4)'), col('credit_devision_code','varchar(150)'),
+        col('1860_deb','numeric(30,4)'), col('bank_product','varchar(220)'), col('OKED','varchar(220)'), col('OKED2','varchar(150)'),
+        col('sum_spisan','numeric(30,4)',{note:'сумма списания'}), col('sum_pogashen','numeric(30,4)',{note:'сумма погашения'}),
+        col('sum_ostatok','numeric(30,4)',{note:'сравнивается с loan_account.total_balance_debt, см. #12/e7'})
+      ]},
+    { id:'old_spisCL', side:'old', name:'spis_v_ubytok_CL', role:'resolution · Class VII (S03)', catalogued:true,
+      grain:'contract_number + date_spis', evidence:'CASE_RUN_WRITEOFF_CL_010 + dwh_schema_introspection.sql',
+      columns:[
+        col('date','date',{note:'отчётная дата среза'}), col('contract_number','varchar(max)',{role:'key'}),
+        col('summ_spis_v_tg','float',{note:'f13: сверка 73/73 события, точное совпадение'}), col('summ_spis_val','float'),
+        col('date_spis','date',{note:'дата операции списания'}), col('operation_name','varchar(max)'), col('kurs','float'),
+        col('ifrs_1428','float'), col('product','varchar(max)'), col('tag','varchar(max)'), col('marker','varchar(max)'), col('date_marker','date')
+      ]},
+    { id:'old_spisRS', side:'old', name:'spis_v_ubytok_RS', role:'resolution · Class VII (S01)', catalogued:true,
+      grain:'contract_number + date_spis (зеркало spis_v_ubytok_CL для S01)', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('date','date'), col('contract_number','varchar(max)',{role:'key'}), col('summ_spis_v_tg','float'), col('summ_spis_val','float'),
+        col('date_spis','date'), col('operation_name','varchar(max)'), col('kurs','varchar(max)'), col('ifrs_1428','float')
+      ]},
+
+    { id:'new_borrower', side:'new', name:'borrower', role:'P0 · Dim · кто клиент', catalogued:true,
+      grain:'1 / borrower · b_borrower_id', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('b_borrower_id','bigint',{role:'key',note:'цель FK из loans.l_borrower_id — но тот varchar(255), а этот bigint! разнотипный join, см. заметку в шапке'}),
+        col('b_iin_bin','varchar(15)',{note:'PII — сверяется с PORTFOLIO_Fenix.iin, см. #2/DWH-14'}),
+        col('b_borrower_code','varchar(200)'), col('b_rnn','varchar(200)',{note:'PII'}), col('b_lsboo','varchar(200)'),
+        col('b_borrower_name','nvarchar(200)',{note:'PII'}), col('b_borrower_type','varchar(200)'), col('b_region','varchar(1000)'),
+        col('b_oked_code','varchar(200)'), col('b_oked','varchar(200)'), col('b_group_affiliation','text'),
+        col('b_non_resident_flag','varchar(2)'), col('b_individual_entrepreneur_flag','varchar(8)'),
+        col('b_date_of_birth','date',{note:'PII'}), col('b_gender','varchar(7)'), col('b_marital_status','varchar(20)'),
+        col('b_date_of_death','date'), col('b_date_of_imprisonment','date'), col('b_status_change_date_abis','date'), col('b_status_change_date_prison','date'),
+        col('b_client_rating','varchar(2000)'), col('b_client_rating_date','date'),
+        col('b_bankruptcy_flag','varchar(-1)'), col('b_bankruptcy_type','varchar(200)'), col('b_procedure_status','varchar(20)'),
+        col('b_poci_flag','varchar(-1)'), col('b_poci_assignment_date','date'),
+        col('b_monthly_income','numeric(10,0)'), col('b_additional_monthly_income','numeric(38,0)'),
+        col('b_active_loans_count','int'), col('b_closed_loans_count','int'), col('b_report_date','date'), col('b_source','varchar(100)')
+      ]},
+    { id:'new_loans', side:'new', name:'loans', role:'P0 · Dim · какой кредит', catalogued:true,
+      grain:'1 / l_gid (l_report_date — маркер состояния, не ключ снимка)', evidence:'dwh_schema_introspection.sql, 30.07.2026; FINDINGS.md §1/§2',
+      note:'#8: 70 дублей по логическому ключу (l_gid,l_loan_number) — 0 ограничений БД (подтверждено интроспекцией). Grain по l_gid внутри одной даты — ПОВТОРНО ОТКРЫТ 17.07 (FINDINGS §2/§9.6).',
+      columns:[
+        col('l_start_date','date'), col('l_end_date','date'), col('dlcr_dprt_gid','bigint'),
+        col('l_source','varchar(10)'), col('l_gid','bigint',{role:'key',note:'глобальный ключ — не номер договора, 9659 коллизий между source'}),
+        col('l_report_date','date'), col('l_loan_id','nvarchar(255)',{note:'работает как old↔new ключ только для S01; для S03 — 0 совпадений'}),
+        col('l_borrower_id','varchar(255)',{role:'fk',fkRef:'borrower.b_borrower_id (типы не совпадают: varchar vs bigint!)',note:'53 S02-договора без соответствия, см. #1/e3'}),
+        col('l_collateral_id','varchar(255)',{role:'fk',fkRef:'pledges (ненадёжно напрямую, см. #4)'}),
+        col('l_loan_type','varchar(255)'), col('l_loan_status','varchar(255)'), col('l_tag','varchar(255)'),
+        col('l_loan_amount','float',{note:'подтверждённая цель мэппинга старого limit (c2)'}),
+        col('l_limit','float',{note:'NULL на всех 77 457 тестированных — мэппинг из limit опровергнут, d6'}),
+        col('l_unutilized_limit','float',{note:'цель мэппинга unused_limit, см. #6/e6'}),
+        col('l_loan_maturity_date','date'), col('l_loan_number','varchar(255)',{role:'key',note:'контрольный номер, не глобальный'}),
+        col('l_loan_open_date','date'), col('l_funding_date','date'), col('l_first_repayment_date','date'),
+        col('l_scheduled_closure_date','date'), col('l_actual_closure_date','date'), col('l_scheduled_monthly_payment','float'),
+        col('l_initial_term_months','int'), col('l_current_term_months','int'), col('l_currency','varchar(255)'),
+        col('l_branch_code','varchar(255)'), col('l_branch_name','varchar(255)'), col('l_initial_fee','varchar(255)'), col('l_rate','varchar(255)'),
+        col('l_product_type','varchar(255)',{note:'NULL на всех 27 825 S02 — продуктовое измерение карт отсутствует, disproven d3'}),
+        col('l_subproduct_type','varchar(255)'), col('l_loan_purpose','varchar(255)'), col('l_entrepreneur_category','varchar(255)'),
+        col('l_credit_object','varchar(255)'), col('l_credit_purpose','varchar(255)'), col('l_reward_rate_type','varchar(255)'),
+        col('l_segment','varchar(100)'), col('l_financial_consultant','varchar(100)')
+      ]},
+    { id:'new_loan_account', side:'new', name:'loan_account', role:'P0 · Snap · сколько должен', catalogued:true,
+      grain:'la_gid × la_reporting_date × la_source (контроль la_dog_num)', evidence:'dwh_schema_introspection.sql, 30.07.2026; FINDINGS.md §1/§3',
+      note:'Определяет population марта — у loans снимка нет. Grain чист по S01/S02/S03; S17 — 1 коллизия dog_num/снимок.',
+      columns:[
+        col('la_dog_num','nvarchar(35)',{note:'контроль = l_loan_number, не ключ'}), col('la_source','nvarchar(3)'),
+        col('la_loan_id','nvarchar(2000)',{note:'НЕ входит в подтверждённые ключи — DWH-15 использовала его ошибочно, см. #3/e5'}),
+        col('la_gid','bigint',{role:'fk',fkRef:'loans.l_gid (глобальный ключ, la_source=l_source)'}),
+        col('la_reporting_date','date'),
+        col('la_account_1401–1879 (25 счетов ГК)','numeric(18,2)',{match:['la_account_1401','la_account_1403','la_account_1411','la_account_1417','la_account_1424','la_account_1428','la_account_1430','la_account_1431','la_account_1434','la_account_1740','la_account_1741','la_account_2794','la_account_1773','la_account_1774','la_account_1775','la_account_1784','la_account_1435','la_account_1818','la_account_1838','la_account_1845','la_account_1860','la_account_1877','la_account_18770','la_account_18771','la_account_1879'],note:'NBK Standard Chart of Accounts (V1100006793), роли в KB §6'}),
+        col('total_balance_debt','numeric(18,2)',{note:'S17-формула подтверждена (8 счетов, f11); S01/RS_7130 версия — гипотеза h1'}),
+        col('discounted_balance_debt','numeric(18,2)'),
+        col('principal_balance_debt','numeric(18,2)',{note:'формула доказана (f1-подобная), но заблокирована на 458/637 RS_7130, см. #12/e7'}),
+        col('days_past_due','int',{note:'dpd = days_past_due − 1, f5 CONFIRMED'}), col('max_days_past_due_principal_interest','int'),
+        col('days_past_due_principal','int'), col('days_past_due_overdue_principal','int'),
+        col('days_past_due_interest','int',{note:'S17: 100% NULL на всех 79 617 matched — целое измерение потеряно'}),
+        col('days_past_due_overdue_interest_principal','int'), col('days_past_due_account_1879','int'), col('days_past_due_account_1838','int'), col('days_past_due_account_1860','int'),
+        col('delinquency_bucket','int',{note:'формируется независимо от DPD-полей, S17'}),
+        col('currency_reserve_percentage','numeric(18,2)'), col('currency_exchange_rate','numeric(18,2)'), col('la_status','nvarchar(100)')
+      ]},
+    { id:'new_repayment_schedule', side:'new', name:'repayment_schedule', role:'P1 · Snap/plan · график платежей', catalogued:true,
+      grain:'contract × installment', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('rs_loan_id','bigint',{role:'fk',fkRef:'loans (по loan_id)'}), col('rs_borrower_id','bigint',{role:'fk',fkRef:'borrower.b_borrower_id'}),
+        col('rs_currency','varchar(255)'), col('rs_repayment_date','date'), col('rs_principal_repayment_amount','numeric(18,2)'),
+        col('rs_interest_repayment_amount','numeric(18,2)'), col('rs_source','varchar(10)'), col('rs_dog_num','varchar(255)',{role:'key'}), col('rs_report_date','date')
+      ]},
+    { id:'new_payments', side:'new', name:'payments', role:'P1 · Event · факт платежа', catalogued:true,
+      grain:'1 / payment', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[ col('p_CREDIT_ACCOUNT','varchar(100)',{role:'key'}), col('p_VALUE_DATE','date'), col('p_total','float'), col('p_source','varchar(10)') ]},
+    { id:'new_payments_wiring', side:'new', name:'payments_wiring', role:'P1 · Event · разложение платежа', catalogued:true,
+      grain:'1 / payment component', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('CREDIT_ACCOUNT','varchar(100)',{role:'key'}), col('VALUE_DATE','date'), col('OD','float'), col('PROSR_OD','float'),
+        col('PERC','float'), col('PROSR_PERC','float'), col('PROSR_PROSR_PERC','float'), col('KOMIS','float'),
+        col('total','float'), col('source','varchar(10)'), col('deposit','float'), col('min_pay','float')
+      ]},
+    { id:'new_pledges', side:'new', name:'pledges', role:'P1 · Dim · залог', catalogued:true,
+      grain:'collateral / contract', evidence:'dwh_schema_introspection.sql, 30.07.2026; переписка Issue #3/#4',
+      note:'Три кандидата на join-ключ теперь видны одновременно: c_loan_gid (bigint), c_loan_id (bigint), c_contract_number (nvarchar150). Валидированный путь — c_source+c_loan_gid = l_source+l_gid (см. #4).',
+      columns:[
+        col('c_loan_gid','bigint',{role:'fk',fkRef:'loans.l_gid — ВАЛИДИРОВАННЫЙ путь (не l_collateral_id), см. #4/f-join'}),
+        col('c_source','nvarchar(150)'), col('c_collateral_id','float'), col('c_loan_id','bigint',{note:'DWH-15/#3 использовала этот ключ ошибочно вместо gid'}),
+        col('c_contract_number','nvarchar(150)'), col('c_collateral_type','varchar(100)'), col('c_collateral_name','nvarchar(250)'),
+        col('c_collateral_type_detail','varchar(250)'), col('c_collateral_value','float'), col('c_market_collateral_value','float'),
+        col('c_collateral_status','nvarchar(250)'), col('c_car_value','float'), col('c_car_code','nvarchar(150)'), col('c_car_brand','nvarchar(150)'),
+        col('c_car_model','nvarchar(150)'), col('c_car_colour','nvarchar(150)'), col('c_car_year','nvarchar(150)'), col('c_car_country','nvarchar(150)'),
+        col('c_market_car_value','float'), col('c_bpm_object_id','bigint'), col('last_appraised_value','float'), col('last_appraisal_date','date'),
+        col('collateral_type_detail','nvarchar(150)'), col('quantity','float'), col('uom_code','nvarchar(150)'), col('meaning','nvarchar(150)'),
+        col('nok_appraisal_number','nvarchar(150)'), col('nok_appraiser_name','nvarchar(150)'), col('nok_license_number','nvarchar(150)'),
+        col('nok_last_appraised_value','float'), col('nok_accreditation_status','nvarchar(150)'), col('nok_appraised_currency_code','nvarchar(150)'), col('c_reporting_date','date')
+      ]},
+    { id:'new_ratings', side:'new', name:'ratings', role:'P1 · Dim (версионный) · рейтинг риска', catalogued:true,
+      grain:'borrower/contract × date', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('r_dog_num','varchar(255)',{role:'key'}), col('r_source','varchar(255)'), col('r_deal_gid','bigint'),
+        col('r_client_rating','varchar(255)'), col('r_client_rating_date','date'), col('r_loan_rating','varchar(255)'), col('r_loan_rating_date','date'), col('r_report_date','date')
+      ]},
+    { id:'new_restructuring', side:'new', name:'restructuring_v2', role:'P1 · Event · меняли ли условия', catalogued:true,
+      grain:'restructuring event', evidence:'dwh_schema_introspection.sql, 30.07.2026; переписка Issue #8/#9/#10 (постдатирует FINDINGS.md)',
+      columns:[
+        col('dlcr_gid','bigint',{role:'fk',fkRef:'loans.l_gid'}), col('dlcr$source','nvarchar(3)'), col('loan_id','nvarchar(35)',{role:'fk',fkRef:'loans.l_loan_id'}),
+        col('restructuring_date','date'), col('new_interest_rate','float'), col('days_past_due_at_restructuring','float'),
+        col('new_maturity_date','date',{note:'184/4520 latest событий раньше restructuring_date, см. #10/e9'}),
+        col('financial_deterioration_flag','nvarchar(100)'), col('payment_deferral','float'), col('canc_date','date'),
+        col('grace_od_begin_date','date'), col('grace_int_begin_date','date'), col('grace_od_end_date','date'), col('grace_int_end_date','date'), col('report_date','date')
+      ]},
+    { id:'new_writeoff', side:'new', name:'writeoff', role:'P1 · Event · списание долга', catalogued:true,
+      grain:'w_dlcrp_dlcr_gid (84 строки на весь S01+S03 — grain «случай» под вопросом, FINDINGS §7 п.11)', evidence:'CASE_RUN_WRITEOFF_CL_010 + dwh_schema_introspection.sql',
+      columns:[
+        col('w_dm_z10$report_date','date'), col('w_dlcr_dog_num','varchar(35)',{role:'key',note:'связывается со старым contract_number, f13'}),
+        col('w_dlcr$source','varchar(3)',{note:'домен только S01/S03 — resolution-пайплайн не покрывает S02/S17'}),
+        col('w_dlcrp_dlcr_gid','bigint'), col('w_dlcrp_write_off_amount','numeric(18,2)'), col('w_dlcrp_operation_is_write_off','date')
+      ]},
+    { id:'new_collections', side:'new', name:'collections', role:'P1 · Event · передали во взыскание', catalogued:true,
+      grain:'32 659 строк, без поля source в старой сверке — здесь c_loan_id/c_dog_num', evidence:'dwh_schema_introspection.sql, 30.07.2026; FINDINGS.md §5',
+      columns:[
+        col('c_loan_id','bigint',{role:'fk'}), col('c_product_type','nvarchar(50)'), col('c_dog_num','nvarchar(50)',{role:'key'}),
+        col('c_sale_date','date'), col('c_collector_company_name','nvarchar(4000)'), col('c_repurchase_flag','nvarchar(1)'), col('c_sale_amount','numeric(18,2)'),
+        col('c_account_1401–1741 (11 счетов)','numeric(18,2)',{match:['c_account_1401','c_account_1403','c_account_1411','c_account_1417','c_account_1424','c_account_1428','c_account_1430','c_account_1431','c_account_1434','c_account_1740','c_account_1741']}),
+        col('c_total_balance_debt','numeric(18,2)'), col('c_reporting_date','date')
+      ]},
+    { id:'new_bankrupt', side:'new', name:'bankrupt', role:'P1 · Event/flag · банкротство', catalogued:true,
+      grain:'1 / borrower', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('b_dog_gid','bigint',{role:'fk'}), col('b_dog_num','nvarchar(50)',{role:'key'}), col('b_source','nvarchar(50)'),
+        col('b_record_load_date','date'), col('b_record_expiry_date','date'), col('b_bankrupt_date','date'), col('b_iin','nvarchar(15)',{note:'PII'})
+      ]},
+    { id:'new_interest_rates', side:'new', name:'interest_rates', role:'P1 · Dim · ставки', catalogued:true,
+      grain:'contract · dlcr_dog_num', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('report_date','date'), col('dlcr_dog_num','nvarchar(35)',{role:'key'}), col('dlcr$source','nvarchar(3)'), col('loan_id','bigint',{role:'fk'}),
+        col('interest_rate','numeric(17,2)'), col('initial_nominal_rate','numeric(17,2)'), col('effective_rate','numeric(18,9)',{note:'ГЭСВ/APR'}), col('initial_effective_rate','numeric(17,2)')
+      ]},
+    { id:'new_offbalance', side:'new', name:'offbalance', role:'P2 · Snap · внебаланс', catalogued:true,
+      grain:'contract × date, Class VI', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('o_reporting_date','date'), col('o_loan_num','nvarchar(50)',{role:'key'}), col('o_source','nvarchar(10)'), col('o_loan_id','bigint',{role:'fk'}),
+        col('o_account_1411/1424/17400/17410/17401/17411/18794/18795/1818/1838/1434/1435/1773 (13 счетов)','float',{match:['o_account_1411','o_account_1424','o_account_17400','o_account_17410','o_account_17401','o_account_17411','o_account_18794','o_account_18795','o_account_1818','o_account_1838','o_account_1434','o_account_1435','o_account_1773']}),
+        col('o_total_balance_debt','float')
+      ]},
+    { id:'new_guarantees', side:'new', name:'guarantees', role:'P2 · Dim/Event · гарантии', catalogued:true,
+      grain:'guarantee / contract', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('g_report_date','date'), col('g_gid','bigint',{role:'key'}), col('g_clnt_gid','bigint',{role:'fk'}), col('g_source','nvarchar(3)'),
+        col('g_branch','nvarchar(12)'), col('g_guarantee_agreement_id','nvarchar(50)'), col('g_guarantee_agreement_number','nvarchar(30)'),
+        col('g_iin_bin','nvarchar(20)',{note:'PII'}), col('g_client_code','nvarchar(50)'), col('g_client_name','nvarchar(4000)',{note:'PII'}),
+        col('g_currency','nvarchar(50)'), col('g_agreement_start_date','date'), col('g_agreement_end_date','date'),
+        col('g_commission_rate','float'), col('g_agreement_amount_currency','float'), col('g_agreement_amount_kzt','float'),
+        col('g_current_debt_currency','float'), col('g_current_debt_kzt','float'),
+        col('g_accrued_commissions_currency','float'), col('g_accrued_commissions_kzt','float'),
+        col('g_overdue_commission_income_currency','float'), col('g_overdue_commission_income_kzt','float'),
+        col('g_accrued_penalty_currency','float'), col('g_accrued_penalty_kzt','float'),
+        col('g_ifrs_reserves_percentage','float'), col('g_reserves_kzt','float'), col('g_reserves_currency','float'),
+        col('g_account_balance_kzt','float'), col('g_account_balance_currency','float'), col('g_off_balance_debt_kzt','float'),
+        col('g_beneficiary','nvarchar(4000)'), col('g_credit_line_agreement','nvarchar(100)'), col('g_guarantee_type','nvarchar(255)'),
+        col('g_credit_department_code','nvarchar(50)'), col('g_segment','nvarchar(2)'), col('g_financial_consultant','nvarchar(255)')
+      ]},
+    { id:'new_credit_lines', side:'new', name:'credit_lines', role:'P2 · Dim/Snap · лимиты', catalogued:true,
+      grain:'line / contract', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('cl_dog_id','varchar(2000)',{role:'key'}), col('cl_dog_num','varchar(35)'), col('cl_client_code','varchar(255)'),
+        col('cl_client_full_name','nvarchar(255)',{note:'PII'}), col('cl_curr_code','varchar(3)'), col('cl_open_date','date'), col('cl_close_date','date'),
+        col('cl_rate','decimal(18,4)'), col('cl_eff_rate','decimal(18,4)'), col('cl_dog_type','nvarchar(255)'), col('cl_flag_otzyvnosti','nvarchar(255)'),
+        col('cl_limit_access','nvarchar(255)'), col('cl_limit_od','decimal(18,4)'), col('cl_limit_od_kzt','decimal(18,4)'),
+        col('cl_not_used_limit_6125','decimal(18,4)'), col('cl_not_used_limit_6126','decimal(18,4)'),
+        col('cl_limit_acces_vlt','decimal(18,4)'), col('cl_limit_acces_kzt','decimal(18,4)'), col('cl_od_1860','decimal(18,4)'),
+        col('cl_basket_report_date','int'), col('cl_msfo_rate_forecast','decimal(18,4)'), col('cl_provision_uslov','decimal(18,4)'),
+        col('cl_product_type','nvarchar(255)'), col('cl_dep_code','nvarchar(255)'), col('cl_report_date','date'), col('cl_load_date','date'), col('cl_currency_rate','decimal(38,4)')
+      ]},
+    { id:'new_refinance', side:'new', name:'refinance', role:'P2 · Event · рефинанс', catalogued:true,
+      grain:'old → new link', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      columns:[
+        col('ref_id','numeric(18,0)',{role:'key'}), col('ref_loan_id','nvarchar(255)',{role:'fk'}), col('ref_flag','nvarchar(255)'),
+        col('ref_new_agreement_number','nvarchar(255)'), col('ref_status_new_agreement_number','nvarchar(255)'),
+        col('ref_agreement_number','nvarchar(255)'), col('ref_status_agreement_number','nvarchar(255)'),
+        col('ref_sum_refinance','float'), col('ref_company_marker_id','varchar(255)'), col('ref_date','date'), col('ref_source','varchar(3)')
+      ]},
+    { id:'new_loans_active', side:'new', name:'loans_active', role:'View · только действующие', catalogued:true,
+      grain:'та же структура, что loans (37 из 39 полей) — фильтр не документирован', evidence:'dwh_schema_introspection.sql, 30.07.2026; переписка Issue #13',
+      note:'Правило включения закрытых договоров с остаточным балансом не подтверждено, см. #13/e8.',
+      columns:[
+        col('l_start_date','date'), col('l_end_date','date'), col('dlcr_dprt_gid','bigint'), col('l_source','varchar(10)'),
+        col('l_gid','bigint',{role:'key'}), col('l_report_date','date'), col('l_loan_id','varchar(255)',{role:'key',note:'сравнить с PORTFOLIO_RS.contract_id, см. #13/e8'}),
+        col('l_borrower_id','bigint',{note:'здесь bigint, а в loans — varchar(255)! ещё один типовой разнобой между loans и loans_active'}),
+        col('l_collateral_id','varchar(255)'), col('l_loan_type','varchar(255)'), col('l_loan_status','varchar(255)',{note:'закрытый + остаточный баланс — правило неясно, см. #13'}), col('l_tag','varchar(255)'),
+        col('l_loan_amount','float'), col('l_limit','float'), col('l_unutilized_limit','float'), col('l_loan_maturity_date','date'),
+        col('l_loan_number','varchar(255)',{role:'key',note:'сравнить с PORTFOLIO_RS.contractnumber, см. #13/e8'}), col('l_loan_open_date','date'), col('l_funding_date','date'),
+        col('l_first_repayment_date','date'), col('l_scheduled_closure_date','date'), col('l_actual_closure_date','date'), col('l_scheduled_monthly_payment','float'),
+        col('l_initial_term_months','int'), col('l_current_term_months','int'), col('l_currency','varchar(255)'), col('l_branch_code','varchar(255)'),
+        col('l_branch_name','varchar(255)'), col('l_initial_fee','varchar(255)'), col('l_rate','varchar(255)'), col('l_product_type','varchar(255)'),
+        col('l_subproduct_type','varchar(255)'), col('l_loan_purpose','varchar(255)'), col('l_entrepreneur_category','varchar(255)'),
+        col('l_credit_object','varchar(255)'), col('l_credit_purpose','varchar(255)'), col('l_reward_rate_type','varchar(255)')
+      ]},
+    { id:'new_brm', side:'new', name:'brm_all_data', role:'View · итоговая витрина БРМ', catalogued:true,
+      grain:'contract_number × actual_date × source — только 3 поля видны на этом срезе схемы', evidence:'dwh_schema_introspection.sql, 30.07.2026',
+      note:'Открытый вопрос: это ли финальная витрина потребления? Что в неё преджойнено, на какой грануляр­ности? (FINDINGS §11 п.7). 3 столбца — не полный охват, возможно view поверх остальных 18 таблиц вычисляется на лету.',
+      columns:[ col('contract_number','varchar(100)',{role:'key'}), col('actual_date','date'), col('source','varchar(100)') ]}
+  ];
+
+  var FINDINGS = {
+    '#1':  {severity:'open',     label:'DWH-13: 53 договора S02 — borrower_id не найден в borrower (+ типовой разнобой varchar/bigint)'},
+    '#2':  {severity:'open',     label:'DWH-14: 7 договоров S17 — расхождение ИИН, 5.6 млн₸'},
+    '#3':  {severity:'open',     label:'DWH-15: 49 договоров S03 без pledges, 367.7 млн₸ — join на неподтверждённом ключе, см. §9.4'},
+    '#4':  {severity:'doc',      label:'DWH-16: l_collateral_id ненадёжен — верный путь c_source+c_loan_gid'},
+    '#5':  {severity:'open',     label:'DWH-02: 44 SMART_CARD вне master, 90.96 млн₸ — вероятно подмножество наших 68'},
+    '#6':  {severity:'pending',  label:'unused_limit — фикс заявлен 29.07, не проверен'},
+    '#8':  {severity:'open',     label:'70 дублей (l_gid,l_loan_number) в loans — 0 ограничений БД подтверждено интроспекцией'},
+    '#9':  {severity:'open',     label:'12 строк restructuring_v2 без соответствия'},
+    '#10': {severity:'open',     label:'184/4520 событий: дата погашения раньше даты реструктуризации'},
+    '#11': {severity:'pending',  label:'4 события списания только в новой ветке, 11.6 млн₸'},
+    '#12': {severity:'critical', label:'458/637 RS_7130: все балансы равны нулю, 116–134 млрд₸ — постдатирует FINDINGS.md'},
+    '#13': {severity:'pending',  label:'расхождение состава loans_active vs PORTFOLIO_RS, 3 договора'}
+  };
+  var SEVERITY_VAR = { critical:'--st-critical', open:'--st-serious', pending:'--st-warning', doc:'--st-good' };
+  var SEVERITY_FG_VAR = { critical:'--st-critical-fg', open:'--st-serious-fg', pending:'--st-warning-fg', doc:'--st-good-fg' };
+
+  var PROCESSES = [
+    { id:'f1', status:'proven', name:'outstanding (текущий основной долг)', formula:'outstanding = 1401 + 1403 + 1411 + 1417',
+      inputs:['old_cl2.outstanding'], evidence:'credit_risk_knowledge_base.md §7 — data-confirmed', findings:[] },
+    { id:'f2', status:'proven', name:'od (основной долг, вкл. просрочку)', formula:'od = outstanding + 1424',
+      inputs:['old_cl2.od'], evidence:'KB §7', findings:[] },
+    { id:'f3', status:'proven', name:'balance (валовая экспозиция)', formula:'balance = od + 1740 + 1741 + 1879 + 1818 + 1838',
+      inputs:['old_cl2.balance'], evidence:'FINDINGS.md §3 — CONFIRMED; Sailau 17.2 млрд = именно эта метрика', findings:[] },
+    { id:'f4', status:'proven', name:'provisions_total', formula:'provisions_total = 1428 + 1845 + 18771\n(18770/1877 ЛОМАЮТ identity → корректно исключены)',
+      inputs:['old_cl2.provisions_total','new_loan_account.la_account_1428','new_loan_account.la_account_1845','new_loan_account.la_account_18770','new_loan_account.la_account_18771'],
+      evidence:'FINDINGS.md §3 — держится на всех 237 274 строках S03', slice:'2026-07-01, S03 (237 274 строк)',
+      pairWith:['new_loan_account.la_account_1428','new_loan_account.la_account_1845','new_loan_account.la_account_18771'], findings:[] },
+    { id:'f5', status:'proven', name:'dpd (дни просрочки)', formula:'dpd = days_past_due − 1',
+      inputs:['old_cl2.dpd','new_loan_account.days_past_due'], evidence:'KB §7 — off-by-one подтверждена', findings:[] },
+    { id:'f6', status:'proven', name:'Глобальный ключ: l_gid ↔ la_gid', formula:'loan_account.la_gid = loans.l_gid AND la_source = l_source\n(la_dog_num = l_loan_number — только контроль)',
+      inputs:['new_loan_account.la_gid','new_loans.l_gid'], evidence:'FINDINGS.md §1 — CONFIRMED; 9659 коллизий номера договора между source',
+      note:'DWH-08 (70 дублей l_loan_id, S01) — про ДРУГОЙ ключ; join по la_gid=l_gid структурно не допускает этот класс ошибки.', findings:[] },
+    { id:'f7', status:'proven', name:'S01 old↔new ключ', formula:'PORTFOLIO_RS.contract_id → loans.l_loan_id (работает)',
+      inputs:['old_rs.contract_id','new_loans.l_loan_id'], evidence:'FINDINGS.md §1/§3 — работает для S01 (в отличие от S03)', findings:[] },
+    { id:'f8', status:'proven', name:'S03 old↔new ключ', formula:'CL_PORTFOLIO_2.contract_number → loans.l_loan_number (сырой)',
+      inputs:['old_cl2.contract_number','new_loans.l_loan_number'], evidence:'FINDINGS.md §1 — l_loan_id даёт 0 совпадений', findings:[] },
+    { id:'f9', status:'proven', name:'S17 old↔new ключ', formula:'PORTFOLIO_Fenix.contractnumber → loan_account.la_dog_num + source=S17 + date',
+      inputs:['old_fenix.contractnumber','new_loan_account.la_dog_num'], evidence:'FINDINGS.md §1 — contract_id непригоден (до 33 договоров/id)', findings:[] },
+    { id:'f10', status:'proven', name:'S02 old↔new ключ', formula:'UNION(WAY4,MIGR_WAY4,SMART_CARD).contract_number → loans.l_loan_number (сырой)',
+      inputs:['old_migrway4.contract_number','new_loans.l_loan_number'], evidence:'FINDINGS.md §1/§6 — покрытие 97.96% (27 257/27 824)', findings:[] },
+    { id:'f11', status:'proven', name:'S17 total_balance_debt (подтверждённая формула)', formula:'1401+1403+1411+1417+1424+1740+1741+1879\n(8 счетов — БЕЗ 1818/1838, в отличие от balance)',
+      inputs:['new_loan_account.total_balance_debt'], evidence:'FINDINGS.md §3 — подтверждено для S17',
+      note:'S01/RS_7130 версия (наша h1-гипотеза) использовала ДРУГОЙ набор (+1818+1838) — не считать тем же.', findings:[] },
+    { id:'f12', status:'proven', name:'S01 identity: 1877 = 18770 + 18771', formula:'la_account_1877 = la_account_18770 + la_account_18771\n(18770 = 0 на срезе)',
+      inputs:['new_loan_account.la_account_1401'], evidence:'FINDINGS.md §3 — CONFIRMED', slice:'2026-07-01, S01',
+      pairWith:['new_loan_account.la_account_1877','new_loan_account.la_account_18770','new_loan_account.la_account_18771'], findings:[] },
+    { id:'f13', status:'proven', name:'Writeoff — базовая сверка (73 события)', formula:'spis_v_ubytok_CL (73 события) ⊆ writeoff, точное совпадение сумм',
+      inputs:['old_spisCL.contract_number','old_spisCL.summ_spis_v_tg','new_writeoff.w_dlcr_dog_num','new_writeoff.w_dlcrp_write_off_amount'],
+      evidence:'CASE_RUN_WRITEOFF_CL_010 — 73/73, 138 741 177,22₸ точно', note:'4 доп. события только в новой ветке — см. #11/e-writeoff (внешняя проверка, постдатирует FINDINGS.md).',
+      slice:'2026-07-01, S03', sql:'-- CASE_RUN_WRITEOFF_CL_010_FINAL_EMAIL_PROOF, Result 01 (фрагмент)\nSELECT reconciliation_class, COUNT_BIG(*) AS event_count,\n  SUM(old_writeoff_amount_kzt), SUM(new_writeoff_amount_kzt),\n  SUM(ABS(old_minus_new_amount)) AS gross_absolute_difference_sum\nFROM #WRITEOFF_CL_010_RECON\nGROUP BY reconciliation_class\nORDER BY reconciliation_class;', findings:['#11'] },
+
+    { id:'d1', status:'refuted', name:'«S03: 17.2 млрд потерянной экспозиции»', formula:'миф: NEW теряет 17.2 млрд экспозиции против OLD', inputs:[],
+      evidence:'FINDINGS.md §5 — реальность: 2907 договоров статус V (расторгнуты), подтверждено обеими ветками',
+      note:'Направление ОБРАТНОЕ: OLD над-удерживает расторгнутых. Net ~5.6 млрд, не 17.2.', findings:[] },
+    { id:'d2', status:'refuted', name:'«Остатки менялись ⇒ договор живой»', formula:'миф: движение баланса = признак живого договора', inputs:[],
+      evidence:'FINDINGS.md §5 — движение у 824/2902 (28%) — остаточный учёт', findings:[] },
+    { id:'d3', status:'refuted', name:'«Installment/kpk/Payda структурно ONLY_NEW»', formula:'миф: эти продукты просто не существовали в OLD',
+      inputs:['new_loans.l_product_type'], evidence:'FINDINGS.md §5 — все продуктовые поля S02 = NULL на всех 27 825 строках', findings:[] },
+    { id:'d4', status:'refuted', name:'«S02-обрыв фев-2026 = re-homing под другой source»', formula:'миф: договоры переехали под другой la_source/таблицу', inputs:[],
+      evidence:'FINDINGS.md §5 — ни один из 124 964 не найден в loan_account под ДРУГИМ source. Дефект населённости, не миграция.', findings:[] },
+    { id:'d5', status:'refuted', name:'«Тройной ноль = выбитый ключ»', formula:'миф: 0 в writeoff/collections/offbalance = ошибка ключа', inputs:[],
+      evidence:'FINDINGS.md §5 — домен source в этих 3 таблицах = только S01/S03; resolution-пайплайн структурно не покрывает S02/S17', findings:[] },
+    { id:'d6', status:'refuted', name:'Старый limit → новый l_limit', formula:'PORTFOLIO_CREDITCARDS_MIGR_WAY4.limit = loans.l_limit',
+      inputs:['old_migrway4.limit','new_loans.l_limit'], evidence:'Тест мэппинга WAY4, 27.07.2026 — l_limit NULL на всех 77 457 тестированных', findings:[] },
+
+    { id:'e1', status:'external', name:'DWH-02 / наш #5 — 44/68 SMART_CARD вне master', formula:'44 договора SMART_CARD вне loans И loan_account, 90 960 726.55₸, все статус Account OK',
+      inputs:['old_smartcard.contract_number'], evidence:'FINDINGS.md §9.3b — вероятно подмножество наших 68 "вне loans вовсе"; reconciling-запрос ещё не прогнан', findings:['#5'] },
+    { id:'e2', status:'external', name:'DWH-08 — 70 дублей l_loan_id (S01)', formula:'70 групп дублей l_loan_id в loans, риск удвоения JOIN 197.6М→395.2М',
+      inputs:['new_loans.l_loan_id'], evidence:'FINDINGS.md §9.1 — не противоречит §1 (join по gid не допускает этот класс ошибки)',
+      note:'НЕ то же самое, что наш #8 (l_gid+l_loan_number) — разные ключи.', findings:['#8'] },
+    { id:'e3', status:'external', name:'DWH-13 / наш #1 — S02 borrower_id отсутствует', formula:'53 активных договора S02: borrower_id не находит строку в borrower',
+      inputs:['new_loans.l_borrower_id','new_borrower.b_borrower_id'], evidence:'FINDINGS.md §9.2 — не проверено независимо. Живая схема добавляет находку: l_borrower_id=varchar(255), b_borrower_id=bigint.', findings:['#1'] },
+    { id:'e4', status:'external', name:'DWH-14 / наш #2 — S17 ИИН-расхождение', formula:'7 активных договоров S17: iin из старой ветки не совпадает с borrower.b_iin_bin',
+      inputs:['old_fenix.iin','new_borrower.b_iin_bin'], evidence:'FINDINGS.md §9.2 — по профилю Miras (фундамент ключей), не проверено независимо', findings:['#2'] },
+    { id:'e5', status:'external', name:'DWH-15 / наш #3 — S03 pledges отсутствует', formula:'49 договоров S03: l_collateral_id заполнен, но нет строки в pledges',
+      inputs:['new_pledges.c_loan_gid'], evidence:'FINDINGS.md §9.4 п.3 — CONFIRMED построчным чтением: join сделан на c_loan_id/la_loan_id, не на c_source+c_loan_gid. 367.7М — НЕ наше подтверждение.',
+      note:'Приоритетный следующий шаг (FINDINGS §9.5 п.2) — цифра может измениться после перегона на верный ключ.', findings:['#3'] },
+    { id:'e6', status:'external', name:'unused_limit → l_unutilized_limit (наш #6)', formula:'точное правило не подтверждено, вкл. обработку NULL vs 0',
+      inputs:['old_migrway4.unused_limit','new_loans.l_unutilized_limit'], evidence:'Кадиржан заявил об исправлении 29.07.2026 — постдатирует FINDINGS.md', version:2,
+      slice:'2026-07-01, S02 (77 457 договоров)',
+      sql:'-- CASE_RUN_MIGR_WAY4_020_LIMIT_HISTORY_SHIFT (фрагмент)\nSELECT contract_key, new_loan_amount,\n  COUNT_BIG(*) AS history_row_count,\n  MAX(CASE WHEN ABS(historical_old_limit-new_loan_amount)<=0.01\n           THEN history_report_date END) AS last_earlier_equal_date\nFROM #history_020\nGROUP BY contract_key, new_loan_amount;',
+      history:[{date:'27.07',note:'Сайлау: 7 400 договоров с расхождением unused_limit, выделено 1 409 с числовым расхождением (19.3М₸ gross)'},{date:'29.07',note:'Кадиржан: «l_unutilized_limit было исправлено, прошу проверить»'},{date:'30.07',note:'Повторный тест ещё не прогнан — статус остаётся «внешняя проверка», не «доказано»'}],
+      findings:['#6'] },
+    { id:'e7', status:'external', name:'RS_7130 loan_account — нулевые балансы (наш #12)', formula:'458 из 637 активных договоров: все 25 счетов ГК равны нулю несмотря на чистый 1:1 join',
+      inputs:['old_rs7130.outstanding','new_loan_account.principal_balance_debt'], evidence:'CASE_RUN_RS_7130_009, 29.07.2026 — постдатирует снимок FINDINGS.md (01.07.2026)',
+      note:'116–134 млрд₸ — крупнейшая цифра на холсте; приоритет №1 для независимой перепроверки.', slice:'2026-07-01, S01 (RS_7130, 637 договоров)', version:1,
+      sql:'-- CASE_RUN_RS_7130_009_CONTRACT_PROOF, Result 03 (фрагмент)\nSELECT COUNT_BIG(*) AS target_contract_count,\n  SUM(old_principal), SUM(old_total), SUM(new_principal), SUM(new_total)\nFROM #comparison\nWHERE matched_account_row_count = 1\n  AND UPPER(LTRIM(RTRIM(COALESCE(account_status,N\'\')))) = N\'актив\'\n  AND ABS(old_total) > @Tolerance\n  AND ABS(new_principal) <= @Tolerance\n  AND ABS(new_total) <= @Tolerance;',
+      history:[{date:'29.07',note:'Обнаружено: 458/637 договоров с нулевым принципалом при чистом 1:1 join по gid+loan_id'},{date:'30.07',note:'Перенесено на BI-холст как приоритет №1 — не входит в FINDINGS.md, требует независимого прогона нашим методом'}],
+      findings:['#12'] },
+    { id:'e8', status:'external', name:'loans_active vs PORTFOLIO_RS (наш #13)', formula:'3 договора: 2 только в новой (нет старой истории), 1 только в старой (закрыт, есть остаток)',
+      inputs:['old_rs.contractnumber','old_rs.contract_id','new_loans_active.l_loan_status'], evidence:'переписка 29–30.07.2026 — постдатирует FINDINGS.md; гипотеза Кадиржана об обрезании столбца не проверена', findings:['#13'] },
+    { id:'e9', status:'external', name:'restructuring_v2 — дубли и аномалии (наш #8/#9/#10)', formula:'12 несопоставленных строк; 184/4520 событий с датой погашения раньше даты реструктуризации',
+      inputs:['new_restructuring.new_maturity_date'], evidence:'переписка 27–28.07.2026 — постдатирует FINDINGS.md', findings:['#9','#10'] }
+  ];
+
+  var TABLES_BY_ID = {}; TABLES.forEach(function(t){ TABLES_BY_ID[t.id]=t; t.lane = (t.side==='old')?1:3; });
+  function scopeOf(inputs){
+    if (!inputs.length) return 'freeform';
+    var sides = {}; inputs.forEach(function(ref){ var t = TABLES_BY_ID[ref.split('.')[0]]; if (t) sides[t.side]=true; });
+    var keys = Object.keys(sides);
+    if (keys.length===2) return 'cross'; if (keys[0]==='old') return 'old'; if (keys[0]==='new') return 'new'; return 'freeform';
+  }
+  var LANE_OF_SCOPE = { old:0, cross:2, new:4, freeform:-1 };
+  PROCESSES.forEach(function(p){ p.scope = scopeOf(p.inputs); p.lane = LANE_OF_SCOPE[p.scope]; p.builtin = true; });
+
+  var STATUS_PRIORITY = { refuted:4, external:3, hypothesis:2, proven:1 };
+  var colStatusIndex = {};
+  PROCESSES.forEach(function(p){ p.inputs.forEach(function(ref){ var cur = colStatusIndex[ref]; if (!cur || STATUS_PRIORITY[p.status] > STATUS_PRIORITY[cur]) colStatusIndex[ref] = p.status; }); });
+
+  var LANE_X = {0:40, 1:340, 2:760, 3:1180, 4:1600};
+  var LANE_LABEL = { 0:'Процессы только\nстарой ветки', 1:'Старая ветка ·\nCL_PORTFOLIO.dbo (10 таблиц)', 2:'Сквозные процессы\n(старая ↔ новая)', 3:'Новая ветка ·\nDictionaries.risk_analytics (19 таблиц)', 4:'Процессы только\nновой ветки' };
+  var GAP = 24, TOP_PAD = 60, SHELF_GAP = 270;
+  var positions = {}; var view = { x: 30, y: 10, scale: 0.32 }; var isolatedId = null; var nextId = 1;
+
+  function laneNodeList(lane){ var list = TABLES.filter(function(t){ return t.lane===lane; }); list = list.concat(PROCESSES.filter(function(p){ return p.lane===lane; })); return list; }
+  function estimateHeight(n){ if (n.columns) return 46 + n.columns.length*20 + 10; if (n.catalogued===false) return 92; return 118; }
+  function layout(){
+    var maxLaneBottom = 0;
+    [0,1,2,3,4].forEach(function(lane){
+      var list = laneNodeList(lane); var y = TOP_PAD;
+      list.forEach(function(n){ if (!positions[n.id]) positions[n.id] = { x: LANE_X[lane], y: y }; y = positions[n.id].y + estimateHeight(n) + GAP; });
+      var phId = 'placeholder-'+lane;
+      if (lane===0 || lane===2 || lane===4){ if (!positions[phId]) positions[phId] = { x: LANE_X[lane], y: y }; y += 60 + GAP; }
+      if (y > maxLaneBottom) maxLaneBottom = y;
+    });
+    var freeform = PROCESSES.filter(function(p){ return p.lane===-1; });
+    freeform.forEach(function(p,i){ if (!positions[p.id]) positions[p.id] = { x: 40 + i*SHELF_GAP, y: maxLaneBottom + 60 }; });
+    return maxLaneBottom + 60;
+  }
+
+  var canvasInner = document.getElementById('canvasInner'); var viewport = document.getElementById('viewport');
+  function applyTransform(){ canvasInner.style.transform = 'translate('+view.x+'px,'+view.y+'px) scale('+view.scale+')'; }
+  function edgeSourceTarget(process){
+    var touched = {}; process.inputs.forEach(function(ref){ touched[ref.split('.')[0]] = true; });
+    return Object.keys(touched).map(function(tid){ var t = TABLES_BY_ID[tid]; if (!t) return null; if (t.lane < process.lane) return { a: t.id, b: process.id }; return { a: process.id, b: t.id }; }).filter(Boolean);
+  }
+  function statusColor(status){ return status==='proven' ? 'var(--st-good)' : status==='refuted' ? 'var(--ink-faint)' : 'var(--st-warning)'; }
+  function findingChip(id){ var f = FINDINGS[id]; if (!f) return ''; return '<span class="finding-chip" style="background:var('+SEVERITY_VAR[f.severity]+'); color:var('+SEVERITY_FG_VAR[f.severity]+')" title="'+esc(f.label)+'">'+id+'</span>'; }
+
+  function colRowsHtml(t){
+    if (!t.columns) return '<div class="n-col-row">'+icon('ic-warn','ic-sm')+'<span class="n-col-name">не каталогизировано</span></div>';
+    return '<div class="n-cols">'+t.columns.map(function(c){
+      var refKey = t.id+'.'+(c.match?c.match[0]:c.name);
+      var st = colStatusIndex[refKey]; var dotCls = st ? DOT_CLASS[st] : '';
+      var tag = c.role==='key' ? '<span class="n-col-tag key">К</span>' : c.role==='fk' ? '<span class="n-col-tag fk">ВК</span>' : '';
+      return '<div class="n-col-row" title="'+esc(c.note||c.name)+'"><span class="n-col-dot '+dotCls+'"></span><span class="n-col-name">'+esc(c.name)+'</span><span class="n-col-type">'+esc(c.type)+'</span>'+tag+'</div>';
+    }).join('')+'</div>';
+  }
+  function openDrawer(title, bodyHtml){ document.getElementById('drawerTitle').textContent = title; document.getElementById('drawerBody').innerHTML = bodyHtml; document.getElementById('drawer').classList.add('open'); }
+  function closeDrawer(){ document.getElementById('drawer').classList.remove('open'); }
+  function showTableDrawer(t){
+    var html = '<p class="t-grain">'+icon('ic-table')+' Роль: '+esc(t.role)+'</p><p class="t-grain">Гранулярность: '+esc(t.grain)+'</p>';
+    t.columns.forEach(function(c){
+      var roleTag = c.role==='key' ? '<span class="role-tag role-key">'+icon('ic-key','ic-sm')+'КЛЮЧ</span>' : c.role==='fk' ? '<span class="role-tag role-fk">'+icon('ic-link','ic-sm')+'ВК → '+esc(c.fkRef||'')+'</span>' : '';
+      html += '<div class="col-row"><div class="col-head"><span class="col-name">'+esc(c.name)+'</span><span class="col-type">'+esc(c.type)+'</span>'+roleTag+'</div>'+(c.note?'<span class="col-note">'+esc(c.note)+'</span>':'')+'</div>';
+    });
+    if (t.note) html += '<p class="t-note">'+icon('ic-warn')+' '+esc(t.note)+'</p>';
+    html += '<p class="t-evidence">Источник: '+esc(t.evidence)+'</p>';
+    openDrawer(t.name, html);
+  }
+  function showProcessDrawer(p){
+    var badgeVar = {proven:'st-good', hypothesis:'st-warning', external:'st-warning', refuted:'ink-faint'}[p.status];
+    var fg = p.status==='refuted' ? 'var(--paper-raised)' : (p.status==='proven' ? 'var(--st-good-fg)' : 'var(--st-warning-fg)');
+    var html = '<span class="status-chip" style="background:var(--'+badgeVar+'); color:'+fg+'">'+icon(STATUS_ICON[p.status])+STATUS_LABEL[p.status]+'</span>'+
+      '<span class="scope-tag">'+SCOPE_LABEL[p.scope]+(p.builtin?'':' · '+icon('ic-pencil','ic-sm')+' черновик')+'</span>'+
+      (p.version ? '<span class="version-badge">версия '+p.version+'</span>' : '')+
+      (p.slice ? '<span class="scope-tag">срез: '+esc(p.slice)+'</span>' : '')+
+      '<pre class="formula">'+esc(p.formula)+'</pre>'+
+      (p.inputs.length ? '<div class="chip-row">'+p.inputs.map(function(i){return '<span class="input-chip">'+esc(i)+'</span>';}).join('')+'</div>' : '')+
+      (p.pairWith && p.pairWith.length ? '<p class="drawer-sub">Проверять вместе с</p><div class="chip-row">'+p.pairWith.map(function(i){return '<span class="input-chip">'+esc(i)+'</span>';}).join('')+'</div>' : '')+
+      '<p class="calc-meta">Источник: '+esc(p.evidence)+'</p>'+
+      (p.note ? '<p class="calc-note">'+icon('ic-warn')+' '+esc(p.note)+'</p>' : '')+
+      (p.findings.length ? '<div class="chip-row">'+p.findings.map(findingChip).join('')+'</div>' : '')+
+      (p.sql ? '<p class="drawer-sub">Прикреплённый SQL</p><pre class="sql-block">'+esc(p.sql)+'</pre>' : '')+
+      (p.history && p.history.length ? '<p class="drawer-sub">История</p><div class="history-list">'+p.history.map(function(h){return '<div class="history-item"><span class="history-date">'+esc(h.date)+'</span><span>'+esc(h.note)+'</span></div>';}).join('')+'</div>' : '');
+    openDrawer(p.name, html);
+  }
+  function clearIsolate(){ isolatedId = null; document.querySelectorAll('.node').forEach(function(el){ el.classList.remove('dimmed','hit'); }); document.getElementById('isolateBanner').classList.remove('show'); }
+  function isolateNode(id){
+    clearIsolate(); isolatedId = id; var neighbors = {}; neighbors[id]=true;
+    var p = PROCESSES.filter(function(x){return x.id===id;})[0];
+    if (p){ p.inputs.forEach(function(ref){ neighbors[ref.split('.')[0]]=true; }); }
+    else { PROCESSES.forEach(function(x){ x.inputs.forEach(function(ref){ if (ref.split('.')[0]===id) neighbors[x.id]=true; }); }); }
+    document.querySelectorAll('.node[data-id]').forEach(function(el){ var nid = el.dataset.id; if (neighbors[nid]) el.classList.add('hit'); else el.classList.add('dimmed'); });
+    var count = Object.keys(neighbors).length - 1;
+    var nm = p ? p.name : (TABLES_BY_ID[id] ? TABLES_BY_ID[id].name : id);
+    var mod10=count%10, mod100=count%100, word = (mod10===1&&mod100!==11)?'связанный узел':((mod10>=2&&mod10<=4&&(mod100<10||mod100>=20))?'связанных узла':'связанных узлов');
+    document.getElementById('isolateBannerText').textContent = 'Изолировано: '+nm+' — '+count+' '+word;
+    document.getElementById('isolateBanner').classList.add('show');
+  }
+  function makeNode(kind, obj, x, y){
+    var el = document.createElement('div'); el.className = 'node '+kind; el.dataset.id = obj.id; el.style.left = x+'px'; el.style.top = y+'px'; el.tabIndex = 0;
+    if (kind==='table-node'){
+      el.classList.add('side-'+obj.side);
+      var tierBadge = /P0/.test(obj.role) ? '<span class="badge tier-p0">'+esc(obj.role.split(' · ')[0])+'</span>' : '<span class="badge">'+esc(obj.role.split(' · ')[0])+'</span>';
+      el.innerHTML = '<div class="n-head"><div class="n-name">'+icon('ic-table')+'<span>'+esc(obj.name)+'</span></div><div class="n-badges"><span class="badge side">'+SIDE_LABEL[obj.side]+'</span>'+tierBadge+'</div></div>'+colRowsHtml(obj)+'<div class="n-foot">'+esc(obj.grain)+'</div>';
+      el.addEventListener('click', function(){ if (!el.dataset.dragged) showTableDrawer(obj); });
+      el.addEventListener('keydown', function(e){ if (e.key==='Enter'||e.key===' ') showTableDrawer(obj); });
+    } else {
+      el.dataset.status = obj.status; el.dataset.builtin = obj.builtin ? 'true' : 'false';
+      el.innerHTML = '<div class="n-head"><div class="n-name">'+icon('ic-process')+'<span>'+esc(obj.name)+'</span></div><div class="n-badges">'+
+        '<span class="badge '+STATUS_BADGE_CLASS[obj.status]+'">'+icon(STATUS_ICON[obj.status],'ic-sm')+STATUS_LABEL[obj.status]+'</span>'+
+        '<span class="badge">'+SCOPE_LABEL[obj.scope]+'</span>'+(obj.builtin?'':'<span class="badge draft">'+icon('ic-pencil','ic-sm')+'черновик</span>')+'</div></div>';
+      el.addEventListener('click', function(){ if (!el.dataset.dragged) showProcessDrawer(obj); });
+      el.addEventListener('keydown', function(e){ if (e.key==='Enter'||e.key===' ') showProcessDrawer(obj); });
+    }
+    attachDrag(el); return el;
+  }
+  function attachDrag(el){
+    el.addEventListener('pointerdown', function(e){
+      e.stopPropagation(); el.setPointerCapture(e.pointerId); el.dataset.dragged = '';
+      var startX = e.clientX, startY = e.clientY, orig = positions[el.dataset.id], ox = orig.x, oy = orig.y;
+      function onMove(ev){ var dx = (ev.clientX-startX)/view.scale, dy = (ev.clientY-startY)/view.scale; if (Math.abs(dx)>3 || Math.abs(dy)>3) el.dataset.dragged = '1'; positions[el.dataset.id] = { x: ox+dx, y: oy+dy }; el.style.left = (ox+dx)+'px'; el.style.top = (oy+dy)+'px'; drawEdges(); }
+      function onUp(){ el.releasePointerCapture(e.pointerId); window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); setTimeout(function(){ delete el.dataset.dragged; }, 0); }
+      window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+    });
+  }
+  function drawEdges(){
+    var svg = document.getElementById('edgesSvg'); svg.innerHTML = '';
+    PROCESSES.filter(function(p){ return p.lane!==-1; }).forEach(function(p){
+      edgeSourceTarget(p).forEach(function(e){
+        var pa = positions[e.a], pb = positions[e.b]; if (!pa || !pb) return;
+        var x1 = pa.x+250, y1 = pa.y+26, x2 = pb.x, y2 = pb.y+26, midx = (x1+x2)/2;
+        var path = document.createElementNS('http://www.w3.org/2000/svg','path');
+        path.setAttribute('d', 'M '+x1+' '+y1+' C '+midx+' '+y1+', '+midx+' '+y2+', '+x2+' '+y2);
+        path.setAttribute('fill','none'); path.style.stroke = statusColor(p.status);
+        path.setAttribute('stroke-width', p.status==='proven' ? '2' : '1.5'); path.setAttribute('opacity', p.status==='refuted' ? '0.6' : '0.85');
+        if (!p.builtin || p.status==='external') path.setAttribute('stroke-dasharray','5 3');
+        svg.appendChild(path);
+      });
+    });
+  }
+  function renderStats(){
+    var oldN = TABLES.filter(function(t){return t.side==='old';}).length, newN = TABLES.filter(function(t){return t.side==='new';}).length;
+    var proven = PROCESSES.filter(function(p){return p.status==='proven';}).length, hyp = PROCESSES.filter(function(p){return p.status==='hypothesis';}).length;
+    var ext = PROCESSES.filter(function(p){return p.status==='external';}).length, ref = PROCESSES.filter(function(p){return p.status==='refuted';}).length;
+    var drafts = PROCESSES.filter(function(p){return !p.builtin;}).length;
+    var totalCols = 0, mappedCols = 0;
+    TABLES.forEach(function(t){ if (t.side==='new' && t.columns) t.columns.forEach(function(c){ totalCols++; var k=t.id+'.'+(c.match?c.match[0]:c.name); if (colStatusIndex[k]) mappedCols++; }); });
+    var pct = totalCols ? Math.round(100*mappedCols/totalCols) : 0;
+    var html = '';
+    html += '<div class="tile"><div class="tile-head">'+icon('ic-grid')+'<span>Таблицы Dictionary</span></div><div class="tile-value">'+newN+'</div><div class="tile-sub">все 19 каталогизированы (live schema)</div></div>';
+    html += '<div class="tile"><div class="tile-head">'+icon('ic-table')+'<span>Таблицы CL_PORTFOLIO</span></div><div class="tile-value">'+oldN+'</div><div class="tile-sub">все 10 каталогизированы (live schema)</div></div>';
+    html += '<div class="tile"><div class="tile-head">'+icon('ic-check')+'<span>Покрытие аудита колонок</span></div><div class="tile-value">'+pct+'%</div><div class="tile-sub">'+mappedCols+' из '+totalCols+' колонок Dictionary тронуты хотя бы одним процессом</div></div>';
+    html += '<div class="tile"><div class="tile-head">'+icon('ic-process')+'<span>Процессы</span></div><div class="tile-value">'+PROCESSES.length+'</div><div class="tile-legend">'+
+      '<span class="li">'+icon(STATUS_ICON.proven,'ic-sm')+'<span style="color:var(--st-good)">'+proven+' доказано</span></span>'+
+      '<span class="li">'+icon(STATUS_ICON.external,'ic-sm')+'<span style="color:var(--st-warning-fg)">'+ext+' внешних</span></span>'+
+      '<span class="li">'+icon(STATUS_ICON.hypothesis,'ic-sm')+'<span style="color:var(--st-warning-fg)">'+hyp+' гипотез</span></span>'+
+      '<span class="li">'+icon(STATUS_ICON.refuted,'ic-sm')+'<span>'+ref+' опровергнуто</span></span>'+
+      '<span class="li">'+icon('ic-pencil','ic-sm')+'<span>'+drafts+' черновиков</span></span></div></div>';
+    document.getElementById('statsRow').innerHTML = html;
+  }
+  var MATRIX = [
+    { src:'S01 · RS', perim:'4 385 / 4 838 / 4 380', bal:{ok:true, note:'✓ −0.02 ₸'}, prov:{ok:true, note:'✓ 100% (25.51 млрд)'}, dpd:{ok:false, note:'✗ NULL 3618/4380; июнь→июль +60%'} },
+    { src:'S03 · CrediLogic', perim:'237 274 / 237 386 / 234 367', bal:{ok:true, note:'✓ Δ 140 854 ₸'}, prov:{ok:false, note:'✗ new выше +30.6 млрд'}, dpd:{ok:false, note:'✗ NULL 205 264; DPD=−1'} },
+    { src:'S17 · Fenix', perim:'79 621 / 90 596 / 79 617', bal:{ok:true, note:'✓ Δ −5.6 млн (4 дог.)'}, prov:{ok:false, note:'✗ new выше +29.8 млн (18771)'}, dpd:{ok:false, note:'✗ interest DPD 100% NULL; 90+ теряется на 932 дог.'} },
+    { src:'S02 · Карты', perim:'152 221 / 27 824 / — (17.9%)', bal:{blocked:true, note:'⛔ не сверено — самый рискованный'}, prov:{blocked:true, note:'⛔ считать нельзя'}, dpd:{blocked:true, note:'⛔ считать нельзя'} }
+  ];
+  function renderMatrix(){
+    document.getElementById('matrixBody').innerHTML = MATRIX.map(function(r){
+      function cell(c){ var cls = c.blocked ? 'blocked' : (c.ok ? 'ok' : 'bad'); var ic = c.blocked ? 'ic-x' : (c.ok ? 'ic-check' : 'ic-warn'); return '<td><div class="cell '+cls+'">'+icon(ic,'ic-sm')+'<span class="cell-note">'+esc(c.note)+'</span></div></td>'; }
+      return '<tr><td class="src">'+esc(r.src)+'</td><td class="cell-note">'+esc(r.perim)+'</td>'+cell(r.bal)+cell(r.prov)+cell(r.dpd)+'</tr>';
+    }).join('');
+  }
+  var QSTATUS_LABEL = { s2t:'нужен S2T', partial:'частично сузили сами', checkable:'можем проверить сами' };
+  var QSTATUS_CLASS = { s2t:'st-neutral', partial:'st-warning', checkable:'st-good' };
+  var QUESTIONS = [
+    { q:'Провизия 1428 в новой ветке на 28 млрд больше (S03, действующие договоры). Это потому что новая система точнее считает риск, или потому что старая недосоздавала резервы?', status:'s2t', note:'Нужен эталон — согласованный бухгалтерский/МСФО 9 расчёт. У нас его нет.' },
+    { q:'Формула провизии 1428 одинаковая в обеих ветках — но означает ли она одно и то же по смыслу, или считается по-разному?', status:'s2t', note:'Формула-тождество подтверждена, смысл-тождество — нет.' },
+    { q:'Нужны официальные правила: как считается провизия 1428, откуда берётся 18771, и откуда берётся DPD — по каждому источнику отдельно.', status:'partial', note:'Внутренний RAG (AQR-методология) дал общую формулу EAD и пороги DPD-стадирования (91+=Stage 3) — но не ответил на конкретику «откуда 18771» и «почему правила разные по source». Общая методология ≠ подтверждение того, что именно так реализовано в марте.' },
+    { q:'У большинства договоров поле DPD пустое. Это нормально? Можно ли считать «−1» допустимым значением? И почему расчёт DPD резко изменился между июньской и июльской загрузкой?', status:'partial', note:'Мы доказали факт смены расчёта (4-way сверка исключила лаг отчётности). RAG добавил: по AQR DPD обязателен, NULL — грубая ошибка, вместо «−1» заглушка 9999999999999 — but это число мы не можем сверить ни с одним нашим источником, фиксируем как репорт RAG, не как доказанный факт.' },
+    { q:'Что считать официальным индикатором просрочки 90+: поле DPD или поле «бакет просрочки»? Они не всегда совпадают.', status:'partial', note:'RAG: бакет обычно по DPD, но может переопределяться критериями дефолта Методики Банка (реструктуризация + ухудшение) независимо от DPD — это МОЖЕТ легитимно объяснять независимость S17-бакета от DPD. Требует подтверждения у S2T, что мар именно так запрограммирован, а не что это дефект.' },
+    { q:'По картам (S02) вообще нет данных о типе продукта. Их не перенесли при миграции, или их нужно доставать из отдельного справочника по gid?', status:'partial', note:'Точно знаем: поля NULL на всех 27 825 строках (disproven d3). RAG утверждает, что поле PORTFOLIO обязано быть заполнено кодами (100002, 100004=Payda, 100009=kpk…) — но такого столбца НЕТ ни в loans, ни в loans_active по живой схеме. Либо RAG ссылается на другой AQR-слой отчётности, либо нужен мэппинг PORTFOLIO→реальный столбец марта — сам по себе ответ вопрос не закрывает.' },
+    { q:'Кто отвечает за модель марта — дадите доступ к документации, или нам разбираться самим по данным?', status:'partial', note:'RAG сообщает матрицу ответственности: БРМ — риск-метрики (PD/LGD/Stages), ДБУиО — балансовые данные (1428/18771), БИТ — техническая выгрузка/ID. Организационный факт, который мы не можем перепроверить данными — фиксируем как заявленный RAG-ботом, не как подтверждённый.' },
+    { q:'Текущий провизионный отчёт банка включает 8.5 млрд провизий по уже расторгнутым договорам — откуда эта цифра, нет ли двойного счёта?', status:'s2t', note:'Не проверяли — вне периметра нашей сверки. RAG по этому пункту ответа не дал.' },
+    { q:'По картам (S02) новая ветка перестала загружать данные с февраля 2026 (было 185 тыс. договоров в месяц, стало 28 тыс.). Баг, осознанное изменение правил, или что-то ещё?', status:'partial', note:'Точно исключили re-homing (disproven d4) — договоры физически выпали, а не переехали. Причину не знаем; RAG по этому пункту ответа не дал.' },
+    { q:'Списания/взыскание/забаланс сейчас работают только для S01 и S03. Планируется подключить карты (S02) и Fenix (S17), или там будет другой процесс?', status:'partial', note:'RAG: по AQR все дефолтные займы (включая карты и Fenix) обязаны попадать в B3C/B3D, если было событие дефолта за последние 5 лет — исключение искажает LGD. Если верно, нынешнее состояние (домен только S01/S03) — потенциальное нарушение методологии, что делает #5/#2 весомее, а не закрывает их.' },
+    { q:'В таблице writeoff всего 84 строки на весь портфель S01+S03. Это «одна строка = один договор» или «одна строка = один случай списания»?', status:'partial', note:'RAG подтверждает: в блоке LGD принята гранулярность «одна строка = один факт платежа/события» — совпадает с нашей косвенной догадкой (73+4 события со своими датами). Методология подтверждена; что writeoff реально её соблюдает построчно на каждой записи — ещё не проверяли.' },
+    { q:'Мы думали, что рост провизии 18771 — просто эффект миграции (появились новые договоры). Но 85% этого прироста — у договоров, которые есть в ОБЕИХ ветках. Значит, дело не только в составе портфеля.', status:'partial', note:'Простую версию «1428=модель, 18771=ETL» мы данными опровергли. Правильную атрибуцию не знаем; RAG по этому пункту ответа не дал.' },
+    { q:'По Fenix (S17) поле «просрочка по вознаграждению» вообще не заполняется — 100% пусто. Это целый показатель риска, который исчез. Почему его не считают для Fenix?', status:'partial', note:'Знаем масштаб точно (9815 договоров, 3.87 млрд, из них 5965/2.36 млрд были 90+ по старой ветке). RAG: поле INTEREST_DEL обязательно, дата выноса на просрочку без суммы = признак ошибки данных — имя поля не совпадает с нашей схемой (days_past_due_interest), вероятно другой AQR-слой, но методологически усиливает вывод: скорее дефект, чем отсутствие требования.' },
+    { q:'По Fenix есть 18 договоров, у которых провизия 18771 появилась только в новой ветке (8.26 млн ₸). Что это за договоры?', status:'checkable', note:'RAG указал, что у нас есть доступ к repmart.aqr_2026_b1a_v1_iii — таблице, которую мы раньше нигде не видели (нет в инвентаре 19 таблиц, не в CL_PORTFOLIO). Если доступ подтвердится — самый быстрый путь закрыть вопрос; сами ещё не запрашивали и не проверяли.' },
+    { q:'brm_all_data должна быть финальной сводной витриной, но по схеме видно только 3 столбца. Это правда всё, что там есть, или туда подтягивается остальное «на лету»?', status:'s2t', note:'Живая схема подтвердила: реально всего 3 столбца видно интроспекцией.' }
+  ];
+  function renderQuestions(){
+    document.getElementById('qList').innerHTML = QUESTIONS.map(function(item,i){
+      return '<div class="qitem"><span class="qnum">'+(i+1)+'</span><div style="flex:1"><div>'+esc(item.q)+'</div>'+
+        '<div class="cell-note" style="margin-top:2px">'+esc(item.note)+'</div></div>'+
+        '<span class="qstatus badge '+QSTATUS_CLASS[item.status]+'">'+QSTATUS_LABEL[item.status]+'</span></div>';
+    }).join('');
+  }
+
+  function renderTableDash(){
+    var rows = TABLES.filter(function(t){ return t.columns && t.side==='new'; }).map(function(t){
+      var total = t.columns.length, verified=0, inprog=0, issue=0;
+      t.columns.forEach(function(c){
+        var k = t.id+'.'+(c.match?c.match[0]:c.name); var st = colStatusIndex[k];
+        if (st==='proven') verified++; else if (st==='hypothesis'||st==='external') inprog++; else if (st==='refuted') issue++;
+      });
+      var unchecked = total-verified-inprog-issue;
+      return { t:t, total:total, verified:verified, inprog:inprog, issue:issue, unchecked:unchecked };
+    }).sort(function(a,b){ return (b.verified+b.inprog)/b.total - (a.verified+a.inprog)/a.total; });
+    document.getElementById('dashBody').innerHTML = rows.map(function(r){
+      function seg(n,color){ return n ? '<span style="width:'+(100*n/r.total)+'%;background:'+color+'"></span>' : ''; }
+      return '<tr><td class="name">'+esc(r.t.name)+'</td><td class="num">'+r.total+'</td>'+
+        '<td class="num" style="color:var(--st-good)">'+r.verified+'</td><td class="num" style="color:var(--st-warning-fg)">'+r.inprog+'</td>'+
+        '<td class="num" style="color:var(--ink-faint)">'+r.issue+'</td><td class="num">'+r.unchecked+'</td>'+
+        '<td><div class="dash-bar">'+seg(r.verified,'var(--st-good)')+seg(r.inprog,'var(--st-warning)')+seg(r.issue,'var(--ink-faint)')+'</div></td></tr>';
+    }).join('');
+  }
+
+  function render(){
+    var shelfY = layout();
+    canvasInner.innerHTML = '<svg id="edgesSvg" class="edges" width="2200" height="'+(shelfY+180)+'"></svg>';
+    [0,1,2,3,4].forEach(function(lane){
+      var lbl = document.createElement('div'); lbl.className = 'lane-label'; lbl.style.left = LANE_X[lane]+'px'; lbl.style.top = '14px'; lbl.innerHTML = LANE_LABEL[lane].split('\n').join('<br/>'); canvasInner.appendChild(lbl);
+      var list = laneNodeList(lane);
+      list.forEach(function(n){ var pos = positions[n.id]; var kind = (n.side!==undefined) ? 'table-node' : 'process-node'; canvasInner.appendChild(makeNode(kind, n, pos.x, pos.y)); });
+      if (lane===0 || lane===2 || lane===4){
+        var phId = 'placeholder-'+lane, pos = positions[phId];
+        var ph = document.createElement('div'); ph.className = 'node placeholder'; ph.dataset.id = phId; ph.style.left = pos.x+'px'; ph.style.top = pos.y+'px';
+        ph.innerHTML = icon('ic-plus')+(lane===0 ? 'Черновик (только старая)' : lane===2 ? 'Черновик (сквозной)' : 'Черновик (только новая)'); ph.tabIndex = 0;
+        var scopeForLane = lane===0?'old':lane===2?'cross':'new';
+        ph.addEventListener('click', function(){ openAddModal(scopeForLane); }); ph.addEventListener('keydown', function(e){ if (e.key==='Enter'||e.key===' ') openAddModal(scopeForLane); });
+        canvasInner.appendChild(ph);
+      }
+    });
+    var shelfLbl = document.createElement('div'); shelfLbl.className = 'shelf-label'; shelfLbl.style.left = '40px'; shelfLbl.style.top = (shelfY-24)+'px'; shelfLbl.textContent = 'Аналитический слой (ноутбук / методология) — без прямой связи со схемой'; canvasInner.appendChild(shelfLbl);
+    PROCESSES.filter(function(p){ return p.lane===-1; }).forEach(function(p){ var pos = positions[p.id]; canvasInner.appendChild(makeNode('process-node', p, pos.x, pos.y)); });
+    drawEdges(); if (isolatedId) isolateNode(isolatedId); applyTransform(); renderStats();
+  }
+
+  var panning = null;
+  viewport.addEventListener('pointerdown', function(e){ if (e.target.closest('.node')) return; panning = { startX:e.clientX, startY:e.clientY, ox:view.x, oy:view.y }; viewport.classList.add('panning'); viewport.setPointerCapture(e.pointerId); });
+  viewport.addEventListener('pointermove', function(e){ if (!panning) return; view.x = panning.ox + (e.clientX-panning.startX); view.y = panning.oy + (e.clientY-panning.startY); applyTransform(); });
+  viewport.addEventListener('pointerup', function(){ panning=null; viewport.classList.remove('panning'); });
+  viewport.addEventListener('pointercancel', function(){ panning=null; viewport.classList.remove('panning'); });
+  function zoomBy(factor, cx, cy){ var rect = viewport.getBoundingClientRect(); var mx = cx!=null ? cx-rect.left : rect.width/2, my = cy!=null ? cy-rect.top : rect.height/2; var worldX = (mx-view.x)/view.scale, worldY = (my-view.y)/view.scale; var newScale = Math.max(0.15, Math.min(1.8, view.scale*factor)); view.x = mx - worldX*newScale; view.y = my - worldY*newScale; view.scale = newScale; applyTransform(); }
+  viewport.addEventListener('wheel', function(e){ e.preventDefault(); zoomBy(e.deltaY<0?1.08:0.92, e.clientX, e.clientY); }, {passive:false});
+  document.getElementById('zoomIn').addEventListener('click', function(){ zoomBy(1.15); });
+  document.getElementById('zoomOut').addEventListener('click', function(){ zoomBy(0.87); });
+  document.getElementById('zoomReset').addEventListener('click', function(){ view={x:30,y:10,scale:0.32}; applyTransform(); });
+
+  var expandBtn = document.getElementById('expandToggle');
+  expandBtn.addEventListener('click', function(){
+    var expanded = document.querySelector('.sheet').classList.toggle('expanded');
+    expandBtn.classList.toggle('on', expanded);
+    expandBtn.innerHTML = expanded ? (icon('ic-x')+'Свернуть обратно') : (icon('ic-grid')+'На всю страницу');
+  });
+  var fsBtn = document.getElementById('fullscreenToggle');
+  fsBtn.addEventListener('click', function(){
+    if (!document.fullscreenElement) {
+      if (viewport.requestFullscreen) viewport.requestFullscreen().catch(function(){ showToast('Браузер заблокировал fullscreen — используйте «На всю страницу»'); });
+      else showToast('Fullscreen недоступен в этом окне — используйте «На всю страницу»');
+    } else { document.exitFullscreen(); }
+  });
+
+  document.getElementById('drawerClose').addEventListener('click', closeDrawer);
+  document.getElementById('clearIsolate').addEventListener('click', clearIsolate);
+  viewport.addEventListener('click', function(e){ var node = e.target.closest('.node[data-id]'); if (!node || node.classList.contains('placeholder')) return; isolateNode(node.dataset.id); });
+
+  var pendingScope = 'cross', pendingCols = [];
+  function openAddModal(scope){
+    pendingScope = scope; pendingCols = [];
+    document.querySelectorAll('.scope-opt').forEach(function(b){ b.classList.toggle('on', b.dataset.scope===scope); });
+    document.getElementById('fName').value=''; document.getElementById('fFormula').value=''; document.getElementById('fEvidence').value=''; document.getElementById('fStatus').value='hypothesis';
+    renderColPicker(); document.getElementById('backdrop').classList.add('show'); document.getElementById('addModal').classList.add('show'); document.getElementById('fName').focus();
+  }
+  function closeAddModal(){ document.getElementById('backdrop').classList.remove('show'); document.getElementById('addModal').classList.remove('show'); }
+  document.getElementById('quickAdd').addEventListener('click', function(){ openAddModal('cross'); });
+  document.querySelectorAll('.scope-opt').forEach(function(b){ b.addEventListener('click', function(){ pendingScope = b.dataset.scope; pendingCols = []; document.querySelectorAll('.scope-opt').forEach(function(x){x.classList.toggle('on', x===b);}); renderColPicker(); }); });
+  function renderColPicker(){
+    var pool = TABLES.filter(function(t){ if (!t.columns) return false; if (pendingScope==='old') return t.side==='old'; if (pendingScope==='new') return t.side==='new'; return true; });
+    var el = document.getElementById('colPicker'); el.innerHTML = '';
+    pool.forEach(function(t){ t.columns.forEach(function(c){
+      var ref = t.id+'.'+(c.match?c.match[0]:c.name);
+      var chip = document.createElement('span'); chip.className = 'pick-chip'; chip.textContent = t.id.replace(/^(old_|new_)/,'')+'.'+c.name; chip.dataset.ref = ref;
+      chip.addEventListener('click', function(){ var idx = pendingCols.indexOf(ref); if (idx===-1) { pendingCols.push(ref); chip.classList.add('on'); } else { pendingCols.splice(idx,1); chip.classList.remove('on'); } renderSelectedRow(); });
+      el.appendChild(chip);
+    }); });
+    renderSelectedRow();
+  }
+  function renderSelectedRow(){ document.getElementById('selectedRow').innerHTML = pendingCols.map(function(r){ return '<span class="input-chip">'+esc(r)+'</span>'; }).join(''); }
+  document.getElementById('cancelAdd').addEventListener('click', closeAddModal);
+  document.getElementById('backdrop').addEventListener('click', closeAddModal);
+  document.getElementById('saveAdd').addEventListener('click', function(){
+    var name = document.getElementById('fName').value.trim(); if (!name) { document.getElementById('fName').focus(); return; }
+    var proc = { id:'u'+(nextId++), status: document.getElementById('fStatus').value, name:name,
+      formula: document.getElementById('fFormula').value.trim() || '(формула ещё не зафиксирована)',
+      inputs: pendingCols.slice(), evidence: document.getElementById('fEvidence').value.trim() || 'добавлено вручную, источник ещё не зафиксирован', note:'', findings:[], builtin:false };
+    proc.scope = pendingScope==='old' ? (pendingCols.every(function(r){return TABLES_BY_ID[r.split('.')[0]].side==='old';}) ? 'old' : scopeOf(pendingCols))
+               : pendingScope==='new' ? (pendingCols.every(function(r){return TABLES_BY_ID[r.split('.')[0]].side==='new';}) ? 'new' : scopeOf(pendingCols))
+               : (pendingCols.length ? scopeOf(pendingCols) : 'cross');
+    proc.lane = LANE_OF_SCOPE[proc.scope] != null ? LANE_OF_SCOPE[proc.scope] : LANE_OF_SCOPE[pendingScope];
+    PROCESSES.push(proc); closeAddModal(); render(); isolateNode(proc.id); showProcessDrawer(proc); showToast('Черновик добавлен на схему');
+  });
+  var toastTimer = null;
+  function showToast(msg){ var t = document.getElementById('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(function(){ t.classList.remove('show'); }, 2600); }
+  function fallbackDownload(filename, text){ var a = document.createElement('a'); a.href = 'data:application/json;charset=utf-8,'+encodeURIComponent(text); a.download = filename; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
+  document.getElementById('exportBtn').addEventListener('click', function(){
+    var payload = JSON.stringify({ processes: PROCESSES, positions: positions }, null, 2); var filename = 'dwh-schema-canvas-'+Date.now()+'.json';
+    if (window.claude && window.claude.downloads) { window.claude.downloads.save({ filename: filename, data: payload }).then(function(){ showToast('Схема сохранена'); }).catch(function(err){ if (err && err.code === 'declined') return; fallbackDownload(filename, payload); showToast('Сохранено через браузер'); }); }
+    else { fallbackDownload(filename, payload); showToast('Сохранено через браузер'); }
+  });
+  document.getElementById('importBtn').addEventListener('click', function(){ document.getElementById('importFile').click(); });
+  document.getElementById('importFile').addEventListener('change', function(e){
+    var file = e.target.files[0]; if (!file) return; var reader = new FileReader();
+    reader.onload = function(){ try { var data = JSON.parse(reader.result); if (data.processes) { PROCESSES.length = 0; data.processes.forEach(function(p){ PROCESSES.push(p); }); } if (data.positions) { positions = data.positions; } render(); showToast('Схема загружена'); } catch(err){ alert('Не удалось прочитать файл как сохранённую схему.'); } };
+    reader.readAsText(file); e.target.value = '';
+  });
+
+  renderMatrix(); renderQuestions(); renderTableDash(); render();
+})();
+</script>
