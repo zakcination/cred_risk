@@ -21,6 +21,22 @@ stored here.
   submission. Generalizes a manual comment-reading catch (4 loans) that this
   cross-check expanded to 20 — see
   [`docs/b3b_guide.md`](../docs/b3b_guide.md) §7.3.
+- **`risk_dwh_layered_check.sql`** — послойный тест нового марта
+  `Dictionaries.risk_analytics` против эталона `CL_PORTFOLIO.dbo`. Главное в
+  файле — **порядок слоёв**, продиктованный назначением таблиц и зависимостями,
+  а не набор запросов: L0 схема/домены → L1 `loans` (мастер) → L2 `loans_active`
+  (периметр) → L3 `loan_account` (деньги) → L4 `borrower` → L5 периметр old↔new
+  → L6 баланс → L7 провизии → L8 DPD/90+ → L9 залоги → L10 резолюшн →
+  L11 график/платежи → L12 периферия → L13 витрина. Слои с `is_gate=1`
+  блокируют доверие к нижележащим: итоговый отчёт помечает результат
+  «ДОВЕРЯТЬ НЕЛЬЗЯ», если провален гейт выше, — потому что сумма поверх
+  размноженного JOIN выглядит как число, но им не является. 69 проверок
+  пишут в `##RDW_RESULTS` (только `##` temp, read-only к постоянным объектам),
+  `MAXDOP 1`, без PII (только COUNT/SUM и бакеты магнитуды). Запускается
+  целиком или по слоям; `@SourceFilter` — по одному источнику за раз для
+  тяжёлого S02. Известные находки зашиты как регрессии, поэтому повторный
+  прогон показывает, приняты ли правки разработчика. Статусы переносятся на
+  BI-холст (`docs/analysis/risk_dwh_reconciliation/bi_canvas/`).
 - **`stage3_cure_candidates.sql`** — size the Stage 3 loans that would cure under a
   relaxed rule (stuck only by minor DPD slips) to confirm/refute Retail Business's
   ~12 bn ₸ estimate; methodology in
