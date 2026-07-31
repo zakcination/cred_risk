@@ -763,7 +763,10 @@ CREATE TABLE ##RDW_OLD (
 IF @SourceFilter IS NULL OR @SourceFilter = N'S01'
 INSERT INTO ##RDW_OLD
 SELECT N'S01', CONVERT(nvarchar(255), contract_id), N'contract_id→l_loan_id',
-       TRY_CAST([Total_outstanding] AS decimal(38,2)),
+       /* ifrs_balance, НЕ Total_outstanding: подтверждённая сверка S01 (16.07) сходится
+          именно по нему — 622 540 880 344,08 против 622 540 880 344,06 (Δ −0,02 ₸).
+          Total_outstanding давал фальшивую дельту +41,86 млрд. */
+       TRY_CAST([ifrs_balance] AS decimal(38,2)),
        TRY_CAST([ifrs_1428] AS decimal(38,2)) + TRY_CAST([ifrs_1845] AS decimal(38,2))
          + TRY_CAST([deb_1877_prov] AS decimal(38,2)) + TRY_CAST([_1877] AS decimal(38,2)),
        TRY_CAST([max_overdue_days] AS int), TRY_CAST([Basket] AS nvarchar(50)), NULL
@@ -786,7 +789,10 @@ OPTION (MAXDOP 1);
 IF @SourceFilter IS NULL OR @SourceFilter = N'S17'
 INSERT INTO ##RDW_OLD
 SELECT N'S17', CONVERT(nvarchar(255), contractnumber), N'contractnumber→la_dog_num',
-       TRY_CAST([Total_outstanding] AS decimal(38,2)),
+       /* ifrs_balance — подтверждённая формула S17 (outstanding + outstanding_overdue
+          + interest + overdue_interest + penalties); сверка 16.07 даёт
+          121 251 084 593,62 против 121 245 516 880,01 (Δ −5 567 713,61 ₸). */
+       TRY_CAST([ifrs_balance] AS decimal(38,2)),
        TRY_CAST([ifrs_1428] AS decimal(38,2)) + TRY_CAST([ifrs_1845] AS decimal(38,2))
          + TRY_CAST([_1877] AS decimal(38,2)),
        TRY_CAST([max_overdue_days] AS int), TRY_CAST([Basket] AS nvarchar(50)), NULL
@@ -943,6 +949,18 @@ GO
    — самый частый способ получить неинтерпретируемое расхождение.
    ============================================================================= */
 DECLARE @Tolerance decimal(18,2) = (SELECT CONVERT(decimal(18,2),value) FROM ##RDW_PARAMS WHERE name=N'Tolerance');
+
+/* L6.0 ОГОВОРКА, которую нельзя прятать: на новой стороне для ВСЕХ источников взят
+   total_balance_debt, а это подтверждённая формула S17 (8 счетов, БЕЗ 1818/1838).
+   Для S03 документированный balance включает 1818/1838, то есть сравнение S03
+   потенциально сравнивает разные величины. Шапка скрипта прямо предупреждает
+   «формула баланса РАЗНАЯ по источникам» — и здесь это допущение нарушено сознательно,
+   пока не подтверждён корректный столбец новой стороны для S03/S02. */
+INSERT INTO ##RDW_RESULTS VALUES
+(6, N'L6 баланс на MATCHED', N'L6.0', N'состав баланса новой стороны',
+ N'Для всех источников взят total_balance_debt (формула S17, без 1818/1838)', NULL,
+ N'assumption_flag', 1, N'подтвердить у S2T', N'WARN', 0,
+ N'S03 по документации использует balance с 1818/1838. До подтверждения столбца дельта L6.2/L6.3 по S03 и S02 может измерять разницу СОСТАВА, а не расхождение данных. S01/S17 сверены по ifrs_balance и этой оговоркой не затронуты.');
 
 INSERT INTO ##RDW_RESULTS
 SELECT 6, N'L6 баланс на MATCHED', N'L6.1', N'MATCHED: старая vs новая',
@@ -1144,6 +1162,30 @@ WHERE bucket = N'MATCHED' AND new_dpd_max IS NOT NULL AND old_dpd_max IS NOT NUL
 GROUP BY source_system
 OPTION (MAXDOP 1);
 
+/* L8.3b ДИАГНОСТИКА. Прогон 31.07 дал совпадение off-by-one 0,13% (S01) при
+   документированных 61,02% — расхождение слишком велико, чтобы быть находкой:
+   так выглядит либо другое поле, либо другой формат. Поэтому не утверждаем
+   правило, а печатаем фактическое распределение (old − new). Если пик стоит
+   не на −1, значит правило сформулировано не про эти два поля. */
+INSERT INTO ##RDW_RESULTS
+SELECT 8, N'L8 DPD и 90+', N'L8.3b', N'Фактическая разница old_maxDPD − new_maxDPD',
+       N'Договоров с разницей '+delta_bucket, source_system,
+       N'contracts_by_dpd_delta', COUNT_BIG(*), N'пик ожидается на −1', N'INFO', 0,
+       N'Диагностика к L8.3. Пик НЕ на −1 означает, что сравниваются разные величины (например max по основному долгу против max по всему), и правило нужно переформулировать, а не считать нарушенным.'
+FROM (
+    SELECT source_system,
+           CASE WHEN old_dpd_max - new_dpd_max = -1 THEN N'ровно −1 (правило)'
+                WHEN old_dpd_max - new_dpd_max = 0  THEN N'0 (равны)'
+                WHEN old_dpd_max - new_dpd_max BETWEEN -10 AND -2 THEN N'от −10 до −2'
+                WHEN old_dpd_max - new_dpd_max BETWEEN 1 AND 10   THEN N'от +1 до +10'
+                WHEN old_dpd_max - new_dpd_max < -10 THEN N'меньше −10'
+                ELSE N'больше +10' END AS delta_bucket
+    FROM ##RDW_XB
+    WHERE bucket = N'MATCHED' AND new_dpd_max IS NOT NULL AND old_dpd_max IS NOT NULL
+) d
+GROUP BY source_system, delta_bucket
+OPTION (MAXDOP 1);
+
 /* L8.4 Матрица 90+: обе стороны, ЯВНО включая NULL как отдельное состояние */
 INSERT INTO ##RDW_RESULTS
 SELECT 8, N'L8 DPD и 90+', N'L8.4', N'Матрица признака 90+',
@@ -1221,11 +1263,25 @@ INSERT INTO ##RDW_RESULTS
 SELECT 8, N'L8 DPD и 90+', N'L8.8', N'delinquency_bucket vs старый бакет',
        N'Совпадение бакета, %', source_system,
        N'bucket_match_pct',
+       /* Сравнение ЧИСЛОВОЕ, а не строковое: документировано «category соответствует
+          delinquency_bucket ПОСЛЕ приведения к числовому типу». Строковое сравнение
+          давало S01 0,00% и S03 0,00% там, где на деле 99,93% — это был баг проверки,
+          а не расхождение данных. TRY_CAST спасает от нечисловых значений. */
        CASE WHEN COUNT_BIG(*) = 0 THEN NULL
-            ELSE 100.0*SUM(CASE WHEN LTRIM(RTRIM(ISNULL(new_bucket,N'~'))) = LTRIM(RTRIM(ISNULL(old_bucket,N'~'))) THEN 1 ELSE 0 END)/COUNT_BIG(*) END,
+            ELSE 100.0*SUM(CASE WHEN TRY_CAST(new_bucket AS decimal(18,4)) IS NOT NULL
+                                      AND TRY_CAST(old_bucket AS decimal(18,4)) IS NOT NULL
+                                      AND TRY_CAST(new_bucket AS decimal(18,4)) = TRY_CAST(old_bucket AS decimal(18,4))
+                                     THEN 1
+                                WHEN new_bucket IS NULL AND old_bucket IS NULL THEN 1
+                                ELSE 0 END)/COUNT_BIG(*) END,
        N'100%',
        CASE WHEN COUNT_BIG(*) < @MinBase THEN N'NO_BASE'
-            WHEN SUM(CASE WHEN LTRIM(RTRIM(ISNULL(new_bucket,N'~'))) <> LTRIM(RTRIM(ISNULL(old_bucket,N'~'))) THEN 1 ELSE 0 END) = 0
+            WHEN SUM(CASE WHEN TRY_CAST(new_bucket AS decimal(18,4)) IS NOT NULL
+                               AND TRY_CAST(old_bucket AS decimal(18,4)) IS NOT NULL
+                               AND TRY_CAST(new_bucket AS decimal(18,4)) = TRY_CAST(old_bucket AS decimal(18,4))
+                              THEN 0
+                         WHEN new_bucket IS NULL AND old_bucket IS NULL THEN 0
+                         ELSE 1 END) = 0
             THEN N'PASS' ELSE N'WARN' END, 0,
        N'Регрессия: S01 99,93%, S17 99,9837%, S02 MIGR+SMART 100% — при DPD, расходящемся на 20–40%. Такой контраст = бакет формируется независимо от проверяемых DPD-полей. Для WAY4 бакет NULL целиком.'
 FROM ##RDW_XB WHERE bucket = N'MATCHED'
@@ -1374,7 +1430,11 @@ SELECT 10, N'L10 резолюшн', N'L10.3', N'spis_v_ubytok_CL → writeoff',
        CASE WHEN COUNT_BIG(*) > 0 THEN N'FAIL' ELSE N'PASS' END, 0,
        N'Регрессия: ранее 73/73 совпали точно по суммам. Обратное направление (события только в новой) — отдельной строкой ниже, их было 4 на 11,6 млн ₸.'
 FROM [CL_PORTFOLIO].[dbo].[spis_v_ubytok_CL] s
-WHERE NOT EXISTS (
+/* Скоуп по дате обязателен: spis_v_ubytok_CL — полная история (135 тыс. строк),
+   writeoff — срез. Без фильтра проверка сравнивала историю со снимком и давала
+   135 146 «пропавших событий», что было артефактом, а не находкой. */
+WHERE TRY_CAST(s.[date] AS date) = @AsOf10
+  AND NOT EXISTS (
     SELECT 1 FROM [Dictionaries].[risk_analytics].[writeoff] w
     WHERE CONVERT(nvarchar(255), w.w_dlcr_dog_num) = CONVERT(nvarchar(255), s.contract_number))
 OPTION (MAXDOP 1);
@@ -1411,8 +1471,12 @@ SELECT 11, N'L11 график и платежи', N'L11.1', N'loans_active → r
        N'Для карт/овердрафтов график может законно отсутствовать — разбирать по продукту, а не считать дефектом целиком. Но без графика поведенческий DPD по этим договорам посчитать нельзя, и это ограничение запасного контура.'
 FROM (SELECT DISTINCT l_source, l_loan_id FROM [Dictionaries].[risk_analytics].[loans_active]
       WHERE l_report_date = @AsOf11) a
+/* Явное приведение обеих сторон к nvarchar: l_loan_id nvarchar против rs_loan_id
+   bigint (см. L0.2). Без него JOIN не матчил ничего, и проверка рапортовала, что
+   графика нет у ВСЕХ 586 717 активных договоров — это был артефакт типа. */
 WHERE NOT EXISTS (SELECT 1 FROM [Dictionaries].[risk_analytics].[repayment_schedule] r
-                  WHERE r.rs_source = a.l_source AND r.rs_loan_id = a.l_loan_id)
+                  WHERE r.rs_source = a.l_source
+                    AND CONVERT(nvarchar(255), r.rs_loan_id) = CONVERT(nvarchar(255), a.l_loan_id))
 GROUP BY a.l_source
 OPTION (MAXDOP 1);
 
@@ -1480,8 +1544,13 @@ SELECT 12, N'L12 периферия', N'L12.3', N'restructuring_v2 → loans',
        CASE WHEN COUNT_BIG(*) > 0 THEN N'WARN' ELSE N'PASS' END, 0,
        N'Регрессия: 12 несопоставленных строк. Джойн по loan_id — предположение, применяемое во всём репозитории; если цифра велика, под вопросом сам ключ, а не данные.'
 FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
+/* restructuring_v2 — журнал СОБЫТИЙ за всю историю, loans — срез на дату. Событие по
+   договору, закрытому до @AsOf, законно не найдёт строку в срезе. Поэтому ищем договор
+   в мастере БЕЗ фильтра даты (любой срез), иначе цифра меряет ротацию портфеля,
+   а не целостность ключа. */
 WHERE NOT EXISTS (SELECT 1 FROM [Dictionaries].[risk_analytics].[loans] l
-                  WHERE l.l_source = r.[dlcr$source] AND CONVERT(nvarchar(255),l.l_loan_id) = CONVERT(nvarchar(255),r.loan_id))
+                  WHERE l.l_source = r.[dlcr$source]
+                    AND CONVERT(nvarchar(255),l.l_loan_id) = CONVERT(nvarchar(255),r.loan_id))
 GROUP BY [dlcr$source]
 OPTION (MAXDOP 1);
 GO
@@ -1545,7 +1614,8 @@ SELECT r.layer_no, r.layer_name,
        SUM(CASE WHEN r.verdict = N'INFO'    THEN 1 ELSE 0 END) AS info_n,
        SUM(CASE WHEN r.is_gate = 1 AND r.verdict = N'FAIL' THEN 1 ELSE 0 END) AS failed_gates,
        CASE WHEN g.first_failed_gate_layer IS NULL THEN N'ДОВЕРЯТЬ МОЖНО'
-            WHEN r.layer_no <= g.first_failed_gate_layer THEN N'ДОВЕРЯТЬ МОЖНО'
+            WHEN r.layer_no < g.first_failed_gate_layer THEN N'ДОВЕРЯТЬ МОЖНО'
+            WHEN r.layer_no = g.first_failed_gate_layer THEN N'СЛОЙ САМ ПРОВАЛЕН — чинить здесь'
             ELSE N'ДОВЕРЯТЬ НЕЛЬЗЯ — провален гейт L'
                  + CONVERT(nvarchar(3), g.first_failed_gate_layer) END AS trust_level
 FROM ##RDW_RESULTS r CROSS JOIN #gatefail g
