@@ -124,7 +124,14 @@
   .n-col-row { display:flex; align-items:center; gap:6px; padding:3.5px 10px; font-family:var(--font-mono); font-size:10px; border-top:1px solid var(--line-soft); }
   .n-col-row:first-child { border-top:none; }
   .n-col-dot { width:7px; height:7px; border-radius:50%; flex:none; border:1px solid var(--ink-faint); background:transparent; }
-  .n-col-dot.mapped-proven { background:var(--st-good); border-color:var(--st-good); }
+  .n-col-dot.mapped-verified { background:var(--st-good); border-color:var(--st-good); }
+  .n-col-dot.mapped-proven { background:transparent; border-color:var(--st-good); border-width:2px; }
+  /* Зелёным помечается СТРОКА (заливка + точка), а не текст: --st-good-fg — это
+     цвет ПОВЕРХ зелёной заливки (#f3fdf3, почти белый), на белой бумаге он
+     нечитаем, а сам --st-good даёт всего ~3.3:1 на мелком моноширинном.
+     Имя оставляем полным --ink: контраст не страдает, «зелёное = сверено» читается. */
+  .n-col-row.is-verified { background:color-mix(in srgb, var(--st-good) 12%, transparent); }
+  .n-col-row.is-verified .n-col-name { color:var(--ink); font-weight:700; }
   .n-col-dot.mapped-hyp { background:var(--st-warning); border-color:var(--st-warning); }
   .n-col-dot.mapped-external { background:var(--st-warning); border-color:var(--st-warning); border-style:dashed; }
   .n-col-dot.mapped-refuted { background:var(--ink-faint); border-color:var(--ink-faint); }
@@ -242,14 +249,14 @@
 
   <div class="matrix-panel">
     <h2>Сверка по источникам</h2>
-    <p class="sub">FINDINGS.md §4/§6 — прогресс по каждому <code>la_source</code> на 01.07.2026. Progress tracking №1.</p>
+    <p class="sub">FINDINGS.md §4/§6 + сверки 16–22.07.2026 на срезе 01.07.2026. «СВЕРЕНО» = расхождений нет вообще; «~» = формула верна, но расхождение осталось. S02 больше не «не сверен» — периметр сверен и НЕ подтверждён, это разные вещи.</p>
     <div style="overflow-x:auto"><table class="matrix"><thead><tr><th>Source</th><th>Периметр (old/new/matched)</th><th>Баланс</th><th>Provisions</th><th>DPD</th></tr></thead><tbody id="matrixBody"></tbody></table></div>
   </div>
 
   <div class="matrix-panel">
     <h2>Дашборд по таблицам Dictionary</h2>
-    <p class="sub">Только новые таблицы — это DWH, в который переезжаем, и его готовность мы отслеживаем. CL_PORTFOLIO — эталон для сверки, а не то, что проверяется на готовность, поэтому здесь не участвует. Сколько полей в каждой таблице уже проверено и готово к работе, сколько ещё в процессе, сколько вообще не тронуто ни одним процессом. Отсортировано по доле проверенного.</p>
-    <div class="dash-scroll"><table class="dash"><thead><tr><th>Таблица (Dictionary)</th><th>Всего полей</th><th style="text-align:right">Готово</th><th style="text-align:right">В работе</th><th style="text-align:right">Проблема</th><th style="text-align:right">Не тронуто</th><th>Доля</th></tr></thead><tbody id="dashBody"></tbody></table></div>
+    <p class="sub">Только новые таблицы — это DWH, в который переезжаем, и его готовность мы отслеживаем. CL_PORTFOLIO — эталон для сверки, а не то, что проверяется на готовность, поэтому здесь не участвует. <b>✓ 100%</b> — сверено на реальных данных и расхождений нет ВООБЩЕ (ноль исключений) — можно брать в работу как есть. <b>Правило</b> — формула/ключ доказаны, но точного совпадения по всем строкам нет. Это разные вещи, и смешивать их нельзя: формула провизий S03 верна, а сходится она на 21,23% строк. Отсортировано по доле сверенного.</p>
+    <div class="dash-scroll"><table class="dash"><thead><tr><th>Таблица (Dictionary)</th><th>Всего полей</th><th style="text-align:right" title="Сверено на данных, расхождений нет вообще">✓ 100%</th><th style="text-align:right" title="Правило/формула доказаны, но точного совпадения нет">Правило</th><th style="text-align:right">В работе</th><th style="text-align:right">Дефект</th><th style="text-align:right">Не тронуто</th><th>Доля</th></tr></thead><tbody id="dashBody"></tbody></table></div>
   </div>
 
   <div class="questions-panel">
@@ -261,6 +268,8 @@
   <div class="legend">
     <span class="item"><svg class="ic"><use href="#ic-key"/></svg>КЛЮЧ (логический — 0 ограничений БД, см. #8)</span>
     <span class="item"><svg class="ic"><use href="#ic-link"/></svg>ВК</span>
+    <span class="item"><span class="n-col-dot mapped-verified"></span>СВЕРЕНО 100% — расхождений нет вообще</span>
+    <span class="item"><span class="n-col-dot mapped-proven"></span>правило доказано, совпадение &lt; 100%</span>
     <span class="item"><span class="line" style="background:var(--st-good)"></span>доказано (FINDINGS CONFIRMED)</span>
     <span class="item"><span class="line" style="background:var(--st-warning)"></span>гипотеза / внешняя проверка</span>
     <span class="item"><span class="line" style="background:var(--ink-faint)"></span>опровергнуто</span>
@@ -323,11 +332,16 @@
 <script>
 (function(){
   var SIDE_LABEL = { old:'СТАРАЯ', new:'НОВАЯ' };
-  var STATUS_LABEL = { proven:'ДОКАЗАНО', hypothesis:'ГИПОТЕЗА', external:'ВНЕШНЯЯ ПРОВЕРКА', refuted:'ОПРОВЕРГНУТО' };
-  var STATUS_ICON = { proven:'ic-check', hypothesis:'ic-flask', external:'ic-flag', refuted:'ic-x' };
-  var STATUS_BADGE_CLASS = { proven:'st-good', hypothesis:'st-warning', external:'st-warning', refuted:'st-neutral' };
+  var STATUS_LABEL = { verified:'СВЕРЕНО 100%', proven:'ПРАВИЛО ДОКАЗАНО', hypothesis:'ГИПОТЕЗА', external:'ВНЕШНЯЯ ПРОВЕРКА', refuted:'ОПРОВЕРГНУТО' };
+  var STATUS_ICON = { verified:'ic-check', proven:'ic-check', hypothesis:'ic-flask', external:'ic-flag', refuted:'ic-x' };
+  var STATUS_BADGE_CLASS = { verified:'st-good', proven:'st-good', hypothesis:'st-warning', external:'st-warning', refuted:'st-neutral' };
   var SCOPE_LABEL = { old:'только старая', cross:'сквозной', new:'только новая', freeform:'методология' };
-  var DOT_CLASS = { proven:'mapped-proven', hypothesis:'mapped-hyp', external:'mapped-external', refuted:'mapped-refuted' };
+  var DOT_CLASS = { verified:'mapped-verified', proven:'mapped-proven', hypothesis:'mapped-hyp', external:'mapped-external', refuted:'mapped-refuted' };
+  /* verified = сверено на реальных данных, расхождений НЕТ вообще (100%, 0 исключений).
+     proven   = правило/формула/ключ доказаны, но точного совпадения по всем строкам НЕТ
+                (либо есть известные исключения, либо совпадение <100%). Разница принципиальна:
+                зелёная заливка = можно брать в работу как есть; кольцо = правило верно,
+                но данные ещё расходятся. */
   function icon(id, cls){ return '<svg class="ic'+(cls?' '+cls:'')+'"><use href="#'+id+'"/></svg>'; }
   function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
   function col(name, type, extra){ var o = {name:name, type:type}; if (extra) for (var k in extra) o[k]=extra[k]; return o; }
@@ -736,7 +750,17 @@
     '#12': {severity:'critical', label:'458/637 RS_7130: все балансы равны нулю, 116–134 млрд₸ — постдатирует FINDINGS.md'},
     '#13': {severity:'pending',  label:'расхождение состава loans_active vs PORTFOLIO_RS, 3 договора'},
     '#14': {severity:'open',     label:'S17: interest DPD 100% NULL на всех 79 617 matched — целое измерение потеряно, 5 965 дог. (2.36 млрд) были 90+ по interest в OLD'},
-    '#15': {severity:'pending',  label:'S17 ONLY_NEW 18771 (8.26 млн) сидит на 18 договорах из 10 979 — узкое место, не расследовано построчно'}
+    '#15': {severity:'pending',  label:'S17 ONLY_NEW 18771 (8.26 млн) сидит на 18 договорах из 10 979 — узкое место, не расследовано построчно'},
+    '#16': {severity:'critical', label:'S03: 2 907 договоров вне loan_account, 17 199 371 554,56 ₸ — 2 884 исключены при положительном остатке'},
+    '#17': {severity:'critical', label:'S03 provisions: ретест 21.07 НЕ устранил — new выше на 33 485 154 950,15 ₸, совпадение 21,23%'},
+    '#18': {severity:'critical', label:'S02 периметр не подтверждён: 3 955 договоров старой ветки с остатком 381 375 405,28 ₸ вне новой'},
+    '#19': {severity:'critical', label:'Залоги S01: nok_last_appraised_value расходится с BPM до ~93x (об. 16315: 332 299 200 vs 3 585 300); ~1 650 расхождений c_collateral_value'},
+    '#20': {severity:'open',     label:'S17: признак 90+ не подтверждён по 932 договорам, 273 000 212,61 ₸'},
+    '#21': {severity:'critical', label:'S02: la_account_1403 = 108 265 998,36 ₸ при сумме договора 150 000 ₸ (расхождение 108 264 750,82 ₸)'},
+    '#22': {severity:'open',     label:'DWH-09: 4 707 SMART_CARD с положительным старым лимитом 490 796 954,95 ₸ не перенесены'},
+    '#23': {severity:'open',     label:'DWH-10: 1 176 договоров S01 требуют продуктового правила Creditamount→l_loan_amount; 272 с остатком 351 680 163 809,78 ₸'},
+    '#24': {severity:'open',     label:'DWH-11/12: классификации S02/S17 полностью пусты; 587 расхождений статуса S02'},
+    '#25': {severity:'critical', label:'Заявление «NULL в DPD = 0» опровергнуто данными: S17 9 815 договоров с положит. interest DPD (3.87 млрд ₸), S01 5 договоров 1–8 дней (203.8 млн ₸)'}
   };
   var SEVERITY_VAR = { critical:'--st-critical', open:'--st-serious', pending:'--st-warning', doc:'--st-good' };
   var SEVERITY_FG_VAR = { critical:'--st-critical-fg', open:'--st-serious-fg', pending:'--st-warning-fg', doc:'--st-good-fg' };
@@ -753,7 +777,9 @@
       evidence:'FINDINGS.md §3 — держится на всех 237 274 строках S03', slice:'2026-07-01, S03 (237 274 строк)',
       pairWith:['new_loan_account.la_account_1428','new_loan_account.la_account_1845','new_loan_account.la_account_18771'], findings:[] },
     { id:'f5', status:'proven', name:'dpd (дни просрочки)', formula:'dpd = days_past_due − 1',
-      inputs:['old_cl2.dpd','new_loan_account.days_past_due'], evidence:'KB §7 — off-by-one подтверждена', findings:[] },
+      inputs:['old_cl2.dpd','new_loan_account.days_past_due'], evidence:'KB §7 — off-by-one подтверждена как ФАКТ, но НЕ как универсальное правило',
+      note:'Совпадение по источникам (сверки 16–21.07.2026): S02 MIGR/SMART 190/191 = 99,48%; S17 principal 78,92%, max 66,98%; S01 max 465/762 = 61,02%; S03 — «ранее сформулированные правила на актуальных данных не подтвердились». Кольцо, а не заливка: правило существует, точного совпадения нет ни по одному источнику.',
+      findings:['#25'] },
     { id:'f6', status:'proven', name:'Глобальный ключ: l_gid ↔ la_gid', formula:'loan_account.la_gid = loans.l_gid AND la_source = l_source\n(la_dog_num = l_loan_number — только контроль)',
       inputs:['new_loan_account.la_gid','new_loans.l_gid'], evidence:'FINDINGS.md §1 — CONFIRMED; 9659 коллизий номера договора между source',
       note:'DWH-08 (70 дублей l_loan_id, S01) — про ДРУГОЙ ключ; join по la_gid=l_gid структурно не допускает этот класс ошибки.', findings:[] },
@@ -761,20 +787,179 @@
       inputs:['old_rs.contract_id','new_loans.l_loan_id'], evidence:'FINDINGS.md §1/§3 — работает для S01 (в отличие от S03)', findings:[] },
     { id:'f8', status:'proven', name:'S03 old↔new ключ', formula:'CL_PORTFOLIO_2.contract_number → loans.l_loan_number (сырой)',
       inputs:['old_cl2.contract_number','new_loans.l_loan_number'], evidence:'FINDINGS.md §1 — l_loan_id даёт 0 совпадений', findings:[] },
-    { id:'f9', status:'proven', name:'S17 old↔new ключ', formula:'PORTFOLIO_Fenix.contractnumber → loan_account.la_dog_num + source=S17 + date',
+    { id:'f9', status:'verified', name:'S17 old↔new ключ', formula:'PORTFOLIO_Fenix.contractnumber → loan_account.la_dog_num + source=S17 + date',
       inputs:['old_fenix.contractnumber','new_loan_account.la_dog_num'], evidence:'FINDINGS.md §1 — contract_id непригоден (до 33 договоров/id)', findings:[] },
     { id:'f10', status:'proven', name:'S02 old↔new ключ', formula:'UNION(WAY4,MIGR_WAY4,SMART_CARD).contract_number → loans.l_loan_number (сырой)',
       inputs:['old_migrway4.contract_number','new_loans.l_loan_number'], evidence:'FINDINGS.md §1/§6 — покрытие 97.96% (27 257/27 824)', findings:[] },
-    { id:'f11', status:'proven', name:'S17 total_balance_debt (подтверждённая формула)', formula:'1401+1403+1411+1417+1424+1740+1741+1879\n(8 счетов — БЕЗ 1818/1838, в отличие от balance)',
+    { id:'f11', status:'verified', name:'S17 total_balance_debt (подтверждённая формула)', formula:'1401+1403+1411+1417+1424+1740+1741+1879\n(8 счетов — БЕЗ 1818/1838, в отличие от balance)',
       inputs:['new_loan_account.total_balance_debt'], evidence:'FINDINGS.md §3 — подтверждено для S17',
       note:'S01/RS_7130 версия (наша h1-гипотеза) использовала ДРУГОЙ набор (+1818+1838) — не считать тем же.', findings:[] },
-    { id:'f12', status:'proven', name:'S01 identity: 1877 = 18770 + 18771', formula:'la_account_1877 = la_account_18770 + la_account_18771\n(18770 = 0 на срезе)',
+    { id:'f12', status:'verified', name:'S01 identity: 1877 = 18770 + 18771', formula:'la_account_1877 = la_account_18770 + la_account_18771\n(18770 = 0 на срезе)',
       inputs:['new_loan_account.la_account_1401'], evidence:'FINDINGS.md §3 — CONFIRMED', slice:'2026-07-01, S01',
       pairWith:['new_loan_account.la_account_1877','new_loan_account.la_account_18770','new_loan_account.la_account_18771'], findings:[] },
-    { id:'f13', status:'proven', name:'Writeoff — базовая сверка (73 события)', formula:'spis_v_ubytok_CL (73 события) ⊆ writeoff, точное совпадение сумм',
+    { id:'f13', status:'verified', name:'Writeoff — базовая сверка (73 события)', formula:'spis_v_ubytok_CL (73 события) ⊆ writeoff, точное совпадение сумм',
       inputs:['old_spisCL.contract_number','old_spisCL.summ_spis_v_tg','new_writeoff.w_dlcr_dog_num','new_writeoff.w_dlcrp_write_off_amount'],
       evidence:'CASE_RUN_WRITEOFF_CL_010 — 73/73, 138 741 177,22₸ точно', note:'4 доп. события только в новой ветке — см. #11/e-writeoff (внешняя проверка, постдатирует FINDINGS.md).',
       slice:'2026-07-01, S03', sql:'-- CASE_RUN_WRITEOFF_CL_010_FINAL_EMAIL_PROOF, Result 01 (фрагмент)\nSELECT reconciliation_class, COUNT_BIG(*) AS event_count,\n  SUM(old_writeoff_amount_kzt), SUM(new_writeoff_amount_kzt),\n  SUM(ABS(old_minus_new_amount)) AS gross_absolute_difference_sum\nFROM #WRITEOFF_CL_010_RECON\nGROUP BY reconciliation_class\nORDER BY reconciliation_class;', findings:['#11'] },
+
+    /* ===== СВЕРЕНО 100% — сверки Сайлау 16–22.07.2026 на срезе 01.07.2026.
+       Критерий verified: проверено на реальных данных, расхождений НЕТ ВООБЩЕ
+       (не «в пределах округления по большинству», а ноль исключений).      ===== */
+    { id:'v1', status:'verified', name:'S01 provisions — совпадение 100% (4 380/4 380)',
+      formula:'la_account_1428 = ifrs_1428\nla_account_1845 = ifrs_1845\nla_account_18771 = deb_1877_prov + [_1877]',
+      inputs:['old_rs.ifrs_1428','old_rs.ifrs_1845','old_rs.deb_1877_prov','old_rs._1877','new_loan_account.la_account_1428'],
+      evidence:'Сверка S01 16.07.2026 — итог 25 509 916 928,75 ₸ в ОБЕИХ ветках, расхождений не выявлено',
+      note:'Единственный источник, где провизии сошлись полностью. Для сравнения: S03 совпал на 21,23%, S17 — new выше на 29,77 млн ₸.',
+      slice:'2026-07-01, S01 (4 380 договоров)',
+      pairWith:['new_loan_account.la_account_1845','new_loan_account.la_account_18771'], findings:[] },
+    { id:'v2', status:'verified', name:'S01 баланс и финансовый периметр подтверждены',
+      formula:'SUM(old) = 622 540 880 344,08 ₸\nSUM(new) = 622 540 880 344,06 ₸\nΔ = −0,02 ₸ (машинная точность)',
+      inputs:['old_rs.Total_outstanding','new_loan_account.total_balance_debt'],
+      evidence:'Сверка S01 16.07.2026 — 5 договоров ONLY_OLD и 458 ONLY_NEW, по всем остаток = 0, финансового влияния нет',
+      slice:'2026-07-01, S01', findings:[] },
+    { id:'v3', status:'verified', name:'S17 ifrs_balance — внутренняя формула старой ветки 100%',
+      formula:'ifrs_balance = outstanding + outstanding_overdue + interest\n              + overdue_interest + penalties',
+      inputs:['old_fenix.ifrs_balance','old_fenix.outstanding','old_fenix.outstanding_overdue','old_fenix.interest','old_fenix.overdue_interest','old_fenix.penalties'],
+      evidence:'Сверка S17 16.07.2026 — подтверждена на 100% сопоставимого периметра (79 617 договоров)',
+      slice:'2026-07-01, S17', findings:[] },
+    { id:'v4', status:'verified', name:'S17 счёт 1845 — 100% совпадение (обе ветки = 0)',
+      formula:'la_account_1845 = PORTFOLIO_Fenix.ifrs_1845 = 0',
+      inputs:['old_fenix.ifrs_1845','new_loan_account.la_account_1845'],
+      evidence:'Сверка S17 16.07.2026 — 100%, тождественный ноль по всему периметру',
+      note:'Совпадение нулей — тоже совпадение, но доказательная сила ниже: нулевое поле сходится и при неверном мэппинге. Отмечено зелёным по факту, к выводам применять осторожно.',
+      slice:'2026-07-01, S17', findings:[] },
+    { id:'v5', status:'verified', name:'S02 формулы баланса внутри обеих веток — 100%',
+      formula:'внутренняя формула агрегации баланса подтверждена\nи в CL_PORTFOLIO, и в Dictionaries',
+      inputs:['old_way4.balance','old_way4.od','new_loan_account.total_balance_debt'],
+      evidence:'Сверка S02 (WAY4/MIGR_WAY4/SMART_CARD) — формулы подтверждены на 100%',
+      note:'Формула ≠ периметр: сам периметр S02 НЕ подтверждён (см. #16). Сходится способ счёта, а не состав.',
+      slice:'2026-07-01, S02', findings:[] },
+    { id:'v6', status:'verified', name:'S02 category = delinquency_bucket — 100% (20 933 договора)',
+      formula:'old.category = new.delinquency_bucket\n(MIGR_WAY4 + SMART_CARD)',
+      inputs:['old_migrway4.category','old_smartcard.category','new_loan_account.delinquency_bucket'],
+      evidence:'Сверка S02 — 100% по всем 20 933 сопоставленным договорам MIGR_WAY4 и SMART_CARD',
+      note:'ТОЛЬКО для MIGR_WAY4/SMART_CARD. По WAY4 delinquency_bucket = NULL на всех 6 324 договорах — там правило не выполняется вовсе.',
+      slice:'2026-07-01, S02 (MIGR_WAY4 + SMART_CARD)', findings:[] },
+    { id:'v7', status:'verified', name:'S02 WAY4 лимиты — 9 073/9 073 совпали',
+      formula:'WAY4.limit = l_limit = l_loan_amount (одновременно)',
+      inputs:['old_way4.limit','new_loans.l_limit','new_loans.l_loan_amount'],
+      evidence:'DWH-09, положительный контроль — все 9 073 лимита WAY4 совпали сразу с двумя полями новой ветки',
+      note:'Прямо ОПРОВЕРГАЕТ обобщение d6 («l_limit всегда NULL»): для WAY4 поле заполнено и корректно. Дефект лимитов локализован в SMART_CARD (#20), а не в S02 целиком.',
+      slice:'2026-07-01, S02 (WAY4)', findings:[] },
+    { id:'v8', status:'verified', name:'pledges → loans: c_source + c_loan_gid — 100%',
+      formula:'pledges.c_source + pledges.c_loan_gid\n  → loans.l_source + loans.l_gid',
+      inputs:['new_pledges.c_source','new_pledges.c_loan_gid','new_loans.l_gid','new_loans.l_source'],
+      evidence:'Сверка залогов 17.07.2026 — связь полностью проходит контроль; c_loan_id ≠ l_loan_id',
+      note:'Это ЕДИНСТВЕННЫЙ подтверждённый путь loans↔pledges. l_collateral_id для этого непригоден (d8).',
+      slice:'2026-07-01, все источники', findings:['#4'] },
+    { id:'v9', status:'verified', name:'S01 залоги — дублей нет, many-to-many легитимна',
+      formula:'10 771 уникальная связь; 1 437 объектов обеспечивают\nнесколько договоров (максимум 22); характеристики не расходятся',
+      inputs:['new_pledges.c_collateral_id','new_pledges.c_contract_number'],
+      evidence:'Сверка залогов 17.07.2026 — снятая гипотеза: «дубли залогов S01» оказались корректной связью многие-ко-многим',
+      slice:'2026-07-01, S01', findings:[] },
+    { id:'v10', status:'verified', name:'Покрытие master: все 586 714 активных loan_id найдены в loans',
+      formula:'loans_active.l_loan_id ⊆ loans.l_loan_id  (100%)',
+      inputs:['new_loans_active.l_loan_id','new_loans.l_loan_id'],
+      evidence:'Отчёт 15–18.07.2026 — 586 714 уникальных активных ключей, ни одного вне master',
+      note:'Потери возникают ДО master/active слоя, а не между ними — это сужает поиск причины к загрузке источника.',
+      slice:'2026-07-01, все источники', findings:[] },
+    { id:'v11', status:'verified', name:'S03 product/subproduct — маршрутизация 100% без потерь',
+      formula:'102 045 старых product → l_product_type\n135 229 старых subproduct → l_subproduct_type\nитого 237 274, потерь и неоднозначности нет',
+      inputs:['new_loans.l_product_type','new_loans.l_subproduct_type'],
+      evidence:'DWH-11, положительный контроль — S03 прошёл полностью',
+      note:'Контрастирует с S02/S17, где те же поля пусты ПОЛНОСТЬЮ (#22). Значит дело не в целевой модели — она умеет их принимать.',
+      slice:'2026-07-01, S03', findings:['#24'] },
+    { id:'v12', status:'verified', name:'loans_active — структурная целостность без нарушений',
+      formula:'нет пустых source / loan_id / номера договора;\nнет дат открытия и фондирования позже отчётной;\nнарушений хронологии открытие→фондирование→1-й платёж→закрытие нет',
+      inputs:['new_loans_active.l_source','new_loans_active.l_loan_id','new_loans_active.l_loan_number','new_loans_active.l_loan_open_date','new_loans_active.l_funding_date','new_loans_active.l_actual_closure_date'],
+      evidence:'Отчёт 15–18.07.2026, блок положительных контролей — ни одного нарушения на 586 715 строках',
+      slice:'2026-07-01, все источники', findings:[] },
+    { id:'v13', status:'verified', name:'Валюта — совпадение по всем сопоставленным источникам',
+      formula:'old.curr = l_currency (100%)\nEUR/RUB/USD по S01 объяснены пересчётом по старому курсу',
+      inputs:['old_rs.curr','old_fenix.curr','new_loans.l_currency'],
+      evidence:'DWH-10, положительный контроль — валютный код совпадает по всем сопоставленным источникам',
+      slice:'2026-07-01, все источники', findings:[] },
+    { id:'v14', status:'verified', name:'S01 сегмент — 4 382/4 382',
+      formula:'PORTFOLIO_RS.Segment = loans.l_segment',
+      inputs:['old_rs.Segment','new_loans.l_segment'],
+      evidence:'DWH-11 — совпал по всем 4 382 сопоставленным договорам',
+      slice:'2026-07-01, S01', findings:[] },
+
+    /* ===== ОПРОВЕРГНУТО данными (в т.ч. заявления разработчика) ===== */
+    { id:'d7', status:'refuted', name:'S17: contract_id ↔ la_loan_id как межветочный ключ',
+      formula:'PORTFOLIO_Fenix.contract_id = loan_account.la_loan_id',
+      inputs:['old_fenix.contract_id','new_loan_account.la_loan_id'],
+      evidence:'Сверка S17 16.07.2026 — contract_id НЕ уникален: 5 128 значений с множественными записями, максимум 33 договора на один id; по всем 10 165 совпавшим loan_id номера договоров РАЗЛИЧАЮТСЯ',
+      note:'Верный ключ — f9 (contractnumber → la_dog_num + source=S17 + report_date).', findings:[] },
+    { id:'d8', status:'refuted', name:'l_collateral_id как универсальный FK на pledges',
+      formula:'loans_active.l_collateral_id → pledges (для всех источников)',
+      inputs:['new_loans_active.l_collateral_id','new_pledges.c_collateral_id','new_pledges.c_bpm_object_id','new_pledges.c_car_code'],
+      evidence:'Сверка залогов 17.07.2026 — S03: 94 683 из 94 732 находятся (99,95%); S17: 15 646 активных договоров имеют залоги, но поле НЕ заполнено; S01: 2 190 договоров — не совпадает ни с c_collateral_id, ни с c_bpm_object_id, ни с c_car_code',
+      note:'Семантика поля РАЗНАЯ по источникам. Использовать v8 (c_source+c_loan_gid). Кадиржан 22.07: «изменил l_collateral_id, проверьте» — ретест не прогнан.',
+      history:[{date:'17.07',note:'Доказано: поле непригодно как универсальный FK, направлен вопрос о назначении для S01/S17'},{date:'22.07',note:'Кадиржан: «изменил l_collateral_id проверьте» — требуется повторный прогон'}],
+      version:2, findings:['#4'] },
+    { id:'d9', status:'refuted', name:'«NULL в DPD означает 0» (заявление разработчика 21–22.07)',
+      formula:'days_past_due IS NULL  ⇒  просрочки нет',
+      inputs:['new_loan_account.days_past_due','new_loan_account.days_past_due_interest','old_fenix.overdue_days_interest','old_rs.max_overdue_days'],
+      evidence:'ОПРОВЕРГНУТО собственными данными: S17 — по 9 815 договорам (3 872 218 577,36 ₸) старая ветка отражает положительный interest DPD при NULL в новой, из них 5 965 (2 357 890 232,16 ₸) свыше 90 дней. S01 — 5 открытых договоров (203 814 236,94 ₸) с просрочкой 1–8 дней при NULL.',
+      note:'Кадиржан 21.07: «Если нулл значит 0»; 22.07: «days_past_due там где пусто это 0, так как у этого договора нет просрочки». Данные это не подтверждают. Принять NULL=0 — значит потерять признак 90+ по 5 965 договорам S17. Требуется письменное S2T-подтверждение, а не переписка.',
+      slice:'2026-07-01, S17 + S01',
+      history:[{date:'21.07',note:'Кадиржан (S01): «Проверьте! Если нулл значит 0»'},{date:'22.07',note:'Кадиржан (S03): «days_past_due там где пусто это 0»'},{date:'22.07',note:'Сверка S17 показывает 9 815 договоров, прямо противоречащих этому'}],
+      findings:['#25'] },
+
+    /* ===== ОТКРЫТЫЕ / ВНЕШНИЕ — сверки, где расхождение подтверждено ===== */
+    { id:'e10', status:'external', name:'S03 provisions — ретест 21.07 НЕ устранил дефект',
+      formula:'old 88 194 228 480,34 ₸  vs  new 121 679 383 430,49 ₸\nnew выше на 33 485 154 950,15 ₸; совпало 50 371 из 237 269 (21,23%)',
+      inputs:['old_cl2.provisions_total','new_loan_account.la_account_1428','new_loan_account.la_account_18771'],
+      evidence:'Повторное тестирование 21.07.2026 — расхождение ВЫРОСЛО против первого прогона 16.07 (было +30,58 млрд на 234 367 договорах)',
+      note:'Компоненты: 1428 → 30 465 260 085,56 ₸, 18771 → 3 019 894 864,59 ₸. По договорам с ОДИНАКОВОЙ ставкой резервирования превышение 31 717 171 729,07 ₸ = 94,72% отклонения ⇒ дело не в проценте резервирования. Гипотеза временного сдвига проверена на последовательных датах и НЕ подтвердилась. Кадиржан 22.07: «по счету 1428 проверьте, а по счету 18771 еще идет работа».',
+      slice:'2026-07-01, S03 (237 269 договоров)', version:2,
+      history:[{date:'16.07',note:'Первый прогон: +30 578 372 232,47 ₸, совпадение 50 079/234 367'},{date:'21.07',note:'Ретест после правок: +33 485 154 950,15 ₸, совпадение 50 371/237 269 (21,23%) — НЕ устранено'},{date:'22.07',note:'Кадиржан: 1428 — «проверьте», 18771 — «еще идет работа»'}],
+      findings:['#17'] },
+    { id:'e11', status:'external', name:'S02 периметр не подтверждён — 3 955 договоров с остатком вне новой ветки',
+      formula:'old 152 221 договор / new 27 824 / совпало 27 257\n3 955 договоров старой ветки с остатком 381 375 405,28 ₸ отсутствуют в новой',
+      inputs:['old_way4.contract_number','old_smartcard.contract_number','new_loans.l_loan_number'],
+      evidence:'Сверка S02 — обвал периметра: 185 828 договоров на 01.01.2026 → 30 973 на 01.02.2026',
+      note:'Обратное направление тоже есть: 42 договора ТОЛЬКО в новой ветке с остатком 76 796 663,82 ₸, отсутствующие в истории старых таблиц с 01.01.2025; у 2 из них текущий баланс ПРЕВЫШАЕТ сумму договора в l_loan_amount. Из 3 955 только 1 признан активным пропуском (7 192 116,63 ₸, DWH-01) — остальные требуют классификации, а не автоматического признания потерей.',
+      slice:'2026-07-01, S02', findings:['#18'] },
+    { id:'e12', status:'external', name:'S03 — 2 907 договоров вне loan_account, 17,2 млрд ₸',
+      formula:'2 907 договоров есть в loans (однозначный l_gid),\nно отсутствуют в loan_account по source + loan_id;\n2 900 из них с положительным остатком 17 199 371 554,56 ₸',
+      inputs:['old_cl2.contract_number','new_loans.l_gid','new_loan_account.la_gid'],
+      evidence:'Сверка S03 — 2 884 договора исключены из последующих срезов ПРИ положительном остатке (последний совокупный 17 661 070 461,15 ₸); не найдены в collections, Offbalance, writeoff',
+      note:'ВНИМАНИЕ на пересечение с d1: наша ветка ранее опровергла миф «17,2 млрд потерянной экспозиции» (2 907 = статус V, расторгнуты). Здесь та же цифра приходит от Сайлау как ОТКРЫТЫЙ дефект периметра. Это НЕ обязательно противоречие — «расторгнут» и «исключён из loan_account при положительном остатке» могут быть одним фактом с двух сторон. До прямой сверки двух прогонов держим оба, а не выбираем удобный.',
+      slice:'2026-07-01, S03', findings:['#16'] },
+    { id:'e13', status:'external', name:'Залоги S01 — оценочная стоимость расходится с BPM до ~93x',
+      formula:'nok_last_appraised_value  vs  стоимость в BPM\nобъект 16315: 332 299 200 ₸  vs  3 585 300 ₸',
+      inputs:['new_pledges.nok_last_appraised_value','new_pledges.c_collateral_value','new_pledges.c_bpm_object_id','new_pledges.last_appraised_value'],
+      evidence:'Амреев Т. (Управление оценки залогового обеспечения), 30.06 и 20.07.2026 — сверка с залоговым портфелем; после правок расхождений стало меньше, но они остались',
+      note:'Прицеп 2013 г.в. оценён в 332 млн ₸ вместо 3,59 млн — порядок величины неправдоподобен, похоже на ошибку единиц/множителя, а не на переоценку. Первый прогон 30.06: ~1 650 расхождений по c_collateral_value + столбцы J, M, N, V. Прямое влияние на LGD и покрытие залогом. Наша ветка это НЕ перепроверяла — источник внешний (профильное подразделение).',
+      slice:'2026-07-01, S01', version:2,
+      history:[{date:'30.06',note:'Амреев: ~1 650 расхождений c_collateral_value + различия по столбцам J/M/N/V'},{date:'20.07',note:'Амреев: после правок расхождений меньше, но остались; пример 16315 — разница почти в 100 раз'}],
+      findings:['#19'] },
+    { id:'e15', status:'external', name:'S02 — la_account_1403 на 108,3 млн ₸ при сумме договора 150 тыс ₸',
+      formula:'new la_account_1403 = 108 265 998,36 ₸\nloans.l_loan_amount = 150 000 ₸\nрасхождение баланса = 108 264 750,82 ₸',
+      inputs:['new_loan_account.la_account_1403','new_loans.l_loan_amount'],
+      evidence:'Сверка S02 — крупнейшее единичное расхождение баланса; идентификатор договора, номер, дата открытия и заёмщик связаны КОРРЕКТНО',
+      note:'Связи в порядке ⇒ это не ошибка ключа, а ошибка суммы. 722-кратное превышение суммы договора. Всего по сопоставленному периметру 199 расхождений: 3 по основному долгу, 195 по штрафам (114 377,48 ₸), 1 по процентам (0,78 ₸).',
+      slice:'2026-07-01, S02', findings:['#21'] },
+    { id:'e16', status:'external', name:'DWH-09 — SMART_CARD лимиты не перенесены (490,8 млн ₸)',
+      formula:'4 707 активных SMART_CARD:\nстарый limit > 0, новый l_loan_amount = 0\nсумма старого лимита 490 796 954,95 ₸',
+      inputs:['old_smartcard.limit','old_smartcard.unused_limit','new_loans.l_loan_amount','new_loans.l_unutilized_limit'],
+      evidence:'DWH-09 (addendum 2, 16.07.2026) — у 3 561 договора l_unutilized_limit совпадает со старым unused_limit, но ОБА равны нулю; у 1 146 отсутствует и он',
+      note:'Совпадение нулей выдавалось бы за успешный мэппинг — на деле утверждённый лимит просто не перенесён. Ещё 3 договора: старый limit 2 750 000 vs новый l_loan_amount 6 500 000. Плюс 68 SMART_CARD вне master со старым лимитом 361 065 000 ₸ (пересекается с #5).',
+      slice:'2026-07-01, S02 (SMART_CARD)', findings:['#22','#5'] },
+    { id:'e17', status:'external', name:'DWH-10 — суммы S01 требуют продуктового правила',
+      formula:'1 176 активных договоров S01:\n1 162 — старый Creditamount > 0, новый l_loan_amount = 0\n14 — обе суммы > 0, но различаются',
+      inputs:['old_rs.Creditamount','new_loans.l_loan_amount'],
+      evidence:'DWH-10 (addendum 2) — у 272 из 1 176 ненулевой текущий Total_outstanding на 351 680 163 809,78 ₸',
+      note:'Крупнейшая сумма в реестре, но НЕ признавать её дефектом целиком: состав включает гарантии и возможные внебалансовые инструменты, где нулевой l_loan_amount может быть корректен. Нужна классификация по типу продукта, а не единое правило. Положительные контроли рядом: 3 096 KZT и 83 валютных договора совпали, S17 — 79 461 договор.',
+      slice:'2026-07-01, S01', findings:['#23'] },
+    { id:'e18', status:'external', name:'DWH-11/12 — классификации S02/S17 пусты, статусы S02 расходятся',
+      formula:'S02 (246 360 ключей): loan_type, product_type, subproduct_type,\n  loan_purpose, credit_purpose, credit_object — пусты ПОЛНОСТЬЮ\nS17 (107 547): loan_type, product_type, subproduct_type, credit_object — пусты\nS02 статусы: 587 расхождений old vs new',
+      inputs:['new_loans.l_loan_type','new_loans.l_product_type','new_loans.l_subproduct_type','new_loans.l_loan_status'],
+      evidence:'DWH-11/DWH-12 (addendum 2) — при этом S17 содержит 283 старых значения продукта на 79 621 строке Fenix, т.е. источник данные ИМЕЕТ',
+      note:'Ключевой контраст: S03 те же поля переносит без потерь (v11) ⇒ целевая модель их принимает, дефект в мэппинге S02/S17. По статусам: 192 активных договора (13 995 719,55 ₸) и 395 неактивных (22 390 250,64 ₸); новый статус хорошо согласуется с попаданием в loans_active, поэтому это может быть другая бизнес-логика, а не ошибка копирования — нужно подтверждение правила.',
+      slice:'2026-07-01, S02 + S17', findings:['#24'] },
 
     { id:'d1', status:'refuted', name:'«S03: 17.2 млрд потерянной экспозиции»', formula:'миф: NEW теряет 17.2 млрд экспозиции против OLD', inputs:[],
       evidence:'FINDINGS.md §5 — реальность: 2907 договоров статус V (расторгнуты), подтверждено обеими ветками',
@@ -844,8 +1029,8 @@
       formula:'247 дог. (NEW=NULL, потеряны полностью, 32.6 млн)\n+ 685 дог. (NEW<=90, понижены, 240.4 млн)\n= 932 / 273.0 млн',
       inputs:['old_fenix.max_overdue_days','new_loan_account.days_past_due'],
       evidence:'FINDINGS.md §6 (S17) — CONFIRMED', slice:'2026-07-01, S17',
-      note:'ПРАВКА из FINDINGS: "0 ложных 90+" была переоценкой — SQL three-valued logic прячет переход OLD-NULL->NEW-90+ в NEITHER, не в ONLY_NEW_90_PLUS. Величина этого подмножества НЕ измерена — см. новый процесс h-oldnull90 ниже.',
-      findings:['#12'] },
+      note:'ПРАВКА из FINDINGS: "0 ложных 90+" была переоценкой — SQL three-valued logic прячет переход OLD-NULL->NEW-90+ в NEITHER, не в ONLY_NEW_90_PLUS. Величина этого подмножества НЕ измерена — см. новый процесс h-oldnull90 ниже.\nСсылка на находку исправлена #12→#20 при слиянии 31.07: #12 — это нулевые балансы RS_7130, к S17 90+ отношения не имеет; #20 описывает ровно эти 932 договора / 273,0 млн ₸.',
+      findings:['#20'] },
     { id:'g4', status:'proven', version:1, name:'S17 interest DPD = 100% NULL — целое измерение просрочки потеряно',
       formula:'days_past_due_interest IS NULL на ВСЕХ 79 617 matched (не "почти все").\nИз них 9 815 дог. (3.87 млрд) у OLD имели positive interest-просрочку,\nвключая 5 965 (2.36 млрд) именно 90+ по interest.',
       inputs:['new_loan_account.days_past_due_interest'],
@@ -918,9 +1103,25 @@
   var LANE_OF_SCOPE = { old:0, cross:2, new:4, freeform:-1 };
   PROCESSES.forEach(function(p){ p.scope = scopeOf(p.inputs); p.lane = LANE_OF_SCOPE[p.scope]; p.builtin = true; });
 
-  var STATUS_PRIORITY = { refuted:4, external:3, hypothesis:2, proven:1 };
+  var STATUS_PRIORITY = { refuted:5, external:4, hypothesis:3, proven:2, verified:1 };
+
+  /* Схлопнутые строки (напр. «la_account_1401–1879 (25 счетов ГК)») рендерятся под
+     ключом match[0], а процессы ссылаются на КОНКРЕТНЫЙ счёт (la_account_1428).
+     Без этой таблицы псевдонимов такие ссылки не подсвечивали ничего — статус
+     молча терялся, и колонка выглядела непроверенной при наличии процесса. */
+  var COL_ALIAS = {};
+  TABLES.forEach(function(t){
+    if (!t.columns) return;
+    t.columns.forEach(function(c){
+      var canon = t.id+'.'+(c.match?c.match[0]:c.name);
+      COL_ALIAS[t.id+'.'+c.name] = canon;
+      if (c.match) c.match.forEach(function(m){ COL_ALIAS[t.id+'.'+m] = canon; });
+    });
+  });
+  function canonRef(ref){ return COL_ALIAS[ref] || ref; }
+
   var colStatusIndex = {};
-  PROCESSES.forEach(function(p){ p.inputs.forEach(function(ref){ var cur = colStatusIndex[ref]; if (!cur || STATUS_PRIORITY[p.status] > STATUS_PRIORITY[cur]) colStatusIndex[ref] = p.status; }); });
+  PROCESSES.forEach(function(p){ p.inputs.forEach(function(r){ var ref = canonRef(r); var cur = colStatusIndex[ref]; if (!cur || STATUS_PRIORITY[p.status] > STATUS_PRIORITY[cur]) colStatusIndex[ref] = p.status; }); });
 
   var LANE_X = {0:40, 1:340, 2:760, 3:1180, 4:1600};
   var LANE_LABEL = { 0:'Процессы только\nстарой ветки', 1:'Старая ветка ·\nCL_PORTFOLIO.dbo (10 таблиц)', 2:'Сквозные процессы\n(старая ↔ новая)', 3:'Новая ветка ·\nDictionaries.risk_analytics (19 таблиц)', 4:'Процессы только\nновой ветки' };
@@ -949,7 +1150,7 @@
     var touched = {}; process.inputs.forEach(function(ref){ touched[ref.split('.')[0]] = true; });
     return Object.keys(touched).map(function(tid){ var t = TABLES_BY_ID[tid]; if (!t) return null; if (t.lane < process.lane) return { a: t.id, b: process.id }; return { a: process.id, b: t.id }; }).filter(Boolean);
   }
-  function statusColor(status){ return status==='proven' ? 'var(--st-good)' : status==='refuted' ? 'var(--ink-faint)' : 'var(--st-warning)'; }
+  function statusColor(status){ return (status==='proven'||status==='verified') ? 'var(--st-good)' : status==='refuted' ? 'var(--ink-faint)' : 'var(--st-warning)'; }
   function findingChip(id){ var f = FINDINGS[id]; if (!f) return ''; return '<span class="finding-chip" style="background:var('+SEVERITY_VAR[f.severity]+'); color:var('+SEVERITY_FG_VAR[f.severity]+')" title="'+esc(f.label)+'">'+id+'</span>'; }
 
   function colRowsHtml(t){
@@ -958,7 +1159,9 @@
       var refKey = t.id+'.'+(c.match?c.match[0]:c.name);
       var st = colStatusIndex[refKey]; var dotCls = st ? DOT_CLASS[st] : '';
       var tag = c.role==='key' ? '<span class="n-col-tag key">К</span>' : c.role==='fk' ? '<span class="n-col-tag fk">ВК</span>' : '';
-      return '<div class="n-col-row" title="'+esc(c.note||c.name)+'"><span class="n-col-dot '+dotCls+'"></span><span class="n-col-name">'+esc(c.name)+'</span><span class="n-col-type">'+esc(c.type)+'</span>'+tag+'</div>';
+      var vCls = st==='verified' ? ' is-verified' : '';
+      var vTip = st==='verified' ? 'СВЕРЕНО 100% — расхождений нет. ' : (st==='proven' ? 'Правило доказано, но совпадение не 100%. ' : '');
+      return '<div class="n-col-row'+vCls+'" title="'+esc(vTip+(c.note||c.name))+'"><span class="n-col-dot '+dotCls+'"></span><span class="n-col-name">'+esc(c.name)+'</span><span class="n-col-type">'+esc(c.type)+'</span>'+tag+'</div>';
     }).join('')+'</div>';
   }
   function openDrawer(title, bodyHtml){ document.getElementById('drawerTitle').textContent = title; document.getElementById('drawerBody').innerHTML = bodyHtml; document.getElementById('drawer').classList.add('open'); }
@@ -974,8 +1177,8 @@
     openDrawer(t.name, html);
   }
   function showProcessDrawer(p){
-    var badgeVar = {proven:'st-good', hypothesis:'st-warning', external:'st-warning', refuted:'ink-faint'}[p.status];
-    var fg = p.status==='refuted' ? 'var(--paper-raised)' : (p.status==='proven' ? 'var(--st-good-fg)' : 'var(--st-warning-fg)');
+    var badgeVar = {verified:'st-good', proven:'st-good', hypothesis:'st-warning', external:'st-warning', refuted:'ink-faint'}[p.status];
+    var fg = p.status==='refuted' ? 'var(--paper-raised)' : ((p.status==='proven'||p.status==='verified') ? 'var(--st-good-fg)' : 'var(--st-warning-fg)');
     var html = '<span class="status-chip" style="background:var(--'+badgeVar+'); color:'+fg+'">'+icon(STATUS_ICON[p.status])+STATUS_LABEL[p.status]+'</span>'+
       '<span class="scope-tag">'+SCOPE_LABEL[p.scope]+(p.builtin?'':' · '+icon('ic-pencil','ic-sm')+' черновик')+'</span>'+
       (p.version ? '<span class="version-badge">версия '+p.version+'</span>' : '')+
@@ -1047,18 +1250,22 @@
   }
   function renderStats(){
     var oldN = TABLES.filter(function(t){return t.side==='old';}).length, newN = TABLES.filter(function(t){return t.side==='new';}).length;
+    var verified = PROCESSES.filter(function(p){return p.status==='verified';}).length;
     var proven = PROCESSES.filter(function(p){return p.status==='proven';}).length, hyp = PROCESSES.filter(function(p){return p.status==='hypothesis';}).length;
     var ext = PROCESSES.filter(function(p){return p.status==='external';}).length, ref = PROCESSES.filter(function(p){return p.status==='refuted';}).length;
     var drafts = PROCESSES.filter(function(p){return !p.builtin;}).length;
     var totalCols = 0, mappedCols = 0;
-    TABLES.forEach(function(t){ if (t.side==='new' && t.columns) t.columns.forEach(function(c){ totalCols++; var k=t.id+'.'+(c.match?c.match[0]:c.name); if (colStatusIndex[k]) mappedCols++; }); });
+    var verifiedCols = 0;
+    TABLES.forEach(function(t){ if (t.side==='new' && t.columns) t.columns.forEach(function(c){ totalCols++; var k=t.id+'.'+(c.match?c.match[0]:c.name); var st=colStatusIndex[k]; if (st) mappedCols++; if (st==='verified') verifiedCols++; }); });
     var pct = totalCols ? Math.round(100*mappedCols/totalCols) : 0;
+    var vpct = totalCols ? Math.round(100*verifiedCols/totalCols) : 0;
     var html = '';
     html += '<div class="tile"><div class="tile-head">'+icon('ic-grid')+'<span>Таблицы Dictionary</span></div><div class="tile-value">'+newN+'</div><div class="tile-sub">все 19 каталогизированы (live schema)</div></div>';
     html += '<div class="tile"><div class="tile-head">'+icon('ic-table')+'<span>Таблицы CL_PORTFOLIO</span></div><div class="tile-value">'+oldN+'</div><div class="tile-sub">все 10 каталогизированы (live schema)</div></div>';
-    html += '<div class="tile"><div class="tile-head">'+icon('ic-check')+'<span>Покрытие аудита колонок</span></div><div class="tile-value">'+pct+'%</div><div class="tile-sub">'+mappedCols+' из '+totalCols+' колонок Dictionary тронуты хотя бы одним процессом</div></div>';
+    html += '<div class="tile"><div class="tile-head">'+icon('ic-check')+'<span>Сверено 100% (готово к работе)</span></div><div class="tile-value" style="color:var(--st-good)">'+vpct+'%</div><div class="tile-sub">'+verifiedCols+' из '+totalCols+' колонок Dictionary сверены на данных БЕЗ единого расхождения. Остальные '+(pct-vpct)+' п.п. покрытия ('+(mappedCols-verifiedCols)+' колонок) — правила, гипотезы и открытые дефекты, но не подтверждённое совпадение.</div></div>';
     html += '<div class="tile"><div class="tile-head">'+icon('ic-process')+'<span>Процессы</span></div><div class="tile-value">'+PROCESSES.length+'</div><div class="tile-legend">'+
-      '<span class="li">'+icon(STATUS_ICON.proven,'ic-sm')+'<span style="color:var(--st-good)">'+proven+' доказано</span></span>'+
+      '<span class="li">'+icon(STATUS_ICON.verified,'ic-sm')+'<span style="color:var(--st-good);font-weight:600">'+verified+' сверено 100%</span></span>'+
+      '<span class="li">'+icon(STATUS_ICON.proven,'ic-sm')+'<span style="color:var(--st-good-fg)">'+proven+' правил доказано</span></span>'+
       '<span class="li">'+icon(STATUS_ICON.external,'ic-sm')+'<span style="color:var(--st-warning-fg)">'+ext+' внешних</span></span>'+
       '<span class="li">'+icon(STATUS_ICON.hypothesis,'ic-sm')+'<span style="color:var(--st-warning-fg)">'+hyp+' гипотез</span></span>'+
       '<span class="li">'+icon(STATUS_ICON.refuted,'ic-sm')+'<span>'+ref+' опровергнуто</span></span>'+
@@ -1066,11 +1273,12 @@
     document.getElementById('statsRow').innerHTML = html;
   }
   var MATRIX = [
-    { src:'S01 · RS', perim:'4 385 / 4 838 / 4 380', bal:{ok:true, note:'✓ −0.02 ₸'}, prov:{ok:true, note:'✓ 100% (25.51 млрд)'}, dpd:{ok:false, note:'✗ NULL 3618/4380; июнь→июль +60%'} },
-    { src:'S03 · CrediLogic', perim:'237 274 / 237 386 / 234 367', bal:{ok:true, note:'✓ Δ 140 854 ₸'}, prov:{ok:false, note:'✗ new выше +30.6 млрд'}, dpd:{ok:false, note:'✗ NULL 205 264; DPD=−1'} },
-    { src:'S17 · Fenix', perim:'79 621 / 90 596 / 79 617', bal:{ok:true, note:'✓ Δ −5.6 млн (4 дог.)'}, prov:{ok:false, note:'✗ new выше +29.8 млн (18771)'}, dpd:{ok:false, note:'✗ interest DPD 100% NULL; 90+ теряется на 932 дог.'} },
-    { src:'S02 · Карты', perim:'152 221 / 27 824 / — (17.9%)', bal:{blocked:true, note:'⛔ не сверено — самый рискованный'}, prov:{blocked:true, note:'⛔ считать нельзя'}, dpd:{blocked:true, note:'⛔ считать нельзя'} }
+    { src:'S01 · RS', perim:'4 385 / 4 838 / 4 380', bal:{ok:true, note:'✓ СВЕРЕНО Δ −0,02 ₸ (622,54 млрд)'}, prov:{ok:true, note:'✓ СВЕРЕНО 100% — 4 380/4 380 (25,51 млрд)'}, dpd:{ok:false, note:'✗ max DPD 465/762 = 61,02%; NULL 3 618/4 380; +284 дог. 90+ только в новой'} },
+    { src:'S03 · CrediLogic', perim:'237 274 / 237 386 / 234 367', bal:{ok:true, note:'✓ Δ 140 854 ₸ (234 362 из 234 367 в пределах 0,01)'}, prov:{ok:false, note:'✗ РЕТЕСТ 21.07 НЕ УСТРАНИЛ: new выше +33,49 млрд, совпало 21,23%'}, dpd:{ok:false, note:'✗ NULL 208 552 (87,90%); правила мэппинга на актуальных данных не подтвердились'} },
+    { src:'S17 · Fenix', perim:'79 621 / 90 596 / 79 617', bal:{ok:false, note:'~ Δ −5,57 млн: формулы СВЕРЕНЫ 100%, расхождение в 4 договорах'}, prov:{ok:false, note:'✗ new выше +29,77 млн (18771); 1845 сверен 100%'}, dpd:{ok:false, note:'✗ interest DPD 100% NULL; 90+ теряется на 932 дог. (273,0 млн ₸)'} },
+    { src:'S02 · Карты', perim:'152 221 / 27 824 / 27 257', bal:{ok:false, note:'✗ периметр НЕ подтверждён: 3 955 дог. с остатком 381,4 млн вне новой'}, prov:{ok:false, note:'✗ new выше +10,34 млн; 96,82% совпало; 1877 WAY4 = 125,9 млн не сопоставлен'}, dpd:{ok:false, note:'✗ NULL 99,30%; category=bucket СВЕРЕНО 100% (MIGR+SMART), WAY4 bucket = NULL'} }
   ];
+
   function renderMatrix(){
     document.getElementById('matrixBody').innerHTML = MATRIX.map(function(r){
       function cell(c){ var cls = c.blocked ? 'blocked' : (c.ok ? 'ok' : 'bad'); var ic = c.blocked ? 'ic-x' : (c.ok ? 'ic-check' : 'ic-warn'); return '<td><div class="cell '+cls+'">'+icon(ic,'ic-sm')+'<span class="cell-note">'+esc(c.note)+'</span></div></td>'; }
@@ -1106,20 +1314,31 @@
 
   function renderTableDash(){
     var rows = TABLES.filter(function(t){ return t.columns && t.side==='new'; }).map(function(t){
-      var total = t.columns.length, verified=0, inprog=0, issue=0;
+      var total = t.columns.length, verified=0, ruled=0, inprog=0, issue=0;
       t.columns.forEach(function(c){
         var k = t.id+'.'+(c.match?c.match[0]:c.name); var st = colStatusIndex[k];
-        if (st==='proven') verified++; else if (st==='hypothesis'||st==='external') inprog++; else if (st==='refuted') issue++;
+        if (st==='verified') verified++; else if (st==='proven') ruled++;
+        else if (st==='hypothesis'||st==='external') inprog++; else if (st==='refuted') issue++;
       });
-      var unchecked = total-verified-inprog-issue;
-      return { t:t, total:total, verified:verified, inprog:inprog, issue:issue, unchecked:unchecked };
-    }).sort(function(a,b){ return (b.verified+b.inprog)/b.total - (a.verified+a.inprog)/a.total; });
+      var unchecked = total-verified-ruled-inprog-issue;
+      return { t:t, total:total, verified:verified, ruled:ruled, inprog:inprog, issue:issue, unchecked:unchecked };
+    }).sort(function(a,b){
+      /* Сортировка по ДОЛЕ СВЕРЕННОГО (verified), а не по «тронуто хоть чем-то»:
+         таблица, где всё покрыто гипотезами, не готовее той, где меньше полей,
+         но они сверены до нуля расхождений. */
+      var av=a.verified/a.total, bv=b.verified/b.total;
+      if (bv!==av) return bv-av;
+      return (b.ruled+b.inprog)/b.total - (a.ruled+a.inprog)/a.total;
+    });
     document.getElementById('dashBody').innerHTML = rows.map(function(r){
       function seg(n,color){ return n ? '<span style="width:'+(100*n/r.total)+'%;background:'+color+'"></span>' : ''; }
+      function dim(n){ return n ? '' : ' style="opacity:.35"'; }
       return '<tr><td class="name">'+esc(r.t.name)+'</td><td class="num">'+r.total+'</td>'+
-        '<td class="num" style="color:var(--st-good)">'+r.verified+'</td><td class="num" style="color:var(--st-warning-fg)">'+r.inprog+'</td>'+
-        '<td class="num" style="color:var(--ink-faint)">'+r.issue+'</td><td class="num">'+r.unchecked+'</td>'+
-        '<td><div class="dash-bar">'+seg(r.verified,'var(--st-good)')+seg(r.inprog,'var(--st-warning)')+seg(r.issue,'var(--ink-faint)')+'</div></td></tr>';
+        '<td class="num" style="color:var(--st-good);font-weight:600">'+r.verified+'</td>'+
+        '<td class="num"'+(r.ruled?' style="color:var(--st-good-fg)"':' style="opacity:.35"')+'>'+r.ruled+'</td>'+
+        '<td class="num" style="color:var(--st-warning-fg)">'+r.inprog+'</td>'+
+        '<td class="num" style="color:var(--ink-faint)">'+r.issue+'</td><td class="num"'+dim(r.unchecked)+'>'+r.unchecked+'</td>'+
+        '<td><div class="dash-bar">'+seg(r.verified,'var(--st-good)')+seg(r.ruled,'var(--st-good-fg)')+seg(r.inprog,'var(--st-warning)')+seg(r.issue,'var(--ink-faint)')+'</div></td></tr>';
     }).join('');
   }
 
