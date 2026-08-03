@@ -16,6 +16,10 @@ ER-таблицы старой (`CL_PORTFOLIO.dbo` + IFRS9) и новой (`Dict
 - `AGENT_HANDOFF_PROMPT.md` — промпт для coding-агента коллеги (Sailau, зона
   provisions/DPD/90+): критическая оценка холста → актуализация под текущее
   состояние → самостоятельные DQ-проверки, добавляемые в холст с evidence и SQL.
+- `SAILAU_METHOD.md` — реконструкция side-by-side методологии Сайлау (чек-лист, сверка
+  со spiral-методом `CLAUDE.md`) и правило масштабирования этого метода на колонки
+  `Dictionary`, не тронутые ни одним процессом холста (Tier A/B/C, backlog по таблицам).
+  SQL к Batch 1 — `sql/Risk_DWH_Vacant_Column_Retest_Pack_20260803.sql`.
 
 ## Как редактировать
 1. Открыть `dwh_schema_explorer.html` в редакторе кода.
