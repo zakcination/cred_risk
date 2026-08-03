@@ -760,7 +760,12 @@
     '#22': {severity:'open',     label:'DWH-09: 4 707 SMART_CARD с положительным старым лимитом 490 796 954,95 ₸ не перенесены'},
     '#23': {severity:'open',     label:'DWH-10: 1 176 договоров S01 требуют продуктового правила Creditamount→l_loan_amount; 272 с остатком 351 680 163 809,78 ₸'},
     '#24': {severity:'open',     label:'DWH-11/12: классификации S02/S17 полностью пусты; 587 расхождений статуса S02'},
-    '#25': {severity:'critical', label:'Заявление «NULL в DPD = 0» опровергнуто данными: S17 9 815 договоров с положит. interest DPD (3.87 млрд ₸), S01 5 договоров 1–8 дней (203.8 млн ₸)'}
+    '#25': {severity:'critical', label:'Заявление «NULL в DPD = 0» опровергнуто данными: S17 9 815 договоров с положит. interest DPD (3.87 млрд ₸), S01 5 договоров 1–8 дней (203.8 млн ₸)'},
+    '#26': {severity:'pending',  label:'DWH-03: 3 909 договоров в loans без даты закрытия, вне loans_active/loan_account, 283,2 млн₸ — требует классификации'},
+    '#27': {severity:'open',     label:'DWH-04: 159 603 активных S02 исчезли из loan_account (loans_active-scoped) — не сверено с нашими 124 964 (OLD-scoped), см. §9.3a'},
+    '#28': {severity:'open',     label:'DWH-05: 7 номеров договора S17 → 14 loan_id, только 7 из 14 в loan_account — канонический ключ не определён'},
+    '#29': {severity:'doc',      label:'DWH-06: 1 технический дубль строки S02 в loans_active — grain loans_active не проверен независимо (только loans, §2/§9.6)'},
+    '#30': {severity:'doc',      label:'DWH-07: 1 договор с остатком 1 000 ₸ после даты фактического закрытия — допустимость не подтверждена'}
   };
   var SEVERITY_VAR = { critical:'--st-critical', open:'--st-serious', pending:'--st-warning', doc:'--st-good' };
   var SEVERITY_FG_VAR = { critical:'--st-critical-fg', open:'--st-serious-fg', pending:'--st-warning-fg', doc:'--st-good-fg' };
@@ -801,6 +806,12 @@
       inputs:['old_spisCL.contract_number','old_spisCL.summ_spis_v_tg','new_writeoff.w_dlcr_dog_num','new_writeoff.w_dlcrp_write_off_amount'],
       evidence:'CASE_RUN_WRITEOFF_CL_010 — 73/73, 138 741 177,22₸ точно', note:'4 доп. события только в новой ветке — см. #11/e-writeoff (внешняя проверка, постдатирует FINDINGS.md).',
       slice:'2026-07-01, S03', sql:'-- CASE_RUN_WRITEOFF_CL_010_FINAL_EMAIL_PROOF, Result 01 (фрагмент)\nSELECT reconciliation_class, COUNT_BIG(*) AS event_count,\n  SUM(old_writeoff_amount_kzt), SUM(new_writeoff_amount_kzt),\n  SUM(ABS(old_minus_new_amount)) AS gross_absolute_difference_sum\nFROM #WRITEOFF_CL_010_RECON\nGROUP BY reconciliation_class\nORDER BY reconciliation_class;', findings:['#11'] },
+    { id:'e-writeoff', status:'external', version:1, name:'Writeoff S03 — 4 доп. события только в новой ветке (11,6 млн ₸)',
+      formula:'OLD spis_v_ubytok_CL: 73 события / 138 741 177,22 ₸\nNEW writeoff: 77 событий / 150 370 950,03 ₸\nразница: 4 события / 11 629 772,81 ₸',
+      inputs:['old_spisCL.date_spis','new_writeoff.w_dlcrp_dlcr_gid','new_writeoff.w_dlcrp_write_off_amount'],
+      evidence:'Сверка списаний S03, дата во вставке не указана — 73/73 старых события совпали точно (f13); 4 доп. события в новой ветке не найдены в старой',
+      note:'1 событие датировано 30.06.2026 (2 138 963,97 ₸), 3 события — 01.07.2026 (9 490 808,84 ₸) — все на самой границе среза. Вопрос к дате отсечки включения операций в отчётный срез на 01.07.2026 (30.06 включительно или нет) — необязательно дефект, требует подтверждения правила.',
+      slice:'2026-07-01, S03', findings:['#11'] },
 
     /* ===== СВЕРЕНО 100% — сверки Сайлау 16–22.07.2026 на срезе 01.07.2026.
        Критерий verified: проверено на реальных данных, расхождений НЕТ ВООБЩЕ
@@ -884,6 +895,12 @@
       inputs:['old_rs.Segment','new_loans.l_segment'],
       evidence:'DWH-11 — совпал по всем 4 382 сопоставленным договорам',
       slice:'2026-07-01, S01', findings:[] },
+    { id:'c2', status:'proven', version:1, name:'S02 MIGR_WAY4: limit → l_loan_amount (не → l_limit)',
+      formula:'PORTFOLIO_CREDITCARDS_MIGR_WAY4.[limit] = loans.l_loan_amount\n(l_limit остаётся NULL на всей выборке — маппинг в l_limit опровергнут, см. d6)',
+      inputs:['old_migrway4.limit','new_loans.l_loan_amount','new_loans.l_limit'],
+      evidence:'Тест мэппинга MIGR_WAY4 (дата во вставке не указана) — 77 450 из 77 457 уникальных сопоставленных договоров совпали на 01.07.2026; остальные 7 (744 тыс. ₸) подтверждены более ранними историческими срезами старой таблицы',
+      note:'Кольцо, не заливка: DWH-09 (addendum 2) даёт для того же MIGR_WAY4 ДРУГОЙ знаменатель — 85 346 совпало + 9 (старый 0 / новый 844 000 ₸) = 85 355, что совпадает с полным old-периметром MIGR_WAY4 из FINDINGS §6, а не с 77 457. Направление мэппинга (limit→l_loan_amount, не l_limit) подтверждено ОБОИМИ тестами независимо — это не под вопросом. Но точное определение проверяемой популяции (сопоставленные vs весь old-периметр) между двумя прогонами не сверено — прежде чем закрывать как verified, нужно свести знаменатели.',
+      slice:'2026-07-01, S02 (MIGR_WAY4)', findings:[] },
 
     /* ===== ОПРОВЕРГНУТО данными (в т.ч. заявления разработчика) ===== */
     { id:'d7', status:'refuted', name:'S17: contract_id ↔ la_loan_id как межветочный ключ',
@@ -926,7 +943,7 @@
       formula:'2 907 договоров есть в loans (однозначный l_gid),\nно отсутствуют в loan_account по source + loan_id;\n2 900 из них с положительным остатком 17 199 371 554,56 ₸',
       inputs:['old_cl2.contract_number','new_loans.l_gid','new_loan_account.la_gid'],
       evidence:'Сверка S03 — 2 884 договора исключены из последующих срезов ПРИ положительном остатке (последний совокупный 17 661 070 461,15 ₸); не найдены в collections, Offbalance, writeoff',
-      note:'ВНИМАНИЕ на пересечение с d1: наша ветка ранее опровергла миф «17,2 млрд потерянной экспозиции» (2 907 = статус V, расторгнуты). Здесь та же цифра приходит от Сайлау как ОТКРЫТЫЙ дефект периметра. Это НЕ обязательно противоречие — «расторгнут» и «исключён из loan_account при положительном остатке» могут быть одним фактом с двух сторон. До прямой сверки двух прогонов держим оба, а не выбираем удобный.',
+      note:'ВНИМАНИЕ на пересечение с d1: наша ветка ранее опровергла миф «17,2 млрд потерянной экспозиции» (2 907 = статус V, расторгнуты). Здесь та же цифра приходит от Сайлау как ОТКРЫТЫЙ дефект периметра. Это НЕ обязательно противоречие — «расторгнут» и «исключён из loan_account при положительном остатке» могут быть одним фактом с двух сторон. До прямой сверки двух прогонов держим оба, а не выбираем удобный.\nДополнительно: после исключения из loan_account 1 713 из этих договоров ПРОДОЛЖАЛИ менять остаток в старой ветке (чистое изменение 534 520 913,32 ₸) — движение после «расторжения» усложняет чтение d2 (наш disproven «остатки менялись⇒живой», основанный на 824/2902=28%) как окончательного объяснения именно этого подмножества; вывод «расторгнут ⇒ остаточный учёт» не проверялся отдельно на этих 1 713.',
       slice:'2026-07-01, S03', findings:['#16'] },
     { id:'e13', status:'external', name:'Залоги S01 — оценочная стоимость расходится с BPM до ~93x',
       formula:'nok_last_appraised_value  vs  стоимость в BPM\nобъект 16315: 332 299 200 ₸  vs  3 585 300 ₸',
@@ -976,7 +993,9 @@
       inputs:['old_migrway4.limit','new_loans.l_limit'], evidence:'Тест мэппинга WAY4, 27.07.2026 — l_limit NULL на всех 77 457 тестированных', findings:[] },
 
     { id:'e1', status:'external', name:'DWH-02 / наш #5 — 44/68 SMART_CARD вне master', formula:'44 договора SMART_CARD вне loans И loan_account, 90 960 726.55₸, все статус Account OK',
-      inputs:['old_smartcard.contract_number'], evidence:'FINDINGS.md §9.3b — вероятно подмножество наших 68 "вне loans вовсе"; reconciling-запрос ещё не прогнан', findings:['#5'] },
+      inputs:['old_smartcard.contract_number'], evidence:'FINDINGS.md §9.3b — вероятно подмножество наших 68 "вне loans вовсе"; reconciling-запрос ещё не прогнан',
+      note:'Повторное короткое письмо (дата не указана) подтвердило те же 44/90 960 726,55 ₸ полностью воспроизведёнными повторной проверкой — не новый прогон, тот же результат дважды. То же письмо добавляет отдельный пункт: 2 договора RS найдены в новой ветке по техническому идентификатору при несовпадении договорных номеров — финансовой потери нет, но нужно уточнение правил мэппинга (не включено в 44/68, отдельный узкий вопрос).',
+      findings:['#5'] },
     { id:'e2', status:'external', name:'DWH-08 — 70 дублей l_loan_id (S01)', formula:'70 групп дублей l_loan_id в loans, риск удвоения JOIN 197.6М→395.2М',
       inputs:['new_loans.l_loan_id'], evidence:'FINDINGS.md §9.1 — не противоречит §1 (join по gid не допускает этот класс ошибки)',
       note:'НЕ то же самое, что наш #8 (l_gid+l_loan_number) — разные ключи.', findings:['#8'] },
@@ -991,7 +1010,13 @@
       inputs:['old_migrway4.unused_limit','new_loans.l_unutilized_limit'], evidence:'Кадиржан заявил об исправлении 29.07.2026 — постдатирует FINDINGS.md', version:2,
       slice:'2026-07-01, S02 (77 457 договоров)',
       sql:'-- CASE_RUN_MIGR_WAY4_020_LIMIT_HISTORY_SHIFT (фрагмент)\nSELECT contract_key, new_loan_amount,\n  COUNT_BIG(*) AS history_row_count,\n  MAX(CASE WHEN ABS(historical_old_limit-new_loan_amount)<=0.01\n           THEN history_report_date END) AS last_earlier_equal_date\nFROM #history_020\nGROUP BY contract_key, new_loan_amount;',
-      history:[{date:'27.07',note:'Сайлау: 7 400 договоров с расхождением unused_limit, выделено 1 409 с числовым расхождением (19.3М₸ gross)'},{date:'29.07',note:'Кадиржан: «l_unutilized_limit было исправлено, прошу проверить»'},{date:'30.07',note:'Повторный тест ещё не прогнан — статус остаётся «внешняя проверка», не «доказано»'}],
+      history:[
+        {date:'дата не указана',note:'7 400 активных MIGR_WAY4 с расхождением; 21 договор с l_unutilized_limit=NULL при старом unused_limit>0 (1 315 870 ₸); 7 377/7 400 подтверждены присутствующими в истории loan_account — расхождение не объясняется отсутствием счётных записей'},
+        {date:'27.07',note:'Полная раскладка на 77 457 договорах: 73 084 совпали (допуск 0,01 ₸); 2 844 — старое 0/новое NULL (вопрос: допустимое представление нуля?); 21 — старое>0/новое NULL (1 315 870 ₸, тот же случай); отдельно 1 409 с числовым расхождением — старое 42 132 765,01 ₸, новое 47 194 323,69 ₸, чистое +5 061 558,68 ₸, валовое 19 313 301,02 ₸; точное совпадение по текущему loan_id — только 227 из 1 409'},
+        {date:'28.07',note:'Повтор тех же 1 409/5 061 558,68 ₸/19 313 301,02 ₸ в сводном письме — подтверждено вторым прогоном, число не изменилось'},
+        {date:'29.07',note:'Кадиржан: «l_unutilized_limit было исправлено, прошу проверить»'},
+        {date:'30.07',note:'Повторный тест ещё не прогнан — статус остаётся «внешняя проверка», не «доказано»'}
+      ],
       findings:['#6'] },
     { id:'e7', status:'external', name:'RS_7130 loan_account — нулевые балансы (наш #12)', formula:'458 из 637 активных договоров: все 25 счетов ГК равны нулю несмотря на чистый 1:1 join',
       inputs:['old_rs7130.outstanding','new_loan_account.principal_balance_debt'], evidence:'CASE_RUN_RS_7130_009, 29.07.2026 — постдатирует снимок FINDINGS.md (01.07.2026)',
@@ -1003,6 +1028,43 @@
       inputs:['old_rs.contractnumber','old_rs.contract_id','new_loans_active.l_loan_status'], evidence:'переписка 29–30.07.2026 — постдатирует FINDINGS.md; гипотеза Кадиржана об обрезании столбца не проверена', findings:['#13'] },
     { id:'e9', status:'external', name:'restructuring_v2 — дубли и аномалии (наш #8/#9/#10)', formula:'12 несопоставленных строк; 184/4520 событий с датой погашения раньше даты реструктуризации',
       inputs:['new_restructuring.new_maturity_date'], evidence:'переписка 27–28.07.2026 — постдатирует FINDINGS.md', findings:['#9','#10'] },
+
+    /* ============================================================
+       DWH-03..07 — часть 1 Risk_DWH_Developer_Addendum_20260716.md,
+       ранее НЕ перенесённая на холст (только DWH-01/02/08-16 были).
+       Все status='external': реестр коллеги (Sailau), не перепроверено
+       нашим методом в этой сессии — см. FINDINGS §9.0.
+       ============================================================ */
+    { id:'e-dwh03', status:'external', version:1, name:'DWH-03 — 3 909 договоров в loans без даты закрытия, вне loans_active/loan_account',
+      formula:'3 909 договоров есть в loans, отсутствуют в loans_active И loan_account\nпо обоим ключам, actual_closure_date отсутствует\nтекущий старый balance = 283 221 562,05 ₸',
+      inputs:['new_loans.l_actual_closure_date','new_loans_active.l_loan_id','new_loan_account.la_gid'],
+      evidence:'Risk_DWH_Developer_Addendum_20260716.md, часть 1 (DWH-03) — за вычетом 44 (=DWH-02) и 1 (=DWH-07, остаток 1 000 ₸)',
+      note:'loans_active подтверждён как полный перечень активных договоров (v10) ⇒ эти 3 909 НЕЛЬЗЯ автоматически считать активным пропуском — нужна документированная бизнес-классификация, прежде чем присваивать материальность.',
+      slice:'2026-07-01, все source', findings:['#26'] },
+    { id:'e-dwh04', status:'external', version:1, name:'DWH-04 — состав S02 в loan_account изменился: 159 603 ранее активных исчезли',
+      formula:'159 603 активных S02 (loans_active-scoped) были в loan_account ранее,\nотсутствуют на 01.07.2026 по обоим ключам.\n152 810 — последний срез уже нулевой; 6 793 исчезли с ненулевыми\nкомпонентами (историческая Σ|компонент| = 162 272 396,34 ₸)',
+      inputs:['new_loans_active.l_loan_id','new_loan_account.la_gid'],
+      evidence:'Risk_DWH_Developer_Addendum_20260716.md, часть 1 (DWH-04) — после января 2026 исчезло 100 101 (100 093 нулевых), объясняет основную часть февральского обвала периметра',
+      note:'НЕ то же число, что наш собственный e11 (124 964 ONLY_OLD, OLD-portfolio-scoped) — методологически разные популяции (FINDINGS §9.3a), нельзя суммировать или считать дублирующими без прямого reconciling-запроса по l_gid (FINDINGS §9.5 п.3 — не прогнан). Оба, вероятно, одно явление (обрыв загрузки loan_account S02 с фев-2026), но это гипотеза, не подтверждённое тождество.',
+      slice:'2026-07-01, S02', findings:['#27'] },
+    { id:'e-dwh05', status:'external', version:1, name:'DWH-05 — качество ключа S17: 7 номеров договора → 14 loan_id',
+      formula:'7 номеров договора в loans_active не уникальны, соответствуют 14 loan_id.\nВсе 14 есть в loans; в loan_account — только 7 из 14\n(остальные 7 никогда не были в балансовом слое).\n+276 активных S17: тот же loan_id, разный номер между loans_active и loan_account',
+      inputs:['new_loans_active.l_loan_number','new_loans_active.l_loan_id','new_loan_account.la_loan_id'],
+      evidence:'Risk_DWH_Developer_Addendum_20260716.md, часть 1 (DWH-05)',
+      note:'Эти группы отсутствуют в текущем PORTFOLIO_Fenix — финансовый эффект по старой ветке НЕ подтверждён (в отличие от DWH-01/02, где старый баланс проверен). Вопрос к структуре ключа, не к сумме.',
+      slice:'2026-07-01, S17', findings:['#28'] },
+    { id:'e-dwh06', status:'external', version:1, name:'DWH-06 — технический дубль S02 в loans_active',
+      formula:'1 группа: две полностью идентичные строки loans_active\n(source, loan_id, номер, атрибуты совпадают) — активный raw perimeter завышен на 1 строку',
+      inputs:['new_loans_active.l_gid','new_loans_active.l_loan_number'],
+      evidence:'Risk_DWH_Developer_Addendum_20260716.md, часть 1 (DWH-06) — объясняет расхождение 586 715 строк / 586 714 уникальных активных ключей',
+      note:'Минимальная материальность (1 строка), но напрямую про grain loans_active, который нигде в этой сессии независимо не проверялся (только loans — см. FINDINGS §2/§9.6 п.1, тоже открыт). Контроль уникальности report_date+source+loan_id пока не установлен.',
+      slice:'2026-07-01, S02', findings:['#29'] },
+    { id:'e-dwh07', status:'external', version:1, name:'DWH-07 — остаток 1 000 ₸ после даты фактического закрытия',
+      formula:'1 договор: l_actual_closure_date = 2025-06-12,\nтекущий старый balance = 1 000,00 ₸',
+      inputs:['new_loans.l_actual_closure_date','new_loan_account.principal_balance_debt'],
+      evidence:'Risk_DWH_Developer_Addendum_20260716.md, часть 1 (DWH-07)',
+      note:'Наименьшая по материальности находка на холсте (1 000 ₸) — вероятно технический хвост учёта, допустимость не подтверждена; дешёвый closing item, не приоритет.',
+      slice:'2026-07-01, все source', findings:['#30'] },
 
     /* ============================================================
        g1–g6 — синхронизация холста с FINDINGS.md (Шаг 2, 30.07.2026).
