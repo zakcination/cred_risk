@@ -1619,6 +1619,21 @@ DECLARE @ProgressMsg nvarchar(400) = N'[L11 график и платежи] на
 RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf11 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
+/* ПРОИЗВОДИТЕЛЬНОСТЬ 04.08.2026 (найдено на живом прогоне №2, зависание 2+ часа
+   на этом самом чеке): CONVERT(nvarchar(255), r.rs_loan_id) ниже был функцией
+   от столбца ВНУТРЕННЕЙ таблицы внутри коррелированного NOT EXISTS — non-sargable,
+   убивает любой индекс по rs_loan_id и заставляет full scan repayment_schedule
+   НА КАЖДУЮ строку loans_active (сотни тысяч × потенциально миллионы). Материализуем
+   converted-ключ ОДИН раз в индексированный #temp — та же строковая семантика
+   (varchar '007' ≠ bigint 7, см. заголовок L0), тот же CONVERT, просто не
+   пересчитывается заново на каждой итерации подзапроса. */
+IF OBJECT_ID('tempdb..#rs_keys') IS NOT NULL DROP TABLE #rs_keys;
+SELECT DISTINCT rs_source, CONVERT(nvarchar(255), rs_loan_id) AS rs_loan_id_txt
+INTO #rs_keys
+FROM [Dictionaries].[risk_analytics].[repayment_schedule]
+OPTION (MAXDOP 1);
+CREATE UNIQUE CLUSTERED INDEX ix_rs_keys ON #rs_keys(rs_source, rs_loan_id_txt);
+
 INSERT INTO ##RDW_RESULTS
 SELECT 11, N'L11 график и платежи', N'L11.1', N'loans_active → repayment_schedule',
        N'Активных договоров без единой строки графика', a.l_source,
@@ -1629,12 +1644,14 @@ FROM (SELECT DISTINCT l_source, l_loan_id FROM [Dictionaries].[risk_analytics].[
       WHERE l_report_date = @AsOf11) a
 /* Явное приведение обеих сторон к nvarchar: l_loan_id nvarchar против rs_loan_id
    bigint (см. L0.2). Без него JOIN не матчил ничего, и проверка рапортовала, что
-   графика нет у ВСЕХ 586 717 активных договоров — это был артефакт типа. */
-WHERE NOT EXISTS (SELECT 1 FROM [Dictionaries].[risk_analytics].[repayment_schedule] r
+   графика нет у ВСЕХ 586 717 активных договоров — это был артефакт типа. Ключ уже
+   материализован как текст в #rs_keys выше — здесь просто сравнение nvarchar. */
+WHERE NOT EXISTS (SELECT 1 FROM #rs_keys r
                   WHERE r.rs_source = a.l_source
-                    AND CONVERT(nvarchar(255), r.rs_loan_id) = CONVERT(nvarchar(255), a.l_loan_id))
+                    AND r.rs_loan_id_txt = a.l_loan_id)
 GROUP BY a.l_source
 OPTION (MAXDOP 1);
+DROP TABLE #rs_keys;
 
 INSERT INTO ##RDW_RESULTS
 SELECT 11, N'L11 график и платежи', N'L11.2', N'repayment_schedule',
@@ -1700,6 +1717,19 @@ WHERE NOT ((grace_od_begin_date  IS NOT NULL AND grace_od_end_date  IS NOT NULL)
 GROUP BY [dlcr$source]
 OPTION (MAXDOP 1);
 
+/* ПРОИЗВОДИТЕЛЬНОСТЬ 04.08.2026: тот же non-sargable паттерн, что вызвал 2+ часа
+   зависания в L11.1 — CONVERT() от столбца ВНУТРЕННЕЙ таблицы внутри
+   коррелированного NOT EXISTS, а loans тут вдобавок БЕЗ фильтра по дате (см.
+   комментарий ниже) — вся многосрезовая история, не один @AsOf. Не дожидаясь
+   такого же зависания здесь, материализуем converted-ключ заранее, той же
+   строковой семантикой, тем же CONVERT. */
+IF OBJECT_ID('tempdb..#loan_keys_l12') IS NOT NULL DROP TABLE #loan_keys_l12;
+SELECT DISTINCT l_source, CONVERT(nvarchar(255), l_loan_id) AS l_loan_id_txt
+INTO #loan_keys_l12
+FROM [Dictionaries].[risk_analytics].[loans]
+OPTION (MAXDOP 1);
+CREATE UNIQUE CLUSTERED INDEX ix_loan_keys_l12 ON #loan_keys_l12(l_source, l_loan_id_txt);
+
 INSERT INTO ##RDW_RESULTS
 SELECT 12, N'L12 периферия', N'L12.3', N'restructuring_v2 → loans',
        N'Событий реструктуризации без соответствующего договора', [dlcr$source],
@@ -1710,12 +1740,13 @@ FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
 /* restructuring_v2 — журнал СОБЫТИЙ за всю историю, loans — срез на дату. Событие по
    договору, закрытому до @AsOf, законно не найдёт строку в срезе. Поэтому ищем договор
    в мастере БЕЗ фильтра даты (любой срез), иначе цифра меряет ротацию портфеля,
-   а не целостность ключа. */
-WHERE NOT EXISTS (SELECT 1 FROM [Dictionaries].[risk_analytics].[loans] l
+   а не целостность ключа. Ключ уже материализован как текст в #loan_keys_l12 выше. */
+WHERE NOT EXISTS (SELECT 1 FROM #loan_keys_l12 l
                   WHERE l.l_source = r.[dlcr$source]
-                    AND CONVERT(nvarchar(255),l.l_loan_id) = CONVERT(nvarchar(255),r.loan_id))
+                    AND l.l_loan_id_txt = CONVERT(nvarchar(255),r.loan_id))
 GROUP BY [dlcr$source]
 OPTION (MAXDOP 1);
+DROP TABLE #loan_keys_l12;
 GO
 
 
