@@ -117,7 +117,7 @@
        DROP TABLE сразу после последнего использования — тот же паттерн,
        что уже был в L1, и то же обоснование, что и LOW_TEMPDB выше.
 
-   ПРОГРЕСС-БАННЕРЫ: ДВЕ ПРАВКИ ПОСЛЕ ПЕРВОГО ДОБАВЛЕНИЯ (04.08.2026)
+   ПРОГРЕСС-БАННЕРЫ: ТРИ ПРАВКИ ПОСЛЕ ПЕРВОГО ДОБАВЛЕНИЯ (04.08.2026)
    -----------------------------------------------------------------------------
      1. Первая версия клала подсчёт строк прямо в PRINT: PRINT ... +
         CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS)) — падало
@@ -131,6 +131,13 @@
         баннера — видеть его ДО того, как слой закончится. Заменено на
         RAISERROR(msg, 0, 1) WITH NOWAIT: severity 0 — не ошибка, WITH
         NOWAIT — форсирует немедленную отправку.
+     3. Замена (2) сама не собралась: RAISERROR(N'...' + CONVERT(...), 0, 1)
+        падало с Msg 102 «Incorrect syntax near '+'» — в отличие от PRINT,
+        msg_str у RAISERROR обязан быть константой или ОДНОЙ переменной,
+        конкатенация "+" прямо в вызове не парсится. Исправлено: конкатенация
+        собирается в DECLARE @ProgressMsg nvarchar(400) = N'...' + ...;
+        отдельной инструкцией, RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT
+        получает уже готовую переменную.
 
    КАК ЗАПУСКАТЬ
    -----------------------------------------------------------------------------
@@ -212,9 +219,10 @@ INSERT INTO ##RDW_PARAMS(name,value) VALUES
    которую эта секция должна решать. WITH NOWAIT форсирует немедленную
    отправку сообщения клиенту. Каждое сообщение — в Messages, а не в grid,
    поэтому отчётам (§REPORT) не мешает. */
-RAISERROR(N'=== RISK_DWH_LAYERED_CHECK начат: ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'=== RISK_DWH_LAYERED_CHECK начат: ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' | AsOf=' + CONVERT(nvarchar(10),@AsOf,120)
-    + N' | SourceFilter=' + ISNULL(@SourceFilter,N'(все)') + N' ===', 0, 1) WITH NOWAIT;
+    + N' | SourceFilter=' + ISNULL(@SourceFilter,N'(все)') + N' ===';
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 
 
 /* =============================================================================
@@ -227,9 +235,10 @@ RAISERROR(N'=== RISK_DWH_LAYERED_CHECK начат: ' + CONVERT(nvarchar(19),GETD
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L0 схема и домены] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L0 схема и домены] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 
 -- L0.1 Существуют ли все ожидаемые таблицы (инвентарь 19 + 10)
 IF OBJECT_ID('tempdb..#exp') IS NOT NULL DROP TABLE #exp;
@@ -408,9 +417,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L1 мастер loans] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L1 мастер loans] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -501,9 +511,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L2 активный периметр] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L2 активный периметр] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -597,9 +608,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L3 деньги loan_account] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L3 деньги loan_account] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @Tolerance decimal(18,2) = (SELECT CONVERT(decimal(18,2),value) FROM ##RDW_PARAMS WHERE name=N'Tolerance');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
@@ -736,9 +748,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L4 клиент borrower] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L4 клиент borrower] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -830,9 +843,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L5 периметр old<->new] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L5 периметр old<->new] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -1042,9 +1056,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L6 баланс на MATCHED] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L6 баланс на MATCHED] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @Tolerance decimal(18,2) = (SELECT CONVERT(decimal(18,2),value) FROM ##RDW_PARAMS WHERE name=N'Tolerance');
 
 /* L6.0 ОГОВОРКА, которую нельзя прятать: на новой стороне для ВСЕХ источников взят
@@ -1125,9 +1140,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L7 провизии] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L7 провизии] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @Tolerance decimal(18,2) = (SELECT CONVERT(decimal(18,2),value) FROM ##RDW_PARAMS WHERE name=N'Tolerance');
 
 INSERT INTO ##RDW_RESULTS
@@ -1196,9 +1212,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L8 DPD и 90+] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L8 DPD и 90+] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @NinetyPlus int = (SELECT CONVERT(int,value) FROM ##RDW_PARAMS WHERE name=N'NinetyPlus');
 DECLARE @MinBase    int = (SELECT CONVERT(int,value) FROM ##RDW_PARAMS WHERE name=N'MinBase');
 DECLARE @AsOf8 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
@@ -1417,9 +1434,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L9 залоги] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L9 залоги] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf9 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @ValueRatioFlag decimal(18,4) = 10.0;
 
@@ -1514,9 +1532,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L10 резолюшн] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L10 резолюшн] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf10 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
 -- L10.1 Домен source по каждой таблице резолюшна — доказывает структурность
@@ -1591,9 +1610,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L11 график и платежи] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L11 график и платежи] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf11 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
 INSERT INTO ##RDW_RESULTS
@@ -1649,9 +1669,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L12 периферия] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L12 периферия] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 INSERT INTO ##RDW_RESULTS
 SELECT 12, N'L12 периферия', N'L12.1', N'restructuring_v2',
        N'Событий с датой погашения РАНЬШЕ даты реструктуризации', [dlcr$source],
@@ -1705,9 +1726,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'[L13 витрина brm_all_data] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'[L13 витрина brm_all_data] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar), 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar);
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 DECLARE @AsOf13 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
 INSERT INTO ##RDW_RESULTS
@@ -1746,9 +1768,10 @@ GO
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-RAISERROR(N'=== ВСЕ 14 СЛОЁВ ЗАВЕРШЕНЫ -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+DECLARE @ProgressMsg nvarchar(400) = N'=== ВСЕ 14 СЛОЁВ ЗАВЕРШЕНЫ -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с всего), строк в отчёте: '
-    + CONVERT(nvarchar(10),@RowsSoFar) + N' ===', 0, 1) WITH NOWAIT;
+    + CONVERT(nvarchar(10),@RowsSoFar) + N' ===';
+RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 
 -- Отчёт 1: сводка по слоям + до какого слоя вообще можно доверять
 IF OBJECT_ID('tempdb..#gatefail') IS NOT NULL DROP TABLE #gatefail;
