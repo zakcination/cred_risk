@@ -235,7 +235,10 @@ RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
 
 DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
 DECLARE @RowsSoFar int = (SELECT COUNT(*) FROM ##RDW_RESULTS);
-DECLARE @ProgressMsg nvarchar(400) = N'[L0 схема и домены] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+-- @ProgressMsg уже DECLARE-ится выше в этом же батче (баннер начала прогона,
+-- §0 и L0 — один батч, GO между ними нет) — здесь только SET, не DECLARE,
+-- иначе Msg 134 "variable name has already been declared".
+SET @ProgressMsg = N'[L0 схема и домены] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
     + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
     + CONVERT(nvarchar(10),@RowsSoFar);
 RAISERROR(@ProgressMsg, 0, 1) WITH NOWAIT;
