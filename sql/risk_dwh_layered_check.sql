@@ -1717,36 +1717,48 @@ WHERE NOT ((grace_od_begin_date  IS NOT NULL AND grace_od_end_date  IS NOT NULL)
 GROUP BY [dlcr$source]
 OPTION (MAXDOP 1);
 
-/* ПРОИЗВОДИТЕЛЬНОСТЬ 04.08.2026: тот же non-sargable паттерн, что вызвал 2+ часа
-   зависания в L11.1 — CONVERT() от столбца ВНУТРЕННЕЙ таблицы внутри
-   коррелированного NOT EXISTS, а loans тут вдобавок БЕЗ фильтра по дате (см.
-   комментарий ниже) — вся многосрезовая история, не один @AsOf. Не дожидаясь
-   такого же зависания здесь, материализуем converted-ключ заранее, той же
-   строковой семантикой, тем же CONVERT. */
-IF OBJECT_ID('tempdb..#loan_keys_l12') IS NOT NULL DROP TABLE #loan_keys_l12;
-SELECT DISTINCT l_source, CONVERT(nvarchar(255), l_loan_id) AS l_loan_id_txt
-INTO #loan_keys_l12
-FROM [Dictionaries].[risk_analytics].[loans]
-OPTION (MAXDOP 1);
-CREATE UNIQUE CLUSTERED INDEX ix_loan_keys_l12 ON #loan_keys_l12(l_source, l_loan_id_txt);
-
+/* КЛЮЧ ИСПРАВЛЕН 04.08.2026 (найдено при разборе живого прогона №2: S03 = 127 196
+   несопоставленных строк — прежний комментарий "если цифра велика, под вопросом сам
+   ключ" сработал буквально). Старая версия джойнила по loan_id — ИМЕННО тот
+   антипаттерн, который FINDINGS.md §9.4 п.3 уже поймал и подтвердил для pledges
+   (DWH-15: 367.7М строился на la_loan_id=t.loan_id, а не на канонической паре
+   Source+l_gid — после перегона на gid цифра оказалась другой, см. FINDINGS.md
+   §9.5 п.2 и наш же L9.2 ниже, где этот урок уже применён верно). restructuring_v2
+   несёт dlcr_gid — прямой FK на loans.l_gid (см. bi_canvas TABLES[] схему) — тот же
+   канонический паттерн, что la_gid=l_gid для loan_account↔loans (FINDINGS.md §1).
+   Джойн по gid заодно снимает и non-sargable CONVERT: bigint=bigint сравнивается
+   напрямую, без приведения типов и без #temp-материализации. */
 INSERT INTO ##RDW_RESULTS
 SELECT 12, N'L12 периферия', N'L12.3', N'restructuring_v2 → loans',
-       N'Событий реструктуризации без соответствующего договора', [dlcr$source],
+       N'Событий реструктуризации без соответствующего договора (по каноническому ключу gid)', [dlcr$source],
        N'restructuring_without_loan', COUNT_BIG(*), N'0',
        CASE WHEN COUNT_BIG(*) > 0 THEN N'WARN' ELSE N'PASS' END, 0,
-       N'Регрессия: 12 несопоставленных строк. Джойн по loan_id — предположение, применяемое во всём репозитории; если цифра велика, под вопросом сам ключ, а не данные.'
+       N'Джойн по dlcr_gid=l_gid (канонический NEW-internal ключ, FINDINGS.md §1), НЕ по loan_id. Прежняя версия этого чека джойнила по loan_id и давала S03=127 196 — тот же артефакт неверного ключа, что уже подтверждён для pledges/DWH-15 (FINDINGS.md §9.4 п.3). "12" в истории — из внешней переписки (canvas e9/#9), не из прогона этого скрипта; не регрессия.'
 FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
 /* restructuring_v2 — журнал СОБЫТИЙ за всю историю, loans — срез на дату. Событие по
    договору, закрытому до @AsOf, законно не найдёт строку в срезе. Поэтому ищем договор
    в мастере БЕЗ фильтра даты (любой срез), иначе цифра меряет ротацию портфеля,
-   а не целостность ключа. Ключ уже материализован как текст в #loan_keys_l12 выше. */
-WHERE NOT EXISTS (SELECT 1 FROM #loan_keys_l12 l
+   а не целостность ключа. */
+WHERE NOT EXISTS (SELECT 1 FROM [Dictionaries].[risk_analytics].[loans] l
                   WHERE l.l_source = r.[dlcr$source]
-                    AND l.l_loan_id_txt = CONVERT(nvarchar(255),r.loan_id))
+                    AND l.l_gid = r.dlcr_gid)
 GROUP BY [dlcr$source]
 OPTION (MAXDOP 1);
-DROP TABLE #loan_keys_l12;
+
+-- L12.3b Раздельно: сколько из "не найдено" выше — потому что dlcr_gid вовсе NULL
+-- (ETL не заполнил ключ), а не потому что событие реально осиротело. NULL = NULL
+-- никогда не TRUE в SQL, поэтому такие строки попадают в L12.3 "не найдено" молча —
+-- без этой строки цифра L12.3 неотличима от "сколько записей без gid вообще".
+INSERT INTO ##RDW_RESULTS
+SELECT 12, N'L12 периферия', N'L12.3b', N'restructuring_v2.dlcr_gid',
+       N'Из L12.3 "не найдено": событий, где dlcr_gid IS NULL (ключ не заполнен)', [dlcr$source],
+       N'restructuring_without_loan_null_gid', COUNT_BIG(*), N'справочно',
+       N'INFO', 0,
+       N'Разделяет L12.3 на два разных дефекта: "gid не заполнен" (эта строка) и "gid заполнен, но договор реально не найден" (L12.3 минус эта строка). Смешение — тот же класс ошибки, что NULL≠0 в L3.5/L8.2.'
+FROM [Dictionaries].[risk_analytics].[restructuring_v2]
+WHERE dlcr_gid IS NULL
+GROUP BY [dlcr$source]
+OPTION (MAXDOP 1);
 GO
 
 
