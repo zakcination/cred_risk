@@ -125,6 +125,9 @@
      3. Итог — §REPORT в конце: по слоям, с TRUST_LEVEL и списком блокеров.
      4. Результаты переносить на BI-холст (bi_canvas/dwh_schema_explorer.html)
         как status процесса: verified / proven / hypothesis / refuted.
+     5. Прогресс — вкладка Messages (SSMS), не grid: PRINT в начале каждого
+        слоя (время, +секунд от старта, накоплено строк в ##RDW_RESULTS) —
+        по нему видно, что скрипт считает L8, а не завис.
 
    Cross-db (CL_PORTFOLIO ↔ Dictionaries) работает только на одном инстансе.
    Если падает — это находка, а не ошибка скрипта (нужен linked server).
@@ -174,7 +177,22 @@ INSERT INTO ##RDW_PARAMS(name,value) VALUES
     (N'Tolerance', CONVERT(nvarchar(30),@Tolerance)),
     (N'SourceFilter', ISNULL(@SourceFilter,N'(все)')),
     (N'MinBase', CONVERT(nvarchar(30),@MinBase)),
-    (N'NinetyPlus', CONVERT(nvarchar(30),@NinetyPlus));
+    (N'NinetyPlus', CONVERT(nvarchar(30),@NinetyPlus)),
+    /* RunStart в ##RDW_PARAMS, а не в локальной @-переменной: локальные
+       переменные не переживают GO, а этот прогон может идти по слоям
+       (см. КАК ЗАПУСКАТЬ выше) — тогда PRINT-и в каждом слое обязаны читать
+       ОДНО И ТО ЖЕ время старта, а не своё собственное. */
+    (N'RunStart', CONVERT(nvarchar(30),GETDATE(),121));
+
+/* ПРОГРЕСС 04.08.2026: PRINT в начале каждого слоя — время, сколько секунд
+   от старта, и сколько строк уже накоплено в ##RDW_RESULTS. Без этого скрипт
+   на 14 слоях и нескольких cross-db JOIN молчит от запуска до самого конца:
+   отличить «ещё считает L8» от «завис» никак нельзя, пока не увидишь либо
+   результат, либо таймаут. Каждый PRINT — в Messages, а не в grid, поэтому
+   отчётам (§REPORT) не мешает. */
+PRINT N'=== RISK_DWH_LAYERED_CHECK начат: ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' | AsOf=' + CONVERT(nvarchar(10),@AsOf,120)
+    + N' | SourceFilter=' + ISNULL(@SourceFilter,N'(все)') + N' ===';
 
 
 /* =============================================================================
@@ -184,6 +202,11 @@ INSERT INTO ##RDW_PARAMS(name,value) VALUES
    ключей — это не «мелочь стиля»: неявное приведение делает JOIN
    non-sargable и меняет семантику сравнения (varchar '007' ≠ bigint 7).
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L0 схема и домены] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 
 -- L0.1 Существуют ли все ожидаемые таблицы (инвентарь 19 + 10)
 IF OBJECT_ID('tempdb..#exp') IS NOT NULL DROP TABLE #exp;
@@ -359,6 +382,11 @@ GO
    loans, и любая сумма ниже завышена кратно. Поэтому это первый слой после
    схемы и главный гейт скрипта.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L1 мастер loans] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -446,6 +474,11 @@ GO
    Бизнес-смысл слоя: пока не доказано loans_active ⊆ loans, «пропажа» в L3
    неотличима от того, что договора нет в мастере вовсе.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L2 активный периметр] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -536,6 +569,11 @@ GO
    (без 1818/1838), S03 — больше. Единой формулы «на всё» нет, и попытка
    применить одну — самостоятельный источник ложных расхождений.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L3 деньги loan_account] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @Tolerance decimal(18,2) = (SELECT CONVERT(decimal(18,2),value) FROM ##RDW_PARAMS WHERE name=N'Tolerance');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
@@ -669,6 +707,11 @@ GO
    тут не двигает баланс напрямую — но блокирует всё, что агрегируется по
    клиенту.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L4 клиент borrower] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -757,6 +800,11 @@ GO
    Применение «одного универсального ключа» здесь — самостоятельный источник
    ложных пропаж. Мост строится по источникам и складывается.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L5 периметр old<->new] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
@@ -963,6 +1011,11 @@ GO
    разные дефекты, разные причины и разные адресаты. Смешение их в одну цифру
    — самый частый способ получить неинтерпретируемое расхождение.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L6 баланс на MATCHED] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @Tolerance decimal(18,2) = (SELECT CONVERT(decimal(18,2),value) FROM ##RDW_PARAMS WHERE name=N'Tolerance');
 
 /* L6.0 ОГОВОРКА, которую нельзя прятать: на новой стороне для ВСЕХ источников взят
@@ -1040,6 +1093,11 @@ GO
    ВАЖНО (валентность): «новая выше» ≠ «новая неправа». Без эталона —
    бухгалтерского или утверждённого IFRS 9 — вину присваивать нельзя.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L7 провизии] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @Tolerance decimal(18,2) = (SELECT CONVERT(decimal(18,2),value) FROM ##RDW_PARAMS WHERE name=N'Tolerance');
 
 INSERT INTO ##RDW_RESULTS
@@ -1105,6 +1163,11 @@ GO
    ONLY_NEW_90, ни в ONLY_OLD_90, а молча уходит в NEITHER. Считаем его явно
    (L8.5), иначе «ложных 90+ ноль» — артефакт трёхзначной логики, а не факт.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L8 DPD и 90+] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @NinetyPlus int = (SELECT CONVERT(int,value) FROM ##RDW_PARAMS WHERE name=N'NinetyPlus');
 DECLARE @MinBase    int = (SELECT CONVERT(int,value) FROM ##RDW_PARAMS WHERE name=N'MinBase');
 DECLARE @AsOf8 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
@@ -1320,6 +1383,11 @@ GO
    (99,95%), для S17 не заполнен при наличии залогов (15 646 договоров),
    для S01 не совпадает ни с одним кандидатом (2 190 договоров).
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L9 залоги] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf9 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 DECLARE @ValueRatioFlag decimal(18,4) = 10.0;
 
@@ -1411,6 +1479,11 @@ GO
    таблиц ограничен S01/S03), а не дефект ключа. Ровно этот случай раньше
    принимали за «выбитый ключ» — «тройной ноль по трём таблицам».
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L10 резолюшн] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf10 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
 -- L10.1 Домен source по каждой таблице резолюшна — доказывает структурность
@@ -1482,6 +1555,11 @@ GO
    Учитывая состояние L8, это не «приятное дополнение», а запасной контур
    для стадирования. Поэтому проверяется отдельно и явно.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L11 график и платежи] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf11 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
 INSERT INTO ##RDW_RESULTS
@@ -1534,6 +1612,11 @@ GO
    (grace_*) и ОТМЕНЫ реструктуризации (canc_date) — без него не считается
    ни cure-правило, ни разрез Stage 3 по реструктуризации.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L12 периферия] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 INSERT INTO ##RDW_RESULTS
 SELECT 12, N'L12 периферия', N'L12.1', N'restructuring_v2',
        N'Событий с датой погашения РАНЬШЕ даты реструктуризации', [dlcr$source],
@@ -1584,6 +1667,11 @@ GO
    По интроспекции у неё видно всего 3 столбца — сам этот факт требует
    подтверждения S2T (витрина или заготовка?).
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'[L13 витрина brm_all_data] начало -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (+' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с от старта), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS));
 DECLARE @AsOf13 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
 INSERT INTO ##RDW_RESULTS
@@ -1619,6 +1707,11 @@ GO
    слоя N не заслуживает доверия, если провален GATE любого слоя < N: сумма,
    посчитанная поверх размноженного JOIN, выглядит как число, но им не является.
    ============================================================================= */
+
+DECLARE @RunStart datetime = (SELECT CONVERT(datetime,value,121) FROM ##RDW_PARAMS WHERE name=N'RunStart');
+PRINT N'=== ВСЕ 14 СЛОЁВ ЗАВЕРШЕНЫ -- ' + CONVERT(nvarchar(19),GETDATE(),120)
+    + N' (' + CONVERT(nvarchar(10),DATEDIFF(SECOND,@RunStart,GETDATE())) + N' с всего), строк в отчёте: '
+    + CONVERT(nvarchar(10),(SELECT COUNT(*) FROM ##RDW_RESULTS)) + N' ===';
 
 -- Отчёт 1: сводка по слоям + до какого слоя вообще можно доверять
 IF OBJECT_ID('tempdb..#gatefail') IS NOT NULL DROP TABLE #gatefail;
