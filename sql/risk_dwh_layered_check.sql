@@ -104,6 +104,19 @@
        перед COUNT(*)=COUNT(DISTINCT key) — тавтология, проверка гарантированно
        проходит КОНСТРУКЦИЕЙ запроса. Стоило времени 17.07 (PR #14 отозван).
 
+   ОПТИМИЗАЦИЯ ПЕРЕД ПРОГОНОМ №2 (04.08.2026)
+   -----------------------------------------------------------------------------
+     Найдено и исправлено ДО прогона, не по результатам прогона №1 — правки
+     не меняют ни один verdict, только число сканов и время выполнения:
+     * L7.3 и L8.1 сканировали loan_account ЧЕТЫРЕ раза каждый (по разу на
+       счёт/поле, склеенные UNION ALL) вместо одного прохода с несколькими
+       агрегатами. Схлопнуто в 1 скан на проверку через CROSS APPLY VALUES.
+     * #act (L2) и #la (L3) — локальные #temp, не #act/#la ##-глобальные —
+       не удалялись явно после использования, в отличие от #l1 (L1), и
+       переживали остаток прогона в tempdb без необходимости. Добавлен
+       DROP TABLE сразу после последнего использования — тот же паттерн,
+       что уже был в L1, и то же обоснование, что и LOW_TEMPDB выше.
+
    КАК ЗАПУСКАТЬ
    -----------------------------------------------------------------------------
      1. Целиком — если tempdb позволяет. Иначе по слоям: каждый слой
@@ -507,6 +520,7 @@ SELECT 2, N'L2 активный периметр', N'L2.4', N'loans_active (да
        N'Ранее нарушений не было — регрессионный контроль.'
 FROM #act GROUP BY l_source
 OPTION (MAXDOP 1);
+DROP TABLE #act;
 GO
 
 
@@ -642,6 +656,7 @@ SELECT 3, N'L3 деньги loan_account', N'L3.7', N'loan_account (итог п�
        N'Опорная цифра для сверки с эталоном в L6.'
 FROM #la GROUP BY la_source
 OPTION (MAXDOP 1);
+DROP TABLE #la;
 GO
 
 
@@ -1050,7 +1065,11 @@ GROUP BY source_system
 OPTION (MAXDOP 1);
 
 /* L7.3 Компонентный разрез: какой счёт формирует расхождение.
-   Именно так было локализовано S03: 1428 → 30,47 млрд, 18771 → 3,02 млрд. */
+   Именно так было локализовано S03: 1428 → 30,47 млрд, 18771 → 3,02 млрд.
+   ОПТИМИЗАЦИЯ 04.08.2026: было 4x UNION ALL одного и того же loan_account
+   с одним и тем же фильтром (по разу на счёт) — четыре скана таблицы вместо
+   одного. Суммы всех четырёх счетов считаются за один проход, раскладка по
+   строкам — через CROSS APPLY VALUES; форма отчёта не меняется. */
 DECLARE @AsOf7 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 INSERT INTO ##RDW_RESULTS
 SELECT 7, N'L7 провизии', N'L7.3', N'Компоненты провизий новой ветки',
@@ -1058,18 +1077,16 @@ SELECT 7, N'L7 провизии', N'L7.3', N'Компоненты провизи
        N'sum_'+acc_name, acc_sum, N'справочно', N'INFO', 0,
        N'Разложение делает расхождение адресным: «провизии не сходятся» ничего не даёт разработчику, «1428 выше на N» — даёт.'
 FROM (
-    SELECT la_source, N'1428' AS acc_name, SUM(TRY_CAST(la_account_1428 AS decimal(38,2))) AS acc_sum
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf7 GROUP BY la_source
-    UNION ALL
-    SELECT la_source, N'1845', SUM(TRY_CAST(la_account_1845 AS decimal(38,2)))
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf7 GROUP BY la_source
-    UNION ALL
-    SELECT la_source, N'18770', SUM(TRY_CAST(la_account_18770 AS decimal(38,2)))
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf7 GROUP BY la_source
-    UNION ALL
-    SELECT la_source, N'18771', SUM(TRY_CAST(la_account_18771 AS decimal(38,2)))
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf7 GROUP BY la_source
-) c
+    SELECT la_source,
+           SUM(TRY_CAST(la_account_1428  AS decimal(38,2))) AS s_1428,
+           SUM(TRY_CAST(la_account_1845  AS decimal(38,2))) AS s_1845,
+           SUM(TRY_CAST(la_account_18770 AS decimal(38,2))) AS s_18770,
+           SUM(TRY_CAST(la_account_18771 AS decimal(38,2))) AS s_18771
+    FROM [Dictionaries].[risk_analytics].[loan_account]
+    WHERE la_reporting_date = @AsOf7
+    GROUP BY la_source
+) g
+CROSS APPLY (VALUES (N'1428',s_1428), (N'1845',s_1845), (N'18770',s_18770), (N'18771',s_18771)) c(acc_name, acc_sum)
 OPTION (MAXDOP 1);
 GO
 
@@ -1092,7 +1109,12 @@ DECLARE @NinetyPlus int = (SELECT CONVERT(int,value) FROM ##RDW_PARAMS WHERE nam
 DECLARE @MinBase    int = (SELECT CONVERT(int,value) FROM ##RDW_PARAMS WHERE name=N'MinBase');
 DECLARE @AsOf8 date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'AsOf');
 
--- L8.1 Заполненность DPD-полей: сколько вообще есть чем считать
+/* L8.1 Заполненность DPD-полей: сколько вообще есть чем считать.
+   ОПТИМИЗАЦИЯ 04.08.2026: было 4x UNION ALL одного и того же loan_account с
+   одним и тем же фильтром (по разу на поле) — четыре скана вместо одного.
+   total и nulls по всем четырём полям считаются за один проход и раскладываются
+   по строкам через CROSS APPLY VALUES; форма отчёта не меняется — total
+   по-прежнему одинаков для всех полей одного source (тот же COUNT_BIG(*)). */
 INSERT INTO ##RDW_RESULTS
 SELECT 8, N'L8 DPD и 90+', N'L8.1', N'loan_account.'+fld,
        N'Доля NULL по полю '+fld+N', % от периметра источника', la_source,
@@ -1102,22 +1124,21 @@ SELECT 8, N'L8 DPD и 90+', N'L8.1', N'loan_account.'+fld,
             WHEN 100.0*nulls/total >= 50 THEN N'FAIL' ELSE N'WARN' END, 0,
        N'Регрессия: S17 days_past_due_interest = 100% NULL; S03 days_past_due — 87,90%; S02 — 99,30%. Это не «нет просрочки», это отсутствие измерения.'
 FROM (
-    SELECT la_source, N'days_past_due' AS fld, COUNT_BIG(*) AS total,
-           SUM(CASE WHEN days_past_due IS NULL THEN 1 ELSE 0 END) AS nulls
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf8 GROUP BY la_source
-    UNION ALL
-    SELECT la_source, N'days_past_due_principal', COUNT_BIG(*),
-           SUM(CASE WHEN days_past_due_principal IS NULL THEN 1 ELSE 0 END)
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf8 GROUP BY la_source
-    UNION ALL
-    SELECT la_source, N'days_past_due_interest', COUNT_BIG(*),
-           SUM(CASE WHEN days_past_due_interest IS NULL THEN 1 ELSE 0 END)
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf8 GROUP BY la_source
-    UNION ALL
-    SELECT la_source, N'max_days_past_due_principal_interest', COUNT_BIG(*),
-           SUM(CASE WHEN max_days_past_due_principal_interest IS NULL THEN 1 ELSE 0 END)
-      FROM [Dictionaries].[risk_analytics].[loan_account] WHERE la_reporting_date = @AsOf8 GROUP BY la_source
-) f
+    SELECT la_source, COUNT_BIG(*) AS total,
+           SUM(CASE WHEN days_past_due IS NULL THEN 1 ELSE 0 END)                        AS n_dpd,
+           SUM(CASE WHEN days_past_due_principal IS NULL THEN 1 ELSE 0 END)              AS n_dpd_principal,
+           SUM(CASE WHEN days_past_due_interest IS NULL THEN 1 ELSE 0 END)               AS n_dpd_interest,
+           SUM(CASE WHEN max_days_past_due_principal_interest IS NULL THEN 1 ELSE 0 END) AS n_dpd_max
+    FROM [Dictionaries].[risk_analytics].[loan_account]
+    WHERE la_reporting_date = @AsOf8
+    GROUP BY la_source
+) g
+CROSS APPLY (VALUES
+    (N'days_past_due', n_dpd),
+    (N'days_past_due_principal', n_dpd_principal),
+    (N'days_past_due_interest', n_dpd_interest),
+    (N'max_days_past_due_principal_interest', n_dpd_max)
+) f(fld, nulls)
 OPTION (MAXDOP 1);
 
 /* L8.2 КОНТРПРИМЕР К «NULL = 0». Это не мнение — это счётчик.
