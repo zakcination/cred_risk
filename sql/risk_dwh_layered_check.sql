@@ -759,22 +759,42 @@ DECLARE @AsOf date = (SELECT CONVERT(date,value) FROM ##RDW_PARAMS WHERE name=N'
 DECLARE @SourceFilter nvarchar(10) = NULLIF((SELECT value FROM ##RDW_PARAMS WHERE name=N'SourceFilter'), N'(все)');
 
 -- L4.1 Ссылочная целостность loans → borrower (регрессия DWH-13: 53 договора S02)
+/* КЛЮЧ (уточнено пользователем): borrower↔loans связаны ТОЛЬКО по borrower_id —
+   у borrower своя, отдельная от loans, нумерация gid, поэтому паттерн "джойнить
+   по gid", которым исправлены L9.2/L12.3, здесь НЕ применим. Типы сторон разные
+   (l_borrower_id varchar, b_borrower_id bigint, см. L0.2) — CAST обеих сторон к
+   nvarchar обязателен для сравнения.
+   ПРОИЗВОДИТЕЛЬНОСТЬ: раньше CAST стоял на ВНУТРЕННЕЙ (пересканируемой) стороне
+   borrower внутри коррелированного NOT EXISTS — тот же non-sargable класс,
+   что дал 2+ часа зависания в L11.1 (borrower — многомиллионная таблица, см.
+   L4.5: 3 653 992 строк без ИИН). Материализуем converted-ключ borrower один
+   раз в индексированный #temp; ни один из двух CAST не может провалиться
+   (bigint→nvarchar и varchar→nvarchar — всегда безопасные расширяющие
+   приведения), поэтому обычный CAST, не TRY_CAST. */
+IF OBJECT_ID('tempdb..#borrower_keys') IS NOT NULL DROP TABLE #borrower_keys;
+SELECT DISTINCT CAST(b_borrower_id AS nvarchar(255)) AS b_borrower_id_txt
+INTO #borrower_keys
+FROM [Dictionaries].[risk_analytics].[borrower]
+WHERE b_report_date = @AsOf AND b_borrower_id IS NOT NULL
+OPTION (MAXDOP 1);
+CREATE UNIQUE CLUSTERED INDEX ix_borrower_keys ON #borrower_keys(b_borrower_id_txt);
+
 INSERT INTO ##RDW_RESULTS
 SELECT 4, N'L4 клиент borrower', N'L4.1', N'loans.l_borrower_id → borrower.b_borrower_id',
        N'Активных договоров, чей borrower_id не найден в справочнике', a.l_source,
        N'active_loans_without_borrower', COUNT_BIG(*), N'0',
        CASE WHEN COUNT_BIG(*) > 0 THEN N'FAIL' ELSE N'PASS' END, 0,
-       N'DWH-13: 53 договора S02. JOIN идёт по приведённому типу — l_borrower_id varchar(255) против b_borrower_id bigint (см. L0.2); часть «пропаж» может оказаться артефактом приведения, а не отсутствием клиента. Проверять оба объяснения.'
+       N'DWH-13: 53 договора S02. JOIN по CAST-приведённому типу — l_borrower_id varchar(255) против b_borrower_id bigint (см. L0.2), ключ borrower_id, НЕ gid (у borrower своя нумерация gid, не связанная с loans.l_gid). Часть «пропаж» может оказаться артефактом приведения, а не отсутствием клиента. Проверять оба объяснения.'
 FROM (SELECT DISTINCT l_source, l_borrower_id
       FROM [Dictionaries].[risk_analytics].[loans_active]
       WHERE l_report_date = @AsOf AND l_borrower_id IS NOT NULL
         AND (@SourceFilter IS NULL OR l_source = @SourceFilter)) a
 WHERE NOT EXISTS (
-    SELECT 1 FROM [Dictionaries].[risk_analytics].[borrower] b
-    WHERE b.b_report_date = @AsOf
-      AND TRY_CAST(b.b_borrower_id AS nvarchar(255)) = TRY_CAST(a.l_borrower_id AS nvarchar(255)))
+    SELECT 1 FROM #borrower_keys bk
+    WHERE bk.b_borrower_id_txt = CAST(a.l_borrower_id AS nvarchar(255)))
 GROUP BY a.l_source
 OPTION (MAXDOP 1);
+DROP TABLE #borrower_keys;
 
 -- L4.2 Активные договоры вообще без borrower_id
 INSERT INTO ##RDW_RESULTS
