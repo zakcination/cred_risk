@@ -241,18 +241,21 @@ OPTION (MAXDOP 1);
        (крест l_collateral_id populated × найден-в-pledges по v8-ключу)
 ==============================================================================*/
 SELECT @CaseRun AS case_run, 'B1_COLLATERAL_CATEGORY' AS result_set,
-       k.l_source AS source,
-       CASE WHEN k.l_collateral_id IS NOT NULL THEN 'HAS_COLLATERAL_ID' ELSE 'NO_COLLATERAL_ID' END AS l_collateral_id_state,
-       CASE WHEN EXISTS (SELECT 1 FROM #pledges_slice p WHERE p.c_source = k.l_source AND p.c_loan_gid = k.l_gid)
-            THEN 'FOUND_IN_PLEDGES' ELSE 'NOT_IN_PLEDGES' END AS pledges_state,
+       source, l_collateral_id_state, pledges_state,
        COUNT_BIG(*) AS active_loans
-FROM #loans_active_keys k
-GROUP BY k.l_source,
-       CASE WHEN k.l_collateral_id IS NOT NULL THEN 'HAS_COLLATERAL_ID' ELSE 'NO_COLLATERAL_ID' END,
-       CASE WHEN EXISTS (SELECT 1 FROM #pledges_slice p WHERE p.c_source = k.l_source AND p.c_loan_gid = k.l_gid)
-            THEN 'FOUND_IN_PLEDGES' ELSE 'NOT_IN_PLEDGES' END
+FROM (
+    SELECT k.l_source AS source,
+           CASE WHEN k.l_collateral_id IS NOT NULL THEN 'HAS_COLLATERAL_ID' ELSE 'NO_COLLATERAL_ID' END AS l_collateral_id_state,
+           CASE WHEN EXISTS (SELECT 1 FROM #pledges_slice p WHERE p.c_source = k.l_source AND p.c_loan_gid = k.l_gid)
+                THEN 'FOUND_IN_PLEDGES' ELSE 'NOT_IN_PLEDGES' END AS pledges_state
+    FROM #loans_active_keys k
+) t
+GROUP BY source, l_collateral_id_state, pledges_state
 ORDER BY source, l_collateral_id_state, pledges_state
 OPTION (MAXDOP 1);
+-- Фикс 06.08.2026: та же схема, что A3 — флаги считаются в производной таблице t,
+-- GROUP BY снаружи работает уже над материализованными столбцами, не над
+-- CASE WHEN EXISTS(...) напрямую (см. Msg 130/156 в истории прогонов).
 /* Ожидаемые категории:
      HAS_ID + FOUND     — чисто, как и должно быть
      HAS_ID + NOT_FOUND — известный разрыв (DWH-15/#3: было 49 S03 на старом
@@ -420,28 +423,25 @@ OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lmk ON #loans_master_keys(l_source, l_gid);
 
 SELECT @CaseRun AS case_run, 'D1_ORPHAN_PLEDGES_CLASSIFICATION' AS result_set,
-       p.c_source AS source,
-       CASE
-           WHEN p.c_loan_gid IS NULL OR p.c_source IS NULL THEN 'NULL_KEY_CANNOT_JOIN (см. D2)'
-           WHEN EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_source = p.c_source AND k.l_gid = p.c_loan_gid)
-               THEN 'FOUND_IN_ACTIVE (не orphan)'
-           WHEN EXISTS (SELECT 1 FROM #loans_master_keys m WHERE m.l_source = p.c_source AND m.l_gid = p.c_loan_gid)
-               THEN 'FOUND_IN_LOANS_MASTER_НЕ_ACTIVE (закрыт/неактивен — не аномалия)'
-           ELSE 'TRUE_ORPHAN_NOT_FOUND_ANYWHERE'
-       END AS orphan_class,
+       source, orphan_class,
        COUNT_BIG(*) AS pledges_rows
-FROM #pledges_slice p
-GROUP BY p.c_source,
-       CASE
-           WHEN p.c_loan_gid IS NULL OR p.c_source IS NULL THEN 'NULL_KEY_CANNOT_JOIN (см. D2)'
-           WHEN EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_source = p.c_source AND k.l_gid = p.c_loan_gid)
-               THEN 'FOUND_IN_ACTIVE (не orphan)'
-           WHEN EXISTS (SELECT 1 FROM #loans_master_keys m WHERE m.l_source = p.c_source AND m.l_gid = p.c_loan_gid)
-               THEN 'FOUND_IN_LOANS_MASTER_НЕ_ACTIVE (закрыт/неактивен — не аномалия)'
-           ELSE 'TRUE_ORPHAN_NOT_FOUND_ANYWHERE'
-       END
+FROM (
+    SELECT p.c_source AS source,
+           CASE
+               WHEN p.c_loan_gid IS NULL OR p.c_source IS NULL THEN 'NULL_KEY_CANNOT_JOIN (см. D2)'
+               WHEN EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_source = p.c_source AND k.l_gid = p.c_loan_gid)
+                   THEN 'FOUND_IN_ACTIVE (не orphan)'
+               WHEN EXISTS (SELECT 1 FROM #loans_master_keys m WHERE m.l_source = p.c_source AND m.l_gid = p.c_loan_gid)
+                   THEN 'FOUND_IN_LOANS_MASTER_НЕ_ACTIVE (закрыт/неактивен — не аномалия)'
+               ELSE 'TRUE_ORPHAN_NOT_FOUND_ANYWHERE'
+           END AS orphan_class
+    FROM #pledges_slice p
+) t
+GROUP BY source, orphan_class
 ORDER BY source, orphan_class
 OPTION (MAXDOP 1);
+-- Фикс 06.08.2026: та же схема, что A3/B1 — CASE считается в производной
+-- таблице t, GROUP BY снаружи — над материализованным столбцом.
 
 
 /*==============================================================================
