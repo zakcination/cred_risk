@@ -57,7 +57,23 @@ USE [Dictionaries];
 SET NOCOUNT ON;
 
 DECLARE @CaseRun varchar(120) = 'CASE_RUN_LOANS_PLEDGES_011_KEYS_AND_CARDINALITY';
-DECLARE @AsOf date = '2026-07-01';
+-- Фикс 06.08.2026: жёсткая дата '2026-07-01' на живом прогоне дала 0 строк
+-- везде (loans/loans_active/pledges) — снимок с этой датой в таблице больше
+-- не существует (l_report_date — маркер ТЕКУЩЕГО состояния, не хранимая
+-- история, см. CLAUDE.md). @AsOf теперь резолвится от факта, не хардкодится.
+DECLARE @AsOf date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans_active]);
+
+
+/*==============================================================================
+  00 — Scope control: какая дата реально резолвилась, совпадают ли "последние"
+       даты во всех трёх таблицах (если нет — это само по себе находка)
+==============================================================================*/
+SELECT @CaseRun AS case_run, '00_SCOPE_CONTROL' AS result_set,
+       @AsOf AS resolved_AsOf_from_loans_active,
+       (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]) AS max_l_report_date_in_loans_master,
+       (SELECT MAX(c_reporting_date) FROM [risk_analytics].[pledges]) AS max_c_reporting_date_in_pledges,
+       (SELECT COUNT_BIG(*) FROM [risk_analytics].[loans_active] WHERE l_report_date = @AsOf) AS loans_active_rows_at_resolved_date
+OPTION (MAXDOP 1);
 
 
 /*==============================================================================
@@ -126,7 +142,9 @@ SELECT @CaseRun AS case_run, 'A2_GID_CROSS_SOURCE_COLLISION' AS result_set, z.* 
            SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END) AS gid_values_in_multiple_sources,
            CAST(100.0 * SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END)
                 / NULLIF(COUNT_BIG(*), 0) AS decimal(6,2)) AS pct_colliding,
-           CASE WHEN SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END) = 0
+           CASE WHEN COUNT_BIG(*) = 0
+                THEN 'НЕТ ДАННЫХ на резолвленный @AsOf — см. 00_SCOPE_CONTROL'
+                WHEN ISNULL(SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END), 0) = 0
                 THEN 'l_gid ALONE ДОСТАТОЧЕН — source в составном ключе избыточен (но безвреден)'
                 ELSE 'l_gid КОЛЛИЗИРУЕТ БЕЗ source — составной ключ (source,l_gid) ОБЯЗАТЕЛЕН'
            END AS verdict
@@ -143,7 +161,9 @@ SELECT @CaseRun AS case_run, 'A2_GID_CROSS_SOURCE_COLLISION' AS result_set, z.* 
            SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END),
            CAST(100.0 * SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END)
                 / NULLIF(COUNT_BIG(*), 0) AS decimal(6,2)),
-           CASE WHEN SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END) = 0
+           CASE WHEN COUNT_BIG(*) = 0
+                THEN 'НЕТ ДАННЫХ на резолвленный @AsOf — см. 00_SCOPE_CONTROL'
+                WHEN ISNULL(SUM(CASE WHEN src_count > 1 THEN 1 ELSE 0 END), 0) = 0
                 THEN 'l_gid ALONE ДОСТАТОЧЕН — source в составном ключе избыточен (но безвреден)'
                 ELSE 'l_gid КОЛЛИЗИРУЕТ БЕЗ source — составной ключ (source,l_gid) ОБЯЗАТЕЛЕН'
            END
