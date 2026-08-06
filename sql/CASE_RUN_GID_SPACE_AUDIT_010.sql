@@ -237,3 +237,29 @@ FROM (
 GROUP BY y.table_name, y.gid_column, y.gid_prefix_2
 ORDER BY y.table_name, y.gid_column, distinct_values_with_this_prefix DESC
 OPTION (MAXDOP 1);
+
+
+/*==============================================================================
+  RESULT 04 — [ДОБАВЛЕНО 06.08.2026, по факту живого прогона] Прямая проверка:
+  что кодирует 2-значный префикс? RESULT 03 показал ровно 4 префикса
+  (10/11/12/27) в loans.l_gid — ровно столько же, сколько известных source
+  (S01/S02/S03/S17). Гипотеза: префикс = source, а не "таблица/сущность"
+  (заявленное Кадиржаном "пространства различаются по префиксу" относилось,
+  похоже, не к разным ТАБЛИЦАМ — все они по RESULT 02 делят одно пространство
+  loans.l_gid — а к разным ИСТОЧНИКАМ внутри этого общего пространства).
+  Проверяется здесь напрямую, не предполагается.
+==============================================================================*/
+SELECT
+    @CaseRun AS case_run,
+    '04_PREFIX_VS_SOURCE' AS result_set,
+    LEFT(CAST(l_gid AS varchar(20)), 2) AS gid_prefix_2,
+    l_source,
+    COUNT_BIG(DISTINCT l_gid) AS distinct_gid_count
+FROM [risk_analytics].[loans]
+GROUP BY LEFT(CAST(l_gid AS varchar(20)), 2), l_source
+ORDER BY gid_prefix_2, distinct_gid_count DESC
+OPTION (MAXDOP 1);
+-- Чистая 1:1 (каждый префикс -> ровно один source) подтвердит гипотезу
+-- "префикс = source". Смешение (один префикс -> несколько source, или
+-- наоборот) её опровергнет — тогда префикс кодирует что-то ещё (филиал/
+-- регион/дата миграции) и это отдельный вопрос на выяснение.
