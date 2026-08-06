@@ -69,7 +69,7 @@ OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lak ON #loans_active_keys(l_source, l_gid);
 
 IF OBJECT_ID('tempdb..#pair_rows') IS NOT NULL DROP TABLE #pair_rows;
-SELECT p.c_source, p.c_loan_gid, p.c_collateral_id, p.c_collateral_value
+SELECT p.c_source, p.c_loan_gid, p.c_collateral_id, p.c_collateral_value, p.last_appraisal_date
 INTO #pair_rows
 FROM [risk_analytics].[pledges] p
 WHERE p.c_reporting_date = @AsOf
@@ -81,7 +81,9 @@ IF OBJECT_ID('tempdb..#pair_counts') IS NOT NULL DROP TABLE #pair_counts;
 SELECT c_source, c_loan_gid, c_collateral_id,
        COUNT_BIG(*) AS raw_row_count,
        MIN(c_collateral_value) AS min_collateral_value,
-       MAX(c_collateral_value) AS max_collateral_value
+       MAX(c_collateral_value) AS max_collateral_value,
+       MIN(last_appraisal_date) AS min_appraisal_date,
+       MAX(last_appraisal_date) AS max_appraisal_date
 INTO #pair_counts
 FROM #pair_rows
 GROUP BY c_source, c_loan_gid, c_collateral_id
@@ -188,6 +190,41 @@ SELECT
             THEN N'MATCHES_PRIOR_FINDING'
         ELSE N'DIFFERS_ON_SAME_DATE_REVIEW_REQUIRED'
     END AS control_status
+OPTION (MAXDOP 1);
+
+
+/*==============================================================================
+  RESULT 05 — Среди пар с РАЗНЫМИ значениями (03): различается ли дата оценки
+  между сырыми строками? Различается → правдоподобна история переоценок, не
+  задвоение (нужен фильтр "последняя по дате" при потреблении). Дата ТА ЖЕ, а
+  значение разное → историей не объясняется, это конфликт данных внутри
+  одного снимка на одном и том же ключе.
+==============================================================================*/
+SELECT
+    @CaseRun AS case_run,
+    '05_DIFFERING_VALUE_VS_APPRAISAL_DATE' AS result_set,
+    c_source AS source,
+    CASE
+        WHEN min_appraisal_date IS NULL OR max_appraisal_date IS NULL
+            THEN 'APPRAISAL_DATE_NULL_CANNOT_CLASSIFY'
+        WHEN min_appraisal_date <> max_appraisal_date
+            THEN 'DIFFERING_DATE (правдоподобна история переоценок)'
+        ELSE 'SAME_DATE_DIFFERING_VALUE (историей не объясняется)'
+    END AS explanation_class,
+    COUNT_BIG(*) AS pairs_in_class
+FROM #pair_counts
+WHERE raw_row_count > 1
+  AND NOT (min_collateral_value IS NULL AND max_collateral_value IS NULL)
+  AND NOT (min_collateral_value IS NOT NULL AND max_collateral_value IS NOT NULL AND min_collateral_value = max_collateral_value)
+GROUP BY c_source,
+    CASE
+        WHEN min_appraisal_date IS NULL OR max_appraisal_date IS NULL
+            THEN 'APPRAISAL_DATE_NULL_CANNOT_CLASSIFY'
+        WHEN min_appraisal_date <> max_appraisal_date
+            THEN 'DIFFERING_DATE (правдоподобна история переоценок)'
+        ELSE 'SAME_DATE_DIFFERING_VALUE (историей не объясняется)'
+    END
+ORDER BY source, explanation_class
 OPTION (MAXDOP 1);
 
 DROP TABLE #pair_counts;
