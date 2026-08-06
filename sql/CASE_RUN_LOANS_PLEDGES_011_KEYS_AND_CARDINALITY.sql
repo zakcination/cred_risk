@@ -187,36 +187,53 @@ CREATE CLUSTERED INDEX ix_ps_source_gid ON #pledges_slice(c_source, c_loan_gid);
 SELECT @CaseRun AS case_run, 'A3_KEY_CANDIDATE_COVERAGE' AS result_set, y.* FROM (
     SELECT 'c_source+c_loan_gid (ПОДТВЕРЖДЁННЫЙ, v8)' AS candidate_key,
            COUNT_BIG(*) AS pledges_rows,
-           SUM(CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k
+           SUM(t.is_matched) AS matched
+    FROM (
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k
                                   WHERE k.l_source = p.c_source AND k.l_gid = p.c_loan_gid)
-                    THEN 1 ELSE 0 END) AS matched
-    FROM #pledges_slice p
+                    THEN 1 ELSE 0 END AS is_matched
+        FROM #pledges_slice p
+    ) t
 
     UNION ALL
     SELECT 'c_loan_gid один, без source',
            COUNT_BIG(*),
-           SUM(CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_gid = p.c_loan_gid)
-                    THEN 1 ELSE 0 END)
-    FROM #pledges_slice p
+           SUM(t.is_matched)
+    FROM (
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_gid = p.c_loan_gid)
+                    THEN 1 ELSE 0 END AS is_matched
+        FROM #pledges_slice p
+    ) t
 
     UNION ALL
     SELECT 'c_loan_id (ошибочный ключ DWH-15, для контраста)',
            COUNT_BIG(*),
-           SUM(CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k
+           SUM(t.is_matched)
+    FROM (
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k
                                   WHERE k.l_loan_id = CAST(p.c_loan_id AS varchar(255)))
-                    THEN 1 ELSE 0 END)
-    FROM #pledges_slice p
+                    THEN 1 ELSE 0 END AS is_matched
+        FROM #pledges_slice p
+    ) t
 
     UNION ALL
     SELECT 'c_contract_number vs l_loan_number',
            COUNT_BIG(*),
-           SUM(CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_loan_number = p.c_contract_number)
-                    THEN 1 ELSE 0 END)
-    FROM #pledges_slice p
+           SUM(t.is_matched)
+    FROM (
+        SELECT CASE WHEN EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_loan_number = p.c_contract_number)
+                    THEN 1 ELSE 0 END AS is_matched
+        FROM #pledges_slice p
+    ) t
 ) y
 OPTION (MAXDOP 1);
 -- match_pct считается на стороне клиента/BI из pledges_rows и matched, чтобы избежать
 -- деления в UNION ALL по разным CASE-веткам одной колонки.
+-- Фикс 06.08.2026: SUM(CASE WHEN EXISTS(...) ...) в одной area с COUNT_BIG(*) без
+-- GROUP BY ловит Msg 130 у движка ("aggregate function on expression containing an
+-- aggregate or a subquery") — вынесено вычисление флага в производную таблицу t,
+-- агрегация — уже НАД материализованным столбцом, без коррелированного предиката
+-- в той же области видимости, что и сам SUM.
 
 
 /*==============================================================================
