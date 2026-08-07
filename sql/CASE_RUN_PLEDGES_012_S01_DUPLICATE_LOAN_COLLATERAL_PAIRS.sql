@@ -69,7 +69,7 @@ OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lak ON #loans_active_keys(l_source, l_gid);
 
 IF OBJECT_ID('tempdb..#pair_rows') IS NOT NULL DROP TABLE #pair_rows;
-SELECT p.c_source, p.c_loan_gid, p.c_collateral_id, p.c_collateral_value, p.last_appraisal_date
+SELECT p.c_source, p.c_loan_gid, p.c_collateral_id, p.c_collateral_value, p.last_appraisal_date, p.c_bpm_object_id
 INTO #pair_rows
 FROM [risk_analytics].[pledges] p
 WHERE p.c_reporting_date = @AsOf
@@ -83,7 +83,9 @@ SELECT c_source, c_loan_gid, c_collateral_id,
        MIN(c_collateral_value) AS min_collateral_value,
        MAX(c_collateral_value) AS max_collateral_value,
        MIN(last_appraisal_date) AS min_appraisal_date,
-       MAX(last_appraisal_date) AS max_appraisal_date
+       MAX(last_appraisal_date) AS max_appraisal_date,
+       MIN(c_bpm_object_id) AS min_bpm_object_id,
+       MAX(c_bpm_object_id) AS max_bpm_object_id
 INTO #pair_counts
 FROM #pair_rows
 GROUP BY c_source, c_loan_gid, c_collateral_id
@@ -225,6 +227,81 @@ GROUP BY c_source,
         ELSE 'SAME_DATE_DIFFERING_VALUE (историей не объясняется)'
     END
 ORDER BY source, explanation_class
+OPTION (MAXDOP 1);
+
+
+/*==============================================================================
+  RESULT 06 — Величина расхождения ВНУТРИ "SAME_DATE_DIFFERING_VALUE" (ядро
+  RESULT 05, историей не объясняется): шум округления или реально разные
+  суммы? max/min по c_collateral_value внутри пары.
+==============================================================================*/
+SELECT
+    @CaseRun AS case_run,
+    '06_SAME_DATE_CONFLICT_MAGNITUDE' AS result_set,
+    c_source AS source,
+    CASE
+        WHEN min_collateral_value IS NULL OR max_collateral_value IS NULL THEN 'VALUE_NULL_CANNOT_COMPUTE'
+        WHEN min_collateral_value < 0 OR max_collateral_value < 0 THEN 'NEGATIVE_VALUE_PRESENT_REVIEW'
+        WHEN min_collateral_value = 0 THEN 'MIN_ZERO_RATIO_UNDEFINED'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 1.01 THEN '<=1% (шум округления)'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 1.10 THEN '1-10%'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 1.50 THEN '10-50%'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 2.00 THEN '50-100%'
+        ELSE '>100% (более чем в 2 раза)'
+    END AS discrepancy_magnitude,
+    COUNT_BIG(*) AS pairs_in_bucket
+FROM #pair_counts
+WHERE raw_row_count > 1
+  AND min_appraisal_date IS NOT NULL AND max_appraisal_date IS NOT NULL
+  AND min_appraisal_date = max_appraisal_date
+  AND NOT (min_collateral_value IS NULL AND max_collateral_value IS NULL)
+  AND NOT (min_collateral_value IS NOT NULL AND max_collateral_value IS NOT NULL AND min_collateral_value = max_collateral_value)
+GROUP BY c_source,
+    CASE
+        WHEN min_collateral_value IS NULL OR max_collateral_value IS NULL THEN 'VALUE_NULL_CANNOT_COMPUTE'
+        WHEN min_collateral_value < 0 OR max_collateral_value < 0 THEN 'NEGATIVE_VALUE_PRESENT_REVIEW'
+        WHEN min_collateral_value = 0 THEN 'MIN_ZERO_RATIO_UNDEFINED'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 1.01 THEN '<=1% (шум округления)'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 1.10 THEN '1-10%'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 1.50 THEN '10-50%'
+        WHEN max_collateral_value / NULLIF(min_collateral_value, 0) <= 2.00 THEN '50-100%'
+        ELSE '>100% (более чем в 2 раза)'
+    END
+ORDER BY source, discrepancy_magnitude
+OPTION (MAXDOP 1);
+
+
+/*==============================================================================
+  RESULT 07 — Внутри того же "SAME_DATE_DIFFERING_VALUE" ядра: это один и тот
+  же физический объект залога (c_bpm_object_id стабилен, конфликт только в
+  оценке — менее тяжёлый дефект) или РАЗНЫЕ объекты делят один c_collateral_id
+  (коллизия идентификатора — существенно более тяжёлый дефект)?
+==============================================================================*/
+SELECT
+    @CaseRun AS case_run,
+    '07_SAME_DATE_CONFLICT_BPM_OBJECT_STABILITY' AS result_set,
+    c_source AS source,
+    CASE
+        WHEN min_bpm_object_id IS NULL AND max_bpm_object_id IS NULL THEN 'BPM_OBJECT_ID_NULL_BOTH'
+        WHEN min_bpm_object_id IS NULL OR max_bpm_object_id IS NULL THEN 'BPM_OBJECT_ID_NULL_ONE_SIDE'
+        WHEN min_bpm_object_id = max_bpm_object_id THEN 'SAME_BPM_OBJECT (один физический объект, конфликт только в оценке)'
+        ELSE 'DIFFERENT_BPM_OBJECT (разные объекты делят один c_collateral_id — коллизия идентификатора)'
+    END AS bpm_object_stability,
+    COUNT_BIG(*) AS pairs_in_class
+FROM #pair_counts
+WHERE raw_row_count > 1
+  AND min_appraisal_date IS NOT NULL AND max_appraisal_date IS NOT NULL
+  AND min_appraisal_date = max_appraisal_date
+  AND NOT (min_collateral_value IS NULL AND max_collateral_value IS NULL)
+  AND NOT (min_collateral_value IS NOT NULL AND max_collateral_value IS NOT NULL AND min_collateral_value = max_collateral_value)
+GROUP BY c_source,
+    CASE
+        WHEN min_bpm_object_id IS NULL AND max_bpm_object_id IS NULL THEN 'BPM_OBJECT_ID_NULL_BOTH'
+        WHEN min_bpm_object_id IS NULL OR max_bpm_object_id IS NULL THEN 'BPM_OBJECT_ID_NULL_ONE_SIDE'
+        WHEN min_bpm_object_id = max_bpm_object_id THEN 'SAME_BPM_OBJECT (один физический объект, конфликт только в оценке)'
+        ELSE 'DIFFERENT_BPM_OBJECT (разные объекты делят один c_collateral_id — коллизия идентификатора)'
+    END
+ORDER BY source, bpm_object_stability
 OPTION (MAXDOP 1);
 
 DROP TABLE #pair_counts;
