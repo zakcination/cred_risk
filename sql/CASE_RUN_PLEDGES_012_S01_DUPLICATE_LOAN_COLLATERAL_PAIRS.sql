@@ -304,6 +304,33 @@ GROUP BY c_source,
 ORDER BY source, bpm_object_stability
 OPTION (MAXDOP 1);
 
+
+/*==============================================================================
+  RESULT 08 — Проверка гипотезы "коллизия из-за потери точности float":
+  порядок величины (число значащих цифр) c_collateral_id для конфликтующих
+  пар. float(53) точно хранит целые только до 2^53 ≈ 9*10^15 (16 цифр);
+  17+ цифр — почти гарантированная потеря точности при округлении разных
+  исходных ID в одно и то же значение float. Другие gid-подобные ID в этой
+  схеме (loans.l_gid и т.д., см. CASE_RUN_GID_SPACE_AUDIT_010) — 18 цифр.
+==============================================================================*/
+SELECT
+    @CaseRun AS case_run,
+    '08_COLLATERAL_ID_MAGNITUDE_FOR_CONFLICTS' AS result_set,
+    c_source AS source,
+    LEN(CAST(CAST(c_collateral_id AS bigint) AS varchar(30))) AS collateral_id_digit_length,
+    COUNT_BIG(*) AS pairs_at_this_length
+FROM #pair_counts
+WHERE raw_row_count > 1
+  AND min_appraisal_date IS NOT NULL AND max_appraisal_date IS NOT NULL
+  AND min_appraisal_date = max_appraisal_date
+  AND NOT (min_collateral_value IS NULL AND max_collateral_value IS NULL)
+  AND NOT (min_collateral_value IS NOT NULL AND max_collateral_value IS NOT NULL AND min_collateral_value = max_collateral_value)
+GROUP BY c_source, LEN(CAST(CAST(c_collateral_id AS bigint) AS varchar(30)))
+ORDER BY source, collateral_id_digit_length
+OPTION (MAXDOP 1);
+-- >=16 цифр на большинстве пар подтверждает механизм (float-округление);
+-- заметно меньше цифр — гипотеза не подтверждается, коллизия имеет другую причину.
+
 DROP TABLE #pair_counts;
 DROP TABLE #pair_rows;
 DROP TABLE #loans_active_keys;
