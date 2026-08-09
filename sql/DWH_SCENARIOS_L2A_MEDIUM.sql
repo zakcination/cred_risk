@@ -54,14 +54,43 @@ CREATE CLUSTERED INDEX ix_la_gid ON #la(l_gid);
 CREATE INDEX ix_la_borrower ON #la(l_borrower_id);
 CREATE INDEX ix_la_loanid ON #la(l_loan_id);
 
+/* ИСПРАВЛЕНО ПОСЛЕ ПРОБЫ P1 (T26/T35). Было `WHERE la_reporting_date = @AsOf`,
+   и это ТИХО оставляло один S03: на 2026-08-01 остальные три источника в
+   loan_account отсутствуют, потому что загружены на месяц раньше. Шесть
+   сценариев (M01c, M01d, M05, M07, M11, M20) показали бы S01/S02/S17 как
+   «нет баланса» — тот самый режим отказа, который проба и вскрыла.
+   Берём последнюю дату КАЖДОГО источника и печатаем её явно. */
+IF OBJECT_ID('tempdb..#src_last') IS NOT NULL DROP TABLE #src_last;
+SELECT la_source, MAX(la_reporting_date) AS last_date
+INTO #src_last FROM [risk_analytics].[loan_account] GROUP BY la_source
+OPTION (MAXDOP 1);
+CREATE CLUSTERED INDEX ix_srclast ON #src_last(la_source);
+
 IF OBJECT_ID('tempdb..#acct') IS NOT NULL DROP TABLE #acct;
-SELECT la_source, la_gid, total_balance_debt, principal_balance_debt,
-       days_past_due, delinquency_bucket
+IF OBJECT_ID('tempdb..#src_last') IS NOT NULL DROP TABLE #src_last;
+IF OBJECT_ID('tempdb..#ir') IS NOT NULL DROP TABLE #ir;
+SELECT a.la_source, a.la_gid, a.la_reporting_date,
+       a.total_balance_debt, a.principal_balance_debt,
+       a.days_past_due, a.delinquency_bucket
 INTO #acct
-FROM [risk_analytics].[loan_account]
-WHERE la_reporting_date = @AsOf
+FROM [risk_analytics].[loan_account] a
+JOIN #src_last k ON k.la_source = a.la_source AND k.last_date = a.la_reporting_date
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_acct_gid ON #acct(la_gid);
+
+SELECT @Suite AS suite, '00b_ACCOUNT_EFFECTIVE_DATES' AS scenario,
+       la_source AS source, last_date AS effective_date,
+       CASE WHEN last_date = @AsOf THEN 'совпадает с loans'
+            ELSE 'СЕТКА СДВИНУТА относительно loans' END AS grid_state
+FROM #src_last ORDER BY source OPTION (MAXDOP 1);
+
+/* Ставка живёт НЕ в loans (P7a): `l_rate` — название кредитной программы.
+   Настоящая ставка — в interest_rates, ключ `loan_id = l_gid` (100%, P9d). */
+IF OBJECT_ID('tempdb..#ir') IS NOT NULL DROP TABLE #ir;
+SELECT loan_id AS l_gid, interest_rate, effective_rate, initial_nominal_rate
+INTO #ir FROM [risk_analytics].[interest_rates] WHERE loan_id IS NOT NULL
+OPTION (MAXDOP 1);
+CREATE CLUSTERED INDEX ix_ir ON #ir(l_gid);
 
 IF OBJECT_ID('tempdb..#pl') IS NOT NULL DROP TABLE #pl;
 SELECT c_source, c_loan_gid, c_collateral_id, c_bpm_object_id,
@@ -122,10 +151,18 @@ OPTION (MAXDOP 1);
 SELECT @Suite AS suite, 'M01c_CLIENT_LOANS' AS scenario,
        k.l_source, k.l_gid, k.l_product_type, k.l_loan_status, k.l_currency,
        CAST(k.l_loan_amount AS decimal(38,2)) AS loan_amount,
-       TRY_CONVERT(decimal(18,4), k.l_rate) AS rate_numeric,
-       CASE WHEN k.l_rate IS NOT NULL AND TRY_CONVERT(decimal(18,4), k.l_rate) IS NULL
-            THEN k.l_rate ELSE NULL END AS rate_unparseable_raw,
+       /* ИСПРАВЛЕНО ПОСЛЕ P2c/P7a: `l_rate` — это НАЗВАНИЕ КРЕДИТНОЙ ПРОГРАММЫ,
+          а не ставка (0 конвертируемых из 8 259 299). Отдаём его как программу,
+          а ставку берём из interest_rates. Прежние колонки rate_numeric /
+          rate_unparseable_raw были бы NULL и «мусор» на 100% строк. */
+       k.l_rate AS programme,
+       ir.interest_rate AS nominal_rate,
+       ir.effective_rate AS effective_rate_gesv,
+       CASE WHEN ir.l_gid IS NULL THEN N'СТАВКИ НЕТ (покрытие 48,9%, T45)'
+            WHEN ir.interest_rate <= 1 THEN N'ШКАЛА (0;1] — доля? см. T40'
+            ELSE N'шкала (1;100]' END AS rate_scale_note,
        k.l_initial_term_months, k.l_loan_open_date, k.l_loan_maturity_date,
+       a.la_reporting_date AS balance_as_of,
        CAST(a.total_balance_debt AS decimal(38,2)) AS balance,
        a.days_past_due, a.delinquency_bucket,
        (SELECT COUNT_BIG(DISTINCT p.object_key) FROM #pl p WHERE p.c_loan_gid = k.l_gid) AS distinct_collateral_objects,
@@ -135,6 +172,7 @@ SELECT @Suite AS suite, 'M01c_CLIENT_LOANS' AS scenario,
        r.r_loan_rating, r.r_client_rating
 FROM #la k
 LEFT JOIN #acct a ON a.la_gid = k.l_gid
+LEFT JOIN #ir   ir ON ir.l_gid = k.l_gid
 LEFT JOIN [risk_analytics].[ratings] r ON r.r_deal_gid = k.l_gid AND r.r_report_date = @AsOf
 WHERE k.l_borrower_id = @TestBorrowerId
 OPTION (MAXDOP 1);
@@ -269,23 +307,59 @@ ORDER BY loans DESC OPTION (MAXDOP 1);
 
 
 /*==============================================================================
-  M07 — Средняя ставка по продукту, взвешенная по остатку (T25)
-  Взвешенная и простая рядом: расхождение показывает, что крупные договоры
-  систематически дешевле/дороже — это содержательный сигнал, не шум.
+  M07 — Ставка по продукту. ПЕРЕПИСАН ПОСЛЕ ПРОБ P2/P7/P8/P9.
+
+  ЧТО БЫЛО НЕ ТАК. Сценарий считал AVG и взвешенную среднюю по
+  `TRY_CONVERT(decimal, l_rate)` с фильтром `... IS NOT NULL`. После P2b
+  известно, что таких строк **ноль из 8 259 299** — запрос гарантированно
+  возвращал пустой результат. Плюс продукт брался из `l_product_type`, который
+  NULL у S01/S02/S17, тогда как продуктовое измерение лежит в `l_rate`.
+
+  ЧТО ТЕПЕРЬ. Продукт = программа из `l_rate`; ставка = `interest_rates`
+  по ключу `loan_id = l_gid`. Среднее НЕ считается по смешанному набору:
+  T40 доказал две шкалы внутри одной программы (229 программ / 1 720 575
+  договоров). Средние выводятся ОТДЕЛЬНО в каждой шкале — среднее внутри одной
+  шкалы осмысленно, среднее по смеси занижено и бессмысленно.
 ==============================================================================*/
-SELECT @Suite AS suite, 'M07_WEIGHTED_RATE_BY_PRODUCT' AS scenario,
+SELECT @Suite AS suite, 'M07_RATE_BY_PROGRAMME' AS scenario,
+       source, rate_scale,
+       COUNT_BIG(*) AS programmes,
+       SUM(loans_priced) AS loans_priced,
+       CAST(SUM(sum_rate) / NULLIF(SUM(loans_priced), 0) AS decimal(18,4)) AS simple_avg_rate,
+       CAST(SUM(sum_rate_x_bal) / NULLIF(SUM(sum_bal), 0) AS decimal(18,4)) AS balance_weighted_rate
+FROM (
+    SELECT k.l_source AS source,
+           k.l_rate AS programme,
+           CASE WHEN ir.interest_rate <= 1 THEN N'(0;1] — доля?'
+                ELSE N'(1;100] — проценты' END AS rate_scale,
+           COUNT_BIG(*) AS loans_priced,
+           SUM(ir.interest_rate) AS sum_rate,
+           SUM(ir.interest_rate * a.total_balance_debt) AS sum_rate_x_bal,
+           SUM(a.total_balance_debt) AS sum_bal
+    FROM #la k
+    INNER JOIN #ir   ir ON ir.l_gid = k.l_gid
+    INNER JOIN #acct a  ON a.la_gid = k.l_gid
+    WHERE ir.interest_rate IS NOT NULL AND ir.interest_rate > 0
+      AND a.total_balance_debt > 0
+    GROUP BY k.l_source, k.l_rate,
+           CASE WHEN ir.interest_rate <= 1 THEN N'(0;1] — доля?'
+                ELSE N'(1;100] — проценты' END
+) d
+GROUP BY source, rate_scale
+ORDER BY source, rate_scale
+OPTION (MAXDOP 1);
+
+/* Сколько активных договоров вообще получат ставку — знаменатель к M07.
+   Без него «средняя ставка» читается как «по портфелю», а она по 48,9%. */
+SELECT @Suite AS suite, 'M07b_RATE_COVERAGE' AS scenario,
        k.l_source AS source,
-       ISNULL(k.l_product_type, N'(NULL — T9)') AS product_type,
-       COUNT_BIG(*) AS loans_priced,
-       CAST(AVG(TRY_CONVERT(decimal(18,6), k.l_rate)) AS decimal(18,4)) AS simple_avg_rate,
-       CAST(SUM(TRY_CONVERT(decimal(18,6), k.l_rate) * a.total_balance_debt)
-            / NULLIF(SUM(a.total_balance_debt), 0) AS decimal(18,4)) AS balance_weighted_rate
+       COUNT_BIG(*) AS active_loans,
+       SUM(CASE WHEN ir.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS with_rate,
+       CAST(100.0 * SUM(CASE WHEN ir.l_gid IS NOT NULL THEN 1 ELSE 0 END)
+            / NULLIF(COUNT_BIG(*), 0) AS decimal(9,4)) AS coverage_pct
 FROM #la k
-INNER JOIN #acct a ON a.la_gid = k.l_gid
-WHERE TRY_CONVERT(decimal(18,6), k.l_rate) IS NOT NULL
-  AND a.total_balance_debt > 0
-GROUP BY k.l_source, ISNULL(k.l_product_type, N'(NULL — T9)')
-ORDER BY source, product_type OPTION (MAXDOP 1);
+LEFT JOIN #ir ir ON ir.l_gid = k.l_gid
+GROUP BY k.l_source ORDER BY source OPTION (MAXDOP 1);
 
 
 /*==============================================================================
@@ -470,20 +544,40 @@ GROUP BY source ORDER BY source OPTION (MAXDOP 1);
 
 
 /*==============================================================================
-  M16 — Реструктуризация: ставка до vs после
-  new_interest_rate — float, l_rate — varchar (T25). Сравнение только после
-  приведения; нечисловые исходные ставки считаются отдельно, не молча теряются.
+  M16 — Реструктуризация: ставка до против после. ИСПРАВЛЕН ПОСЛЕ P2/P9.
+
+  БЫЛО: `new_interest_rate` сравнивалась с `TRY_CONVERT(decimal, l_rate)`.
+  Так как `l_rate` не конвертируется НИ НА ОДНОЙ строке, все три счётчика
+  (decreased/increased/unchanged) были бы тождественным нулём, а
+  `original_rate_unparseable` — 100%. Формально не ошибка, но содержательно
+  запрос ничего бы не измерил.
+
+  СТАЛО: сравнение с `interest_rates.interest_rate`. Дополнительно печатается
+  совпадение ШКАЛ у двух полей: если ставка до и после записаны в разных
+  шкалах (T40), сравнение «выросла/упала» бессмысленно, и это надо видеть,
+  а не растворять в счётчиках.
 ==============================================================================*/
 SELECT @Suite AS suite, 'M16_RATE_BEFORE_AFTER_RESTRUCTURING' AS scenario,
        k.l_source AS source,
        COUNT_BIG(*) AS restructured_loans,
-       SUM(CASE WHEN TRY_CONVERT(decimal(18,6), k.l_rate) IS NULL THEN 1 ELSE 0 END) AS original_rate_unparseable,
+       SUM(CASE WHEN ir.interest_rate IS NULL THEN 1 ELSE 0 END) AS no_rate_before,
        SUM(CASE WHEN r.new_interest_rate IS NULL THEN 1 ELSE 0 END) AS new_rate_null,
-       SUM(CASE WHEN r.new_interest_rate < TRY_CONVERT(decimal(18,6), k.l_rate) THEN 1 ELSE 0 END) AS rate_decreased,
-       SUM(CASE WHEN r.new_interest_rate > TRY_CONVERT(decimal(18,6), k.l_rate) THEN 1 ELSE 0 END) AS rate_increased,
-       SUM(CASE WHEN r.new_interest_rate = TRY_CONVERT(decimal(18,6), k.l_rate) THEN 1 ELSE 0 END) AS rate_unchanged
+       /* Шкалы обоих полей должны совпадать, иначе сравнение не имеет смысла */
+       SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
+                 AND ((ir.interest_rate <= 1) <> (r.new_interest_rate <= 1))
+                THEN 1 ELSE 0 END) AS scale_mismatch_NOT_COMPARABLE,
+       SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
+                 AND ((ir.interest_rate <= 1) = (r.new_interest_rate <= 1))
+                 AND r.new_interest_rate < ir.interest_rate THEN 1 ELSE 0 END) AS rate_decreased,
+       SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
+                 AND ((ir.interest_rate <= 1) = (r.new_interest_rate <= 1))
+                 AND r.new_interest_rate > ir.interest_rate THEN 1 ELSE 0 END) AS rate_increased,
+       SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
+                 AND ((ir.interest_rate <= 1) = (r.new_interest_rate <= 1))
+                 AND r.new_interest_rate = ir.interest_rate THEN 1 ELSE 0 END) AS rate_unchanged
 FROM #la k
 INNER JOIN #restr r ON r.dlcr_gid = k.l_gid
+LEFT JOIN #ir ir ON ir.l_gid = k.l_gid
 GROUP BY k.l_source ORDER BY source OPTION (MAXDOP 1);
 
 
