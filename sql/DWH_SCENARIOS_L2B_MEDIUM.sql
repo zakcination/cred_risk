@@ -66,10 +66,13 @@ WHERE TABLE_SCHEMA = 'risk_analytics'
     OR (TABLE_NAME = 'pledges' AND COLUMN_NAME IN
           ('c_car_year','c_car_value','c_market_car_value',
            'c_collateral_value','c_market_collateral_value'))
-    OR (TABLE_NAME = 'loans' AND COLUMN_NAME IN
+    /* И `loans`, И `loans_active`: у вьюхи набор колонок УЖЕ, чем у таблицы,
+       и 09.08 это уронило батч на `l_segment` / `l_financial_consultant`. */
+    OR (TABLE_NAME IN ('loans','loans_active') AND COLUMN_NAME IN
           ('l_segment','l_entrepreneur_category','l_financial_consultant',
            'l_first_repayment_date','l_scheduled_closure_date',
-           'l_actual_closure_date','l_currency_rate'))
+           'l_actual_closure_date','l_currency_rate','l_loan_number',
+           'l_funding_date','l_loan_open_date'))
   )
 ORDER BY TABLE_NAME, COLUMN_NAME
 OPTION (MAXDOP 1);
@@ -98,9 +101,13 @@ OPTION (MAXDOP 1);
   МАТЕРИАЛИЗАЦИЯ
 ------------------------------------------------------------------------------*/
 IF OBJECT_ID('tempdb..#la') IS NOT NULL DROP TABLE #la;
+/* ИСПРАВЛЕНО ПОСЛЕ ПРОГОНА 09.08 (Msg 207). `loans_active` НЕ содержит
+   `l_segment` и `l_financial_consultant` — они есть только в `loans`.
+   Батч 0 этого не поймал, потому что аудитировал их в `loans`, а не в
+   `loans_active`: собственная слепота аудита, теперь закрыта. Атрибуты
+   вынесены в отдельный батч, чтобы их отсутствие не роняло 18 сценариев. */
 SELECT l_source, l_gid, l_borrower_id, l_loan_id, l_loan_number,
-       l_loan_amount, l_currency, l_product_type, l_segment,
-       l_entrepreneur_category, l_financial_consultant,
+       l_loan_amount, l_currency, l_product_type,
        l_loan_open_date, l_funding_date, l_first_repayment_date,
        l_scheduled_closure_date, l_actual_closure_date
 INTO #la
@@ -346,30 +353,6 @@ FROM (
 ) x
 GROUP BY source, dpd_definition
 ORDER BY source, dpd_definition
-OPTION (MAXDOP 1);
-
-
-/*==============================================================================
-  M26 — Согласованность сегмента, категории предпринимателя и типа заёмщика.
-  Ищем комбинации, которые не должны существовать (ФЛ с корп-сегментом и т.п.).
-==============================================================================*/
-SELECT @Suite AS suite, 'M26_SEGMENT_CONSISTENCY' AS scenario,
-       source, segment, entrepreneur_category, borrower_type, loans
-FROM (
-    SELECT l.l_source AS source,
-           ISNULL(l.l_segment, N'(NULL)') AS segment,
-           ISNULL(l.l_entrepreneur_category, N'(NULL)') AS entrepreneur_category,
-           ISNULL(b.b_borrower_type, N'(НЕТ В borrower)') AS borrower_type,
-           COUNT_BIG(*) AS loans,
-           ROW_NUMBER() OVER (PARTITION BY l.l_source ORDER BY COUNT_BIG(*) DESC) AS rn
-    FROM #la l
-    LEFT JOIN #b b ON b.b_borrower_id = l.l_borrower_id
-    GROUP BY l.l_source, ISNULL(l.l_segment, N'(NULL)'),
-             ISNULL(l.l_entrepreneur_category, N'(NULL)'),
-             ISNULL(b.b_borrower_type, N'(НЕТ В borrower)')
-) d
-WHERE rn <= @TopN
-ORDER BY source, loans DESC
 OPTION (MAXDOP 1);
 
 
@@ -712,6 +695,60 @@ ORDER BY source, currency
 OPTION (MAXDOP 1);
 
 
+
+GO
+/*==============================================================================
+  БАТЧ 2 — M26 и M40: атрибуты, которых НЕТ в `loans_active`.
+
+  Отделён `GO` НАМЕРЕННО. 09.08 прогон упал с `Msg 207 Invalid column name
+  'l_segment'` / `'l_financial_consultant'`: эти поля живут в `loans`, но не
+  во вьюхе `loans_active`, на которой строится `#la`. Одна неверная колонка
+  уносила все 18 остальных сценариев батча.
+
+  Здесь периметр по-прежнему задаёт `#la` (активные договоры), а атрибуты
+  подтягиваются из `loans` по gid. Если их нет и там — умрёт только этот
+  батч, а фактические имена уже напечатаны батчем 0.
+  #temp переживают GO; заново объявляются только переменные (Msg 137).
+==============================================================================*/
+SET NOCOUNT ON;
+DECLARE @Suite varchar(60) = 'L2B_MEDIUM';
+DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
+DECLARE @TopN  int  = 20;
+
+IF OBJECT_ID('tempdb..#lattr') IS NOT NULL DROP TABLE #lattr;
+SELECT l.l_gid, l.l_segment, l.l_entrepreneur_category, l.l_financial_consultant
+INTO #lattr
+FROM [risk_analytics].[loans] l
+WHERE l.l_report_date = @AsOf
+  AND EXISTS (SELECT 1 FROM #la k WHERE k.l_gid = l.l_gid)
+OPTION (MAXDOP 1);
+CREATE CLUSTERED INDEX ix_lattr ON #lattr(l_gid);
+
+/*==============================================================================
+  M26 — Согласованность сегмента, категории предпринимателя и типа заёмщика.
+  Ищем комбинации, которые не должны существовать (ФЛ с корп-сегментом и т.п.).
+==============================================================================*/
+SELECT @Suite AS suite, 'M26_SEGMENT_CONSISTENCY' AS scenario,
+       source, segment, entrepreneur_category, borrower_type, loans
+FROM (
+    SELECT l.l_source AS source,
+           ISNULL(at.l_segment, N'(NULL)') AS segment,
+           ISNULL(at.l_entrepreneur_category, N'(NULL)') AS entrepreneur_category,
+           ISNULL(b.b_borrower_type, N'(НЕТ В borrower)') AS borrower_type,
+           COUNT_BIG(*) AS loans,
+           ROW_NUMBER() OVER (PARTITION BY l.l_source ORDER BY COUNT_BIG(*) DESC) AS rn
+    FROM #la l
+    LEFT JOIN #lattr at ON at.l_gid = l.l_gid
+    LEFT JOIN #b b ON b.b_borrower_id = l.l_borrower_id
+    GROUP BY l.l_source, ISNULL(at.l_segment, N'(NULL)'),
+             ISNULL(at.l_entrepreneur_category, N'(NULL)'),
+             ISNULL(b.b_borrower_type, N'(НЕТ В borrower)')
+) d
+WHERE rn <= @TopN
+ORDER BY source, loans DESC
+OPTION (MAXDOP 1);
+
+
 /*==============================================================================
   M40 — Портфель по финансовому консультанту.
   PII: ФИО сотрудника НЕ выводится. Отдаём концентрацию и разброс —
@@ -725,11 +762,12 @@ SELECT @Suite AS suite, 'M40_CONSULTANT_CONCENTRATION' AS scenario,
        MAX(loans) AS max_loans_per_consultant,
        CAST(AVG(1.0 * loans) AS decimal(18,2)) AS avg_loans_per_consultant
 FROM (
-    SELECT l_source AS source, l_financial_consultant, COUNT_BIG(*) AS loans
-    FROM #la
-    WHERE l_financial_consultant IS NOT NULL
-      AND LTRIM(RTRIM(l_financial_consultant)) <> N''
-    GROUP BY l_source, l_financial_consultant
+    SELECT l_source AS source, at_l_financial_consultant, COUNT_BIG(*) AS loans
+    FROM (SELECT k.l_source, at.l_financial_consultant AS at_l_financial_consultant
+        FROM #la k JOIN #lattr at ON at.l_gid = k.l_gid) z
+    WHERE at_l_financial_consultant IS NOT NULL
+      AND LTRIM(RTRIM(at_l_financial_consultant)) <> N''
+    GROUP BY l_source, at_l_financial_consultant
 ) d
 GROUP BY source
 ORDER BY source
@@ -739,19 +777,25 @@ OPTION (MAXDOP 1);
 SELECT @Suite AS suite, 'M40b_CONSULTANT_FILL_RATE' AS scenario,
        l_source AS source,
        COUNT_BIG(*) AS active_loans,
-       SUM(CASE WHEN l_financial_consultant IS NULL
-                  OR LTRIM(RTRIM(l_financial_consultant)) = N''
+       SUM(CASE WHEN at_l_financial_consultant IS NULL
+                  OR LTRIM(RTRIM(at_l_financial_consultant)) = N''
                 THEN 1 ELSE 0 END) AS no_consultant
-FROM #la
+/* LEFT, а не INNER: это ЗАПОЛНЕННОСТЬ поля, и знаменатель обязан быть полным
+   активным портфелем. INNER занизил бы active_loans на договоры без атрибута
+   и превратил бы метрику пропусков в метрику наличия. */
+FROM (SELECT k.l_source, at.l_financial_consultant AS at_l_financial_consultant
+        FROM #la k LEFT JOIN #lattr at ON at.l_gid = k.l_gid) z
 GROUP BY l_source
 ORDER BY source
 OPTION (MAXDOP 1);
+
 
 
 /*------------------------------------------------------------------------------
   УБОРКА (немедленная — после переполнения tempdb 17.07)
 ------------------------------------------------------------------------------*/
 IF OBJECT_ID('tempdb..#la')      IS NOT NULL DROP TABLE #la;
+IF OBJECT_ID('tempdb..#lattr')   IS NOT NULL DROP TABLE #lattr;
 IF OBJECT_ID('tempdb..#la_last') IS NOT NULL DROP TABLE #la_last;
 IF OBJECT_ID('tempdb..#acct')    IS NOT NULL DROP TABLE #acct;
 IF OBJECT_ID('tempdb..#b')       IS NOT NULL DROP TABLE #b;

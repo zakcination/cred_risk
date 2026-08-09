@@ -562,18 +562,25 @@ SELECT @Suite AS suite, 'M16_RATE_BEFORE_AFTER_RESTRUCTURING' AS scenario,
        COUNT_BIG(*) AS restructured_loans,
        SUM(CASE WHEN ir.interest_rate IS NULL THEN 1 ELSE 0 END) AS no_rate_before,
        SUM(CASE WHEN r.new_interest_rate IS NULL THEN 1 ELSE 0 END) AS new_rate_null,
-       /* Шкалы обоих полей должны совпадать, иначе сравнение не имеет смысла */
+       /* Шкалы обоих полей должны совпадать, иначе сравнение не имеет смысла.
+          Признак шкалы разворачивается через CASE, а НЕ как `(a<=1) <> (b<=1)`:
+          в T-SQL нет булева типа, предикат нельзя сравнить с предикатом —
+          это даёт `Msg 102 Incorrect syntax near '<'`. */
        SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
-                 AND ((ir.interest_rate <= 1) <> (r.new_interest_rate <= 1))
+                 AND CASE WHEN ir.interest_rate <= 1 THEN 1 ELSE 0 END
+                  <> CASE WHEN r.new_interest_rate <= 1 THEN 1 ELSE 0 END
                 THEN 1 ELSE 0 END) AS scale_mismatch_NOT_COMPARABLE,
        SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
-                 AND ((ir.interest_rate <= 1) = (r.new_interest_rate <= 1))
+                 AND CASE WHEN ir.interest_rate <= 1 THEN 1 ELSE 0 END
+                   = CASE WHEN r.new_interest_rate <= 1 THEN 1 ELSE 0 END
                  AND r.new_interest_rate < ir.interest_rate THEN 1 ELSE 0 END) AS rate_decreased,
        SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
-                 AND ((ir.interest_rate <= 1) = (r.new_interest_rate <= 1))
+                 AND CASE WHEN ir.interest_rate <= 1 THEN 1 ELSE 0 END
+                   = CASE WHEN r.new_interest_rate <= 1 THEN 1 ELSE 0 END
                  AND r.new_interest_rate > ir.interest_rate THEN 1 ELSE 0 END) AS rate_increased,
        SUM(CASE WHEN ir.interest_rate IS NOT NULL AND r.new_interest_rate IS NOT NULL
-                 AND ((ir.interest_rate <= 1) = (r.new_interest_rate <= 1))
+                 AND CASE WHEN ir.interest_rate <= 1 THEN 1 ELSE 0 END
+                   = CASE WHEN r.new_interest_rate <= 1 THEN 1 ELSE 0 END
                  AND r.new_interest_rate = ir.interest_rate THEN 1 ELSE 0 END) AS rate_unchanged
 FROM #la k
 INNER JOIN #restr r ON r.dlcr_gid = k.l_gid

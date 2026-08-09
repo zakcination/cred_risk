@@ -92,6 +92,42 @@ def scan(text):
     }
 
 
+def strip_for_scan(text):
+    """Убирает комментарии и строковые литералы, оставляя только код."""
+    out, depth, i, instr = [], 0, 0, False
+    while i < len(text):
+        if instr:
+            if text[i] == "'":
+                if text[i + 1:i + 2] == "'":
+                    i += 2
+                    continue
+                instr = False
+            i += 1
+            continue
+        if text[i:i + 2] == '/*':
+            depth += 1
+            i += 2
+            continue
+        if text[i:i + 2] == '*/':
+            depth = max(0, depth - 1)
+            i += 2
+            continue
+        if depth:
+            i += 1
+            continue
+        if text[i:i + 2] == '--':
+            j = text.find('\n', i)
+            i = len(text) if j < 0 else j
+            continue
+        if text[i] == "'":
+            instr = True
+            i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return ''.join(out)
+
+
 def check(path):
     text = open(path, encoding='utf-8', errors='replace').read()
     problems = []
@@ -107,6 +143,17 @@ def check(path):
         problems.append(f"незакрытых скобок: {r['unbalanced_paren']}")
     if r['extra_paren']:
         problems.append(f"лишняя ) на строках: {r['extra_paren']}")
+
+    # В T-SQL НЕТ булева типа: предикат нельзя сравнить с предикатом.
+    # `(a <= 1) <> (b <= 1)` даёт `Msg 102 Incorrect syntax near '<'` —
+    # ровно так упал L2A 09.08. Разворачивать через CASE ... THEN 1 ELSE 0 END.
+    code_only = strip_for_scan(text)
+    for m in re.finditer(r'\)\s*(?:<>|!=|=)\s*\(\s*[\w.\[\]]+\s*(?:<=|>=|<|>|=)\s',
+                         code_only):
+        problems.append(
+            'сравнение предиката с предикатом вида `(a <= 1) <> (b <= 1)` — '
+            'в T-SQL нет булева типа, нужен CASE ... THEN 1 ELSE 0 END')
+        break
 
     # Голый текст сразу после закрытия шапки комментария — подпись правки,
     # вставленной мимо блока (ровно так уехал L2B 09.08).
