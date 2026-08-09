@@ -34,7 +34,7 @@ USE [Dictionaries];
 SET NOCOUNT ON;
 
 DECLARE @Suite varchar(60) = 'L1_PROBES';
-DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
+DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans]);
 
 SELECT @Suite AS suite, '00_SCOPE' AS scenario, @AsOf AS resolved_asof
 OPTION (MAXDOP 1);
@@ -47,7 +47,7 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#lnum') IS NOT NULL DROP TABLE #lnum;
 SELECT DISTINCT l_source, l_loan_number
 INTO #lnum
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf AND l_loan_number IS NOT NULL
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lnum ON #lnum(l_source, l_loan_number);
@@ -55,7 +55,7 @@ CREATE CLUSTERED INDEX ix_lnum ON #lnum(l_source, l_loan_number);
 IF OBJECT_ID('tempdb..#lnum_any') IS NOT NULL DROP TABLE #lnum_any;
 SELECT DISTINCT l_loan_number
 INTO #lnum_any
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf AND l_loan_number IS NOT NULL
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lnum_any ON #lnum_any(l_loan_number);
@@ -74,7 +74,7 @@ SELECT @Suite AS suite, 'P9a_KEY_WITH_VS_WITHOUT_SOURCE' AS scenario,
                 THEN 1 ELSE 0 END) AS false_matches_from_ignoring_source,
        CAST(100.0 * SUM(CASE WHEN s.l_loan_number IS NOT NULL THEN 1 ELSE 0 END)
             / NULLIF(COUNT_BIG(*), 0) AS decimal(9,4)) AS true_match_pct
-FROM [risk_analytics].[interest_rates] r
+FROM [Dictionaries].[risk_analytics].[interest_rates] r
 LEFT JOIN #lnum_any a ON a.l_loan_number = r.dlcr_dog_num
 LEFT JOIN #lnum     s ON s.l_source = r.[dlcr$source]
                      AND s.l_loan_number = r.dlcr_dog_num
@@ -95,7 +95,7 @@ SELECT @Suite AS suite, 'P9b_LOAN_ID_POPULATION' AS scenario,
        COUNT(DISTINCT loan_id) AS distinct_loan_id,
        MIN(loan_id) AS min_loan_id,
        MAX(loan_id) AS max_loan_id
-FROM [risk_analytics].[interest_rates]
+FROM [Dictionaries].[risk_analytics].[interest_rates]
 GROUP BY [dlcr$source]
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -108,7 +108,7 @@ FROM (
     SELECT [dlcr$source] AS source,
            LEN(CONVERT(varchar(30), loan_id)) AS id_digits,
            COUNT_BIG(*) AS rows_cnt
-    FROM [risk_analytics].[interest_rates]
+    FROM [Dictionaries].[risk_analytics].[interest_rates]
     WHERE loan_id IS NOT NULL
     GROUP BY [dlcr$source], LEN(CONVERT(varchar(30), loan_id))
 ) d
@@ -122,8 +122,8 @@ SELECT @Suite AS suite, 'P9d_LOAN_ID_VS_GID' AS scenario,
        SUM(CASE WHEN g.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS matched_to_l_gid,
        CAST(100.0 * SUM(CASE WHEN g.l_gid IS NOT NULL THEN 1 ELSE 0 END)
             / NULLIF(COUNT_BIG(*), 0) AS decimal(9,4)) AS match_pct
-FROM [risk_analytics].[interest_rates] r
-LEFT JOIN (SELECT DISTINCT l_gid FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[interest_rates] r
+LEFT JOIN (SELECT DISTINCT l_gid FROM [Dictionaries].[risk_analytics].[loans]
            WHERE l_report_date = @AsOf) g
        ON g.l_gid = r.loan_id
 GROUP BY r.[dlcr$source]
@@ -141,10 +141,10 @@ SELECT @Suite AS suite, 'P9e_ACTIVE_RATE_COVERAGE' AS scenario,
        SUM(CASE WHEN r.dlcr_dog_num IS NOT NULL THEN 1 ELSE 0 END) AS loans_with_rate,
        CAST(100.0 * SUM(CASE WHEN r.dlcr_dog_num IS NOT NULL THEN 1 ELSE 0 END)
             / NULLIF(COUNT_BIG(*), 0) AS decimal(9,4)) AS coverage_pct
-FROM [risk_analytics].[loans_active] l
+FROM [Dictionaries].[risk_analytics].[loans_active] l
 LEFT JOIN (
     SELECT DISTINCT [dlcr$source] AS src, dlcr_dog_num
-    FROM [risk_analytics].[interest_rates]
+    FROM [Dictionaries].[risk_analytics].[interest_rates]
     WHERE dlcr_dog_num IS NOT NULL
 ) r ON r.src = l.l_source AND r.dlcr_dog_num = l.l_loan_number
 WHERE l.l_report_date = @AsOf
@@ -164,8 +164,8 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#rate_prog') IS NOT NULL DROP TABLE #rate_prog;
 SELECT l.l_source, l.l_rate AS programme, r.interest_rate, r.effective_rate
 INTO #rate_prog
-FROM [risk_analytics].[loans] l
-JOIN [risk_analytics].[interest_rates] r
+FROM [Dictionaries].[risk_analytics].[loans] l
+JOIN [Dictionaries].[risk_analytics].[interest_rates] r
      ON r.[dlcr$source] = l.l_source
     AND r.dlcr_dog_num  = l.l_loan_number
 WHERE l.l_report_date = @AsOf
@@ -238,7 +238,7 @@ SELECT @Suite AS suite, 'P9h_SENTINELS_AND_ZEROS' AS scenario,
        SUM(CASE WHEN interest_rate = 0 THEN 1 ELSE 0 END) AS ir_zero,
        /* Ноль ГЭСВ при ненулевой номинальной — экономически невозможен. */
        SUM(CASE WHEN effective_rate = 0 AND interest_rate > 0 THEN 1 ELSE 0 END) AS eff_zero_but_nominal_positive
-FROM [risk_analytics].[interest_rates]
+FROM [Dictionaries].[risk_analytics].[interest_rates]
 GROUP BY [dlcr$source]
 ORDER BY source
 OPTION (MAXDOP 1);

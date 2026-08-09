@@ -51,7 +51,7 @@ SET NOCOUNT ON;
 SELECT 'L3A_HARD' AS suite, '00_SCHEMA_AUDIT' AS scenario,
        TABLE_NAME, COLUMN_NAME, DATA_TYPE,
        ISNULL(CONVERT(varchar(20), CHARACTER_MAXIMUM_LENGTH), '') AS max_len
-FROM INFORMATION_SCHEMA.COLUMNS
+FROM [Dictionaries].INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'risk_analytics'
   AND (
        (TABLE_NAME = 'restructuring_v2' AND COLUMN_NAME IN
@@ -109,8 +109,8 @@ IF OBJECT_ID('tempdb..#lgid') IS NOT NULL DROP TABLE #lgid;
 SELECT l_source, l_gid, l_loan_id, l_loan_open_date, l_loan_amount,
        l_rate AS programme, l_borrower_id, l_currency, l_product_type
 INTO #lgid
-FROM [risk_analytics].[loans]
-WHERE l_report_date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans])
+FROM [Dictionaries].[risk_analytics].[loans]
+WHERE l_report_date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans])
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lgid ON #lgid(l_gid);
 CREATE INDEX ix_lgid_open ON #lgid(l_loan_open_date);
@@ -125,14 +125,14 @@ FROM (
     SELECT 'dlcr_gid -> l_gid' AS key_tested, r.[dlcr$source] AS source,
            COUNT_BIG(*) AS restr_rows,
            SUM(CASE WHEN g.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows
-    FROM [risk_analytics].[restructuring_v2] r
+    FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
     LEFT JOIN (SELECT DISTINCT l_gid FROM #lgid) g ON g.l_gid = r.dlcr_gid
     GROUP BY r.[dlcr$source]
     UNION ALL
     SELECT 'loan_id -> l_loan_id', r.[dlcr$source],
            COUNT_BIG(*),
            SUM(CASE WHEN n.l_loan_id IS NOT NULL THEN 1 ELSE 0 END)
-    FROM [risk_analytics].[restructuring_v2] r
+    FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
     LEFT JOIN (SELECT DISTINCT l_loan_id FROM #lgid WHERE l_loan_id IS NOT NULL) n
            ON n.l_loan_id = r.loan_id
     GROUP BY r.[dlcr$source]
@@ -148,7 +148,7 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#src_last') IS NOT NULL DROP TABLE #src_last;
 SELECT la_source, MAX(la_reporting_date) AS last_date
 INTO #src_last
-FROM [risk_analytics].[loan_account]
+FROM [Dictionaries].[risk_analytics].[loan_account]
 GROUP BY la_source
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_srclast ON #src_last(la_source);
@@ -171,7 +171,7 @@ SELECT a.la_source, a.la_gid, a.la_reporting_date,
        END AS dpd_state,
        CASE WHEN a.days_past_due > @DefaultDPD THEN 1 ELSE 0 END AS is_default
 INTO #hist
-FROM [risk_analytics].[loan_account] a
+FROM [Dictionaries].[risk_analytics].[loan_account] a
 JOIN #src_last k ON k.la_source = a.la_source
 WHERE a.la_reporting_date >  DATEADD(MONTH, -@HistMonths, k.last_date)
   AND a.la_reporting_date <= k.last_date
@@ -298,7 +298,7 @@ IF OBJECT_ID('tempdb..#restr') IS NOT NULL DROP TABLE #restr;
 SELECT dlcr_gid, [dlcr$source] AS src, restructuring_date,
        days_past_due_at_restructuring, payment_deferral
 INTO #restr
-FROM [risk_analytics].[restructuring_v2]
+FROM [Dictionaries].[risk_analytics].[restructuring_v2]
 WHERE dlcr_gid IS NOT NULL AND restructuring_date IS NOT NULL
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_restr ON #restr(dlcr_gid, restructuring_date);
@@ -442,8 +442,8 @@ SELECT c_source, c_loan_gid,
                 THEN 0 ELSE ISNULL(c_collateral_value, 0) END) AS pledge_value_property_only,
        SUM(ISNULL(c_collateral_value, 0)) AS pledge_value_all_types
 INTO #pl_sum
-FROM [risk_analytics].[pledges]
-WHERE c_reporting_date = (SELECT MAX(c_reporting_date) FROM [risk_analytics].[pledges])
+FROM [Dictionaries].[risk_analytics].[pledges]
+WHERE c_reporting_date = (SELECT MAX(c_reporting_date) FROM [Dictionaries].[risk_analytics].[pledges])
 GROUP BY c_source, c_loan_gid
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_plsum ON #pl_sum(c_loan_gid);
@@ -575,8 +575,8 @@ FROM (
                 WHEN b_region NOT LIKE N'%[А-Яа-яA-Za-z]%' THEN N'ЧИСЛОВОЙ КОД'
                 ELSE N'текстовое значение' END AS region_state,
            COUNT_BIG(*) AS borrowers
-    FROM [risk_analytics].[borrower]
-    WHERE b_report_date = (SELECT MAX(b_report_date) FROM [risk_analytics].[borrower])
+    FROM [Dictionaries].[risk_analytics].[borrower]
+    WHERE b_report_date = (SELECT MAX(b_report_date) FROM [Dictionaries].[risk_analytics].[borrower])
     GROUP BY CASE WHEN b_region IS NULL THEN N'NULL'
                 WHEN LTRIM(RTRIM(b_region)) = N'' THEN N'ПУСТАЯ СТРОКА'
                 WHEN b_region LIKE N'%[?]%' THEN N'МОХИБЕЙК (потеря кодировки)'
@@ -603,7 +603,7 @@ SELECT @Suite AS suite, 'H10_RATINGS_FEASIBILITY' AS scenario,
        CASE WHEN COUNT(DISTINCT r_report_date) <= 1
             THEN N'МИГРАЦИЯ НЕВЫПОЛНИМА — один срез'
             ELSE N'ряд есть, матрица строится' END AS verdict
-FROM [risk_analytics].[ratings]
+FROM [Dictionaries].[risk_analytics].[ratings]
 GROUP BY r_source
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -629,7 +629,7 @@ FROM (
     SELECT 'rs_loan_id -> l_loan_id (bigint)' AS key_tested, s.rs_source AS source,
            COUNT_BIG(*) AS schedule_rows,
            SUM(CASE WHEN k.loan_id_bigint IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows
-    FROM [risk_analytics].[repayment_schedule] s
+    FROM [Dictionaries].[risk_analytics].[repayment_schedule] s
     LEFT JOIN (SELECT DISTINCT loan_id_bigint FROM #lid WHERE loan_id_bigint IS NOT NULL) k
            ON k.loan_id_bigint = s.rs_loan_id
     GROUP BY s.rs_source
@@ -637,7 +637,7 @@ FROM (
     SELECT 'rs_loan_id -> l_gid (гипотеза по аналогии с interest_rates)', s.rs_source,
            COUNT_BIG(*),
            SUM(CASE WHEN g.l_gid IS NOT NULL THEN 1 ELSE 0 END)
-    FROM [risk_analytics].[repayment_schedule] s
+    FROM [Dictionaries].[risk_analytics].[repayment_schedule] s
     LEFT JOIN (SELECT DISTINCT l_gid FROM #lid) g ON g.l_gid = s.rs_loan_id
     GROUP BY s.rs_source
 ) d
@@ -668,8 +668,8 @@ FROM (
                 WHEN l_actual_closure_date < l_scheduled_closure_date
                      THEN N'раньше плана в пределах 30 дней'
                 ELSE N'в срок или позже' END AS closure_state
-    FROM [risk_analytics].[loans]
-    WHERE l_report_date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans])
+    FROM [Dictionaries].[risk_analytics].[loans]
+    WHERE l_report_date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans])
 ) d
 GROUP BY l_source, closure_state
 ORDER BY source, loans DESC

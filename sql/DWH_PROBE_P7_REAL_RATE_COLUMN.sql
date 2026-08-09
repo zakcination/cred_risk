@@ -32,7 +32,7 @@ SELECT 'L1_PROBES' AS suite, 'P7a_RATE_LIKE_COLUMNS' AS scenario,
        ISNULL(CONVERT(varchar(20), CHARACTER_MAXIMUM_LENGTH), '') AS max_len,
        ISNULL(CONVERT(varchar(20), NUMERIC_PRECISION), '') AS num_precision,
        ISNULL(CONVERT(varchar(20), NUMERIC_SCALE), '') AS num_scale
-FROM INFORMATION_SCHEMA.COLUMNS
+FROM [Dictionaries].INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'risk_analytics'
   AND TABLE_NAME IN ('loans', 'loans_active', 'loan_account', 'interest_rates')
   AND (COLUMN_NAME LIKE '%rate%'
@@ -58,7 +58,7 @@ GO
 SET NOCOUNT ON;
 
 DECLARE @Suite varchar(60) = 'L1_PROBES';
-DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
+DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans]);
 DECLARE @RateLo decimal(18,6) = 0.0;     -- нижняя граница правдоподобной ставки, %
 DECLARE @RateHi decimal(18,6) = 100.0;   -- верхняя граница правдоподобной ставки, %
 
@@ -83,7 +83,7 @@ SELECT @Suite AS suite, 'P7b_RATE_CANDIDATE_FILL' AS scenario,
 FROM (
     SELECT l.l_source, c.candidate, c.raw,
            TRY_CONVERT(decimal(18,6), c.raw) AS num
-    FROM [risk_analytics].[loans] l
+    FROM [Dictionaries].[risk_analytics].[loans] l
     CROSS APPLY (VALUES
         ('l_rate',                CONVERT(nvarchar(255), l.l_rate)),
         ('l_nominal_rate',        CONVERT(nvarchar(255), l.l_nominal_rate)),
@@ -118,7 +118,7 @@ FROM (
            SUM(CASE WHEN TRY_CONVERT(decimal(18,6), c.raw) IS NOT NULL THEN 1 ELSE 0 END) AS numeric_ok,
            SUM(CASE WHEN TRY_CONVERT(decimal(18,6), c.raw) > @RateLo
                      AND TRY_CONVERT(decimal(18,6), c.raw) <= @RateHi THEN 1 ELSE 0 END) AS in_range
-    FROM [risk_analytics].[loans] l
+    FROM [Dictionaries].[risk_analytics].[loans] l
     CROSS APPLY (VALUES
         ('l_rate',                CONVERT(nvarchar(255), l.l_rate)),
         ('l_nominal_rate',        CONVERT(nvarchar(255), l.l_nominal_rate)),
@@ -146,7 +146,7 @@ SELECT @Suite AS suite, 'P7d_PRODUCT_DIMENSION_IN_L_RATE' AS scenario,
        COUNT_BIG(*) AS loans,
        SUM(CASE WHEN l_rate IS NULL THEN 1 ELSE 0 END) AS programme_null,
        SUM(CASE WHEN l_product_type IS NOT NULL THEN 1 ELSE 0 END) AS product_type_filled
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf
 GROUP BY l_source
 ORDER BY source
@@ -166,7 +166,7 @@ FROM (
                 THEN N'программа -> один product_type (иерархия)'
                 ELSE N'программа -> НЕСКОЛЬКО product_type (не иерархия)'
            END AS consistency
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
     WHERE l_report_date = @AsOf
       AND l_source = 'S03' AND l_rate IS NOT NULL AND l_product_type IS NOT NULL
     GROUP BY l_rate

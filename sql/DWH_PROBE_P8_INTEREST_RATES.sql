@@ -44,7 +44,7 @@ USE [Dictionaries];
 SET NOCOUNT ON;
 
 DECLARE @Suite varchar(60) = 'L1_PROBES';
-DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
+DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans]);
 /* Границы правдоподобия НЕ хардкодим в теле — параметры (CLAUDE.md). */
 DECLARE @PctLo decimal(18,9) = 0.5;    -- ниже этого «процент» неправдоподобен
 DECLARE @PctHi decimal(18,9) = 100.0;  -- выше — либо доля*10000, либо мусор
@@ -64,7 +64,7 @@ SELECT @Suite AS suite, 'P8a_RATES_DATE_SPACE' AS scenario,
        MIN(report_date) AS min_date,
        MAX(report_date) AS max_date,
        SUM(CASE WHEN report_date = @AsOf THEN 1 ELSE 0 END) AS rows_at_loans_asof
-FROM [risk_analytics].[interest_rates]
+FROM [Dictionaries].[risk_analytics].[interest_rates]
 GROUP BY [dlcr$source]
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -86,14 +86,14 @@ SELECT @Suite AS suite, 'P8b_RATES_GRAIN' AS scenario,
 FROM (
     SELECT [dlcr$source] AS source, report_date, 'loan_id' AS key_used,
            COUNT_BIG(*) AS rows_in_group
-    FROM [risk_analytics].[interest_rates]
+    FROM [Dictionaries].[risk_analytics].[interest_rates]
     WHERE loan_id IS NOT NULL
     GROUP BY [dlcr$source], report_date, loan_id
     HAVING COUNT_BIG(*) > 1
     UNION ALL
     SELECT [dlcr$source], report_date, 'dlcr_dog_num',
            COUNT_BIG(*)
-    FROM [risk_analytics].[interest_rates]
+    FROM [Dictionaries].[risk_analytics].[interest_rates]
     WHERE dlcr_dog_num IS NOT NULL
     GROUP BY [dlcr$source], report_date, dlcr_dog_num
     HAVING COUNT_BIG(*) > 1
@@ -113,7 +113,7 @@ SELECT l_source, l_gid,
        TRY_CONVERT(bigint, l_loan_id) AS loan_id_bigint,
        l_loan_number
 INTO #loan_keys
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lk_loanid ON #loan_keys(loan_id_bigint);
@@ -144,7 +144,7 @@ FROM (
            r.[dlcr$source] AS source,
            COUNT_BIG(*) AS rate_rows,
            SUM(CASE WHEN k.loan_id_bigint IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows
-    FROM [risk_analytics].[interest_rates] r
+    FROM [Dictionaries].[risk_analytics].[interest_rates] r
     LEFT JOIN (SELECT DISTINCT loan_id_bigint FROM #loan_keys
                WHERE loan_id_bigint IS NOT NULL) k
            ON k.loan_id_bigint = r.loan_id
@@ -154,7 +154,7 @@ FROM (
            r.[dlcr$source],
            COUNT_BIG(*),
            SUM(CASE WHEN n.l_loan_number IS NOT NULL THEN 1 ELSE 0 END)
-    FROM [risk_analytics].[interest_rates] r
+    FROM [Dictionaries].[risk_analytics].[interest_rates] r
     LEFT JOIN (SELECT DISTINCT l_loan_number FROM #loan_keys
                WHERE l_loan_number IS NOT NULL) n
            ON n.l_loan_number = r.dlcr_dog_num
@@ -183,7 +183,7 @@ FROM (
                 ELSE                           N'>100 (АНОМАЛИЯ ИЛИ ДРУГАЯ ШКАЛА)'
            END AS value_bucket,
            COUNT_BIG(*) AS rows_cnt
-    FROM [risk_analytics].[interest_rates] r
+    FROM [Dictionaries].[risk_analytics].[interest_rates] r
     CROSS APPLY (VALUES
         ('interest_rate',          CONVERT(decimal(18,9), r.interest_rate)),
         ('initial_nominal_rate',   CONVERT(decimal(18,9), r.initial_nominal_rate)),
@@ -217,7 +217,7 @@ SELECT @Suite AS suite, 'P8f_RATE_RANGES' AS scenario,
        CAST(MAX(initial_nominal_rate) AS decimal(18,4))   AS init_nom_max,
        CAST(MIN(initial_effective_rate) AS decimal(18,4)) AS init_eff_min,
        CAST(MAX(initial_effective_rate) AS decimal(18,4)) AS init_eff_max
-FROM [risk_analytics].[interest_rates]
+FROM [Dictionaries].[risk_analytics].[interest_rates]
 GROUP BY [dlcr$source]
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -234,7 +234,7 @@ FROM (
                 ELSE N'ГЭСВ НИЖЕ номинальной (шкалы разные либо дефект)'
            END AS relation,
            COUNT_BIG(*) AS rows_cnt
-    FROM [risk_analytics].[interest_rates]
+    FROM [Dictionaries].[risk_analytics].[interest_rates]
     GROUP BY [dlcr$source],
            CASE WHEN effective_rate IS NULL OR interest_rate IS NULL
                      THEN N'нет одной из ставок'
@@ -259,11 +259,11 @@ SELECT @Suite AS suite, 'P8h_ACTIVE_PORTFOLIO_RATE_COVERAGE' AS scenario,
             / NULLIF(COUNT_BIG(*), 0) AS decimal(9,4)) AS rate_coverage_pct
 FROM (
     SELECT l_source, TRY_CONVERT(bigint, l_loan_id) AS loan_id_bigint
-    FROM [risk_analytics].[loans_active]
+    FROM [Dictionaries].[risk_analytics].[loans_active]
     WHERE l_report_date = @AsOf
 ) l
 LEFT JOIN (
-    SELECT DISTINCT loan_id FROM [risk_analytics].[interest_rates]
+    SELECT DISTINCT loan_id FROM [Dictionaries].[risk_analytics].[interest_rates]
     WHERE loan_id IS NOT NULL
 ) r ON r.loan_id = l.loan_id_bigint
 GROUP BY l.l_source

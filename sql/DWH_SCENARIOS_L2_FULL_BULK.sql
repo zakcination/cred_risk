@@ -142,11 +142,39 @@
   идентификаторы; ИИН/ФИО/номера договоров/IBAN не выводятся). @AsOf — от факта.
 ==============================================================================*/
 
+/*==============================================================================
+  DWH_SCENARIOS_L2A_MEDIUM — сценарии M01–M20 (уровень 2, часть A)
+
+  Исполняемая версия из `docs/analysis/risk_dwh_reconciliation/
+  DWH_TEST_SCENARIOS.md`. Уровень 2 проверяет КЛЮЧИ, КАРДИНАЛЬНОСТЬ и
+  ЦЕЛОСТНОСТЬ связей — то, чего уровень 1 не трогает.
+
+  ПОЧЕМУ ЧЕРЕЗ #temp, А НЕ НАПРЯМУЮ. Коррелированный `NOT EXISTS`, у которого
+  внутренняя (пересканируемая) сторона обёрнута в CONVERT/CAST, делает JOIN
+  non-sargable и вызывает полный пересчёт на каждую внешнюю строку. В этом
+  проекте это дважды приводило к зависанию прогона на 2+ часа (L11.1, L4.1).
+  Здесь везде один и тот же безопасный паттерн: ключ материализуется в
+  индексированный #temp ОДИН раз, дальше сравниваются голые значения.
+
+  НА ЧЁМ СТОЯТ ДЖОЙНЫ (подтверждено живыми прогонами этой сессии):
+  - `*_gid = l_gid` — канонический путь. `l_gid` глобально уникален: коллизий
+    между source НЕТ (CASE_RUN_011 A1/A2), поэтому джойн только по gid
+    безопасен, а source — избыточная, но безвредная страховка.
+  - `borrower` НЕ имеет gid — только `borrower_id` (T16). При этом
+    `loans_active.l_borrower_id` уже bigint, как и `b_borrower_id`, а вот
+    `loans.l_borrower_id` — varchar (T3). Досье строится на `loans_active`
+    именно поэтому: там приведение типов не нужно.
+  - `l_collateral_id` → pledges ОПРОВЕРГНУТ (T1). Только `c_loan_gid`.
+
+  Правила: read-only, MAXDOP 1, без PII (gid/borrower_id — технические
+  идентификаторы; ИИН/ФИО/номера договоров/IBAN не выводятся). @AsOf — от факта.
+==============================================================================*/
+
 USE [Dictionaries];
 SET NOCOUNT ON;
 
 DECLARE @Suite varchar(60) = 'L2A_MEDIUM';
-DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans_active]);
+DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans_active]);
 
 /* M01: если NULL — тестовый клиент выбирается автоматически (см. M01a).
    Задайте вручную, чтобы построить досье по конкретному клиенту. */
@@ -163,7 +191,7 @@ SELECT l_source, l_gid, l_borrower_id, l_loan_id, l_collateral_id,
        l_loan_amount, l_rate, l_initial_term_months, l_product_type,
        l_loan_status, l_currency, l_loan_open_date, l_loan_maturity_date
 INTO #la
-FROM [risk_analytics].[loans_active]
+FROM [Dictionaries].[risk_analytics].[loans_active]
 WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_la_gid ON #la(l_gid);
@@ -178,7 +206,7 @@ CREATE INDEX ix_la_loanid ON #la(l_loan_id);
    Берём последнюю дату КАЖДОГО источника и печатаем её явно. */
 IF OBJECT_ID('tempdb..#src_last') IS NOT NULL DROP TABLE #src_last;
 SELECT la_source, MAX(la_reporting_date) AS last_date
-INTO #src_last FROM [risk_analytics].[loan_account] GROUP BY la_source
+INTO #src_last FROM [Dictionaries].[risk_analytics].[loan_account] GROUP BY la_source
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_srclast ON #src_last(la_source);
 
@@ -189,7 +217,7 @@ SELECT a.la_source, a.la_gid, a.la_reporting_date,
        a.total_balance_debt, a.principal_balance_debt,
        a.days_past_due, a.delinquency_bucket
 INTO #acct
-FROM [risk_analytics].[loan_account] a
+FROM [Dictionaries].[risk_analytics].[loan_account] a
 JOIN #src_last k ON k.la_source = a.la_source AND k.last_date = a.la_reporting_date
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_acct_gid ON #acct(la_gid);
@@ -204,7 +232,7 @@ FROM #src_last ORDER BY source OPTION (MAXDOP 1);
    Настоящая ставка — в interest_rates, ключ `loan_id = l_gid` (100%, P9d). */
 IF OBJECT_ID('tempdb..#ir') IS NOT NULL DROP TABLE #ir;
 SELECT loan_id AS l_gid, interest_rate, effective_rate, initial_nominal_rate
-INTO #ir FROM [risk_analytics].[interest_rates] WHERE loan_id IS NOT NULL
+INTO #ir FROM [Dictionaries].[risk_analytics].[interest_rates] WHERE loan_id IS NOT NULL
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_ir ON #ir(l_gid);
 
@@ -218,7 +246,7 @@ SELECT c_source, c_loan_gid, c_collateral_id, c_bpm_object_id,
        COALESCE(N'BPM:' + CAST(c_bpm_object_id AS nvarchar(30)),
                 N'CID:' + CAST(CAST(c_collateral_id AS bigint) AS nvarchar(30))) AS object_key
 INTO #pl
-FROM [risk_analytics].[pledges]
+FROM [Dictionaries].[risk_analytics].[pledges]
 WHERE c_reporting_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_pl_gid ON #pl(c_loan_gid);
@@ -228,7 +256,7 @@ SELECT [dlcr$source] AS r_source, dlcr_gid, restructuring_date, new_interest_rat
        new_maturity_date, canc_date, payment_deferral,
        grace_od_begin_date, grace_od_end_date, grace_int_begin_date, grace_int_end_date
 INTO #restr
-FROM [risk_analytics].[restructuring_v2]
+FROM [Dictionaries].[risk_analytics].[restructuring_v2]
 WHERE dlcr_gid IS NOT NULL
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_restr_gid ON #restr(dlcr_gid);
@@ -260,7 +288,7 @@ SELECT @Suite AS suite, 'M01b_CLIENT_PROFILE' AS scenario,
        b.b_client_rating_date, b.b_bankruptcy_flag, b.b_poci_flag,
        b.b_active_loans_count AS declared_active_loans,
        b.b_closed_loans_count AS declared_closed_loans
-FROM [risk_analytics].[borrower] b
+FROM [Dictionaries].[risk_analytics].[borrower] b
 WHERE b.b_report_date = @AsOf AND b.b_borrower_id = @TestBorrowerId
 OPTION (MAXDOP 1);
 
@@ -289,7 +317,7 @@ SELECT @Suite AS suite, 'M01c_CLIENT_LOANS' AS scenario,
 FROM #la k
 LEFT JOIN #acct a ON a.la_gid = k.l_gid
 LEFT JOIN #ir   ir ON ir.l_gid = k.l_gid
-LEFT JOIN [risk_analytics].[ratings] r ON r.r_deal_gid = k.l_gid AND r.r_report_date = @AsOf
+LEFT JOIN [Dictionaries].[risk_analytics].[ratings] r ON r.r_deal_gid = k.l_gid AND r.r_report_date = @AsOf
 WHERE k.l_borrower_id = @TestBorrowerId
 OPTION (MAXDOP 1);
 
@@ -311,7 +339,7 @@ FROM (
            CASE WHEN k.l_collateral_id IS NULL THEN 1 ELSE 0 END AS null_coll_id
     FROM #la k
     LEFT JOIN #acct a ON a.la_gid = k.l_gid
-    LEFT JOIN [risk_analytics].[ratings] r ON r.r_deal_gid = k.l_gid AND r.r_report_date = @AsOf
+    LEFT JOIN [Dictionaries].[risk_analytics].[ratings] r ON r.r_deal_gid = k.l_gid AND r.r_report_date = @AsOf
     WHERE k.l_borrower_id = @TestBorrowerId
 ) t
 OPTION (MAXDOP 1);
@@ -396,7 +424,7 @@ FROM (
                 WHEN b.b_active_loans_count > COUNT(*) THEN 'СПРАВОЧНИК ЗАВЫШАЕТ'
                 ELSE 'СПРАВОЧНИК ЗАНИЖАЕТ' END AS agreement
     FROM #la k
-    LEFT JOIN [risk_analytics].[borrower] b
+    LEFT JOIN [Dictionaries].[risk_analytics].[borrower] b
            ON b.b_borrower_id = k.l_borrower_id AND b.b_report_date = @AsOf
     WHERE k.l_borrower_id IS NOT NULL
     GROUP BY k.l_borrower_id, b.b_borrower_id, b.b_active_loans_count
@@ -414,7 +442,7 @@ SELECT TOP (100) @Suite AS suite, 'M06_REGION_X_PRODUCT' AS scenario,
        COUNT_BIG(*) AS loans,
        CAST(SUM(a.total_balance_debt) AS decimal(38,2)) AS balance_NOT_COMPARABLE_ACROSS_SOURCES_T15
 FROM #la k
-LEFT JOIN [risk_analytics].[borrower] b
+LEFT JOIN [Dictionaries].[risk_analytics].[borrower] b
        ON b.b_borrower_id = k.l_borrower_id AND b.b_report_date = @AsOf
 LEFT JOIN #acct a ON a.la_gid = k.l_gid
 GROUP BY ISNULL(b.b_region, N'(регион NULL)'),
@@ -527,7 +555,7 @@ ORDER BY source, id_state, pledge_state OPTION (MAXDOP 1);
 ==============================================================================*/
 IF OBJECT_ID('tempdb..#master_gid') IS NOT NULL DROP TABLE #master_gid;
 SELECT DISTINCT l_gid INTO #master_gid
-FROM [risk_analytics].[loans] WHERE l_report_date = @AsOf
+FROM [Dictionaries].[risk_analytics].[loans] WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE UNIQUE CLUSTERED INDEX ix_mg ON #master_gid(l_gid);
 
@@ -572,7 +600,7 @@ SELECT TOP (50) @Suite AS suite, 'M12_GROUP_EXPOSURE' AS scenario,
        COUNT_BIG(*) AS loans,
        CAST(SUM(a.total_balance_debt) AS decimal(38,2)) AS exposure_T15_CAVEAT
 FROM #la k
-INNER JOIN [risk_analytics].[borrower] b
+INNER JOIN [Dictionaries].[risk_analytics].[borrower] b
         ON b.b_borrower_id = k.l_borrower_id AND b.b_report_date = @AsOf
 LEFT JOIN #acct a ON a.la_gid = k.l_gid
 WHERE b.b_group_affiliation IS NOT NULL
@@ -588,7 +616,7 @@ ORDER BY exposure_T15_CAVEAT DESC OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#rs_keys') IS NOT NULL DROP TABLE #rs_keys;
 SELECT DISTINCT rs_source, CAST(rs_loan_id AS nvarchar(255)) AS rs_loan_id_txt
 INTO #rs_keys
-FROM [risk_analytics].[repayment_schedule]
+FROM [Dictionaries].[risk_analytics].[repayment_schedule]
 WHERE rs_loan_id IS NOT NULL
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_rs ON #rs_keys(rs_source, rs_loan_id_txt);
@@ -623,7 +651,7 @@ SELECT @Suite AS suite, 'M14_PAYMENTS_LINKABILITY' AS scenario,
        MIN(LEN(p_CREDIT_ACCOUNT)) AS min_len,
        MAX(LEN(p_CREDIT_ACCOUNT)) AS max_len,
        SUM(CASE WHEN TRY_CONVERT(bigint, p_CREDIT_ACCOUNT) IS NULL THEN 1 ELSE 0 END) AS non_numeric_accounts
-FROM [risk_analytics].[payments]
+FROM [Dictionaries].[risk_analytics].[payments]
 GROUP BY p_source ORDER BY source OPTION (MAXDOP 1);
 
 SELECT @Suite AS suite, 'M14b_LINK_VERDICT' AS scenario,
@@ -643,7 +671,7 @@ SELECT @Suite AS suite, 'M15a_SCHEDULE_DUPLICATES_T24' AS scenario,
        SUM(rows_in_group) - COUNT_BIG(*) AS excess_rows
 FROM (
     SELECT rs_source, rs_loan_id, rs_repayment_date, COUNT_BIG(*) AS rows_in_group
-    FROM [risk_analytics].[repayment_schedule]
+    FROM [Dictionaries].[risk_analytics].[repayment_schedule]
     GROUP BY rs_source, rs_loan_id, rs_repayment_date
 ) g
 GROUP BY rs_source ORDER BY source OPTION (MAXDOP 1);
@@ -652,7 +680,7 @@ SELECT @Suite AS suite, 'M15b_PAYMENT_DUPLICATES_T23' AS scenario,
        source, COUNT_BIG(*) AS duplicated_signatures, SUM(n) - COUNT_BIG(*) AS excess_rows
 FROM (
     SELECT p_source AS source, p_CREDIT_ACCOUNT, p_VALUE_DATE, p_total, COUNT_BIG(*) AS n
-    FROM [risk_analytics].[payments]
+    FROM [Dictionaries].[risk_analytics].[payments]
     GROUP BY p_source, p_CREDIT_ACCOUNT, p_VALUE_DATE, p_total
     HAVING COUNT_BIG(*) > 1
 ) d
@@ -755,7 +783,7 @@ FROM (
     SELECT w.w_dlcrp_dlcr_gid AS gid,
            CASE WHEN EXISTS (SELECT 1 FROM #la k WHERE k.l_gid = w.w_dlcrp_dlcr_gid)
                 THEN 1 ELSE 0 END AS in_active
-    FROM [risk_analytics].[writeoff] w
+    FROM [Dictionaries].[risk_analytics].[writeoff] w
     WHERE w.w_dlcrp_dlcr_gid IS NOT NULL
 ) t
 OPTION (MAXDOP 1);
@@ -769,7 +797,7 @@ SELECT @Suite AS suite, 'M20_BANKRUPT_EXPOSURE' AS scenario,
        COUNT_BIG(*) AS bankrupt_gids,
        SUM(CASE WHEN k.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS matched_to_active_loan,
        CAST(SUM(a.total_balance_debt) AS decimal(38,2)) AS exposure_T15_CAVEAT
-FROM (SELECT DISTINCT b_dog_gid FROM [risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL) bk
+FROM (SELECT DISTINCT b_dog_gid FROM [Dictionaries].[risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL) bk
 LEFT JOIN #la k   ON k.l_gid  = bk.b_dog_gid
 LEFT JOIN #acct a ON a.la_gid = bk.b_dog_gid
 GROUP BY ISNULL(k.l_source, '(нет активного договора)')
@@ -827,7 +855,7 @@ SELECT 'L2B_MEDIUM' AS suite, '00_SCHEMA_AUDIT' AS scenario,
        TABLE_NAME, COLUMN_NAME, DATA_TYPE,
        ISNULL(CONVERT(varchar(20), CHARACTER_MAXIMUM_LENGTH), '') AS max_len,
        IS_NULLABLE
-FROM INFORMATION_SCHEMA.COLUMNS
+FROM [Dictionaries].INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'risk_analytics'
   AND (
        (TABLE_NAME = 'loan_account' AND COLUMN_NAME IN
@@ -871,8 +899,8 @@ GO
 SET NOCOUNT ON;
 
 DECLARE @Suite     varchar(60) = 'L2B_MEDIUM';
-DECLARE @AsOf      date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans_active]);
-DECLARE @BAsOf     date = (SELECT MAX(b_report_date) FROM [risk_analytics].[borrower]);
+DECLARE @AsOf      date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans_active]);
+DECLARE @BAsOf     date = (SELECT MAX(b_report_date) FROM [Dictionaries].[risk_analytics].[borrower]);
 DECLARE @ValueGap  decimal(18,4) = 10.0;   -- M33: порог расхождения оценок, «в разах»
 DECLARE @OldCarYrs int = 15;               -- M34: возраст авто-залога, лет
 DECLARE @TopN      int = 20;               -- ограничители детализации
@@ -899,7 +927,7 @@ SELECT l_source, l_gid, l_borrower_id, l_loan_id, l_loan_number,
        l_loan_open_date, l_funding_date, l_first_repayment_date,
        l_scheduled_closure_date, l_actual_closure_date
 INTO #la
-FROM [risk_analytics].[loans_active]
+FROM [Dictionaries].[risk_analytics].[loans_active]
 WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_la_gid ON #la(l_gid);
@@ -909,7 +937,7 @@ CREATE INDEX ix_la_borrower ON #la(l_borrower_id);
 IF OBJECT_ID('tempdb..#la_last') IS NOT NULL DROP TABLE #la_last;
 SELECT la_source, MAX(la_reporting_date) AS last_date
 INTO #la_last
-FROM [risk_analytics].[loan_account]
+FROM [Dictionaries].[risk_analytics].[loan_account]
 GROUP BY la_source
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lalast ON #la_last(la_source);
@@ -919,7 +947,7 @@ SELECT a.la_source, a.la_gid, a.la_reporting_date,
        a.total_balance_debt, a.principal_balance_debt,
        a.days_past_due, a.delinquency_bucket
 INTO #acct
-FROM [risk_analytics].[loan_account] a
+FROM [Dictionaries].[risk_analytics].[loan_account] a
 JOIN #la_last k ON k.la_source = a.la_source
                AND k.last_date = a.la_reporting_date
 OPTION (MAXDOP 1);
@@ -934,7 +962,7 @@ SELECT b_source, b_borrower_id, b_borrower_type,
        b_active_loans_count, b_closed_loans_count,
        b_client_rating, b_client_rating_date
 INTO #b
-FROM [risk_analytics].[borrower]
+FROM [Dictionaries].[risk_analytics].[borrower]
 WHERE b_report_date = @BAsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_b_id ON #b(b_borrower_id);
@@ -944,7 +972,7 @@ SELECT c_source, c_loan_gid, c_collateral_type, c_car_year,
        c_collateral_value, c_market_collateral_value,
        c_car_value, c_market_car_value
 INTO #pl
-FROM [risk_analytics].[pledges]
+FROM [Dictionaries].[risk_analytics].[pledges]
 WHERE c_reporting_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_pl_gid ON #pl(c_loan_gid);
@@ -975,7 +1003,7 @@ SELECT @Suite AS suite, 'M21a_RATINGS_KEY_SPACE' AS scenario,
        COUNT_BIG(*) AS rating_rows,
        SUM(CASE WHEN r_deal_gid IS NULL THEN 1 ELSE 0 END) AS deal_gid_null,
        SUM(CASE WHEN r_dog_num  IS NULL THEN 1 ELSE 0 END) AS dog_num_null
-FROM [risk_analytics].[ratings]
+FROM [Dictionaries].[risk_analytics].[ratings]
 GROUP BY r_source, LEFT(CONVERT(varchar(30), TRY_CONVERT(bigint, r_deal_gid)), 2)
 ORDER BY source, rating_rows DESC
 OPTION (MAXDOP 1);
@@ -988,13 +1016,13 @@ FROM (
     SELECT 'r_deal_gid -> l_gid' AS key_tested,
            SUM(CASE WHEN x.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows,
            COUNT_BIG(*) AS total_rows
-    FROM [risk_analytics].[ratings] r
+    FROM [Dictionaries].[risk_analytics].[ratings] r
     LEFT JOIN #la x ON x.l_gid = r.r_deal_gid
     UNION ALL
     SELECT 'r_dog_num -> l_loan_number',
            SUM(CASE WHEN y.l_loan_number IS NOT NULL THEN 1 ELSE 0 END),
            COUNT_BIG(*)
-    FROM [risk_analytics].[ratings] r
+    FROM [Dictionaries].[risk_analytics].[ratings] r
     LEFT JOIN (SELECT DISTINCT l_loan_number FROM #la) y
            ON y.l_loan_number = r.r_dog_num
 ) d
@@ -1015,7 +1043,7 @@ FROM (
            COUNT_BIG(*) AS borrowers_or_deals
     FROM #la l
     LEFT JOIN #b b ON b.b_borrower_id = l.l_borrower_id
-    LEFT JOIN [risk_analytics].[ratings] r ON r.r_deal_gid = l.l_gid
+    LEFT JOIN [Dictionaries].[risk_analytics].[ratings] r ON r.r_deal_gid = l.l_gid
     GROUP BY CASE WHEN b.b_client_rating IS NULL AND r.r_loan_rating IS NULL
                      THEN 'НЕТ НИ ОДНОГО РЕЙТИНГА'
                 WHEN b.b_client_rating IS NULL THEN 'ТОЛЬКО РЕЙТИНГ СДЕЛКИ'
@@ -1048,7 +1076,7 @@ FROM (
                 WHEN ABS(g_reserves_kzt / NULLIF(g_reserves_currency, 0) - 1) < 0.01
                      THEN 'x1 (совпадают)'
                 ELSE 'иное отношение' END AS ratio_bucket
-    FROM [risk_analytics].[Guarantees]
+    FROM [Dictionaries].[risk_analytics].[Guarantees]
 ) d
 GROUP BY g_source, ratio_bucket
 ORDER BY source, guarantees DESC
@@ -1064,7 +1092,7 @@ SELECT @Suite AS suite, 'M23a_GUARANTEE_GID_SPACE' AS scenario,
        g_source AS source,
        LEFT(CONVERT(varchar(30), TRY_CONVERT(bigint, g_clnt_gid)), 2) AS clnt_gid_prefix,
        COUNT_BIG(*) AS rows_cnt
-FROM [risk_analytics].[Guarantees]
+FROM [Dictionaries].[risk_analytics].[Guarantees]
 GROUP BY g_source, LEFT(CONVERT(varchar(30), TRY_CONVERT(bigint, g_clnt_gid)), 2)
 ORDER BY source, rows_cnt DESC
 OPTION (MAXDOP 1);
@@ -1079,13 +1107,13 @@ FROM (
     SELECT 'g_clnt_gid -> l_gid' AS link_tested,
            SUM(CASE WHEN x.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows,
            COUNT_BIG(*) AS total_rows
-    FROM [risk_analytics].[Guarantees] g
+    FROM [Dictionaries].[risk_analytics].[Guarantees] g
     LEFT JOIN #la x ON x.l_gid = g.g_clnt_gid
     UNION ALL
     SELECT 'g_clnt_gid -> l_borrower_id',
            SUM(CASE WHEN y.l_borrower_id IS NOT NULL THEN 1 ELSE 0 END),
            COUNT_BIG(*)
-    FROM [risk_analytics].[Guarantees] g
+    FROM [Dictionaries].[risk_analytics].[Guarantees] g
     LEFT JOIN (SELECT DISTINCT l_borrower_id FROM #la) y
            ON y.l_borrower_id = g.g_clnt_gid
 ) d
@@ -1268,7 +1296,7 @@ FROM (
            CASE WHEN COUNT(DISTINCT l_source) > 1
                      THEN 'МЕЖДУ ИСТОЧНИКАМИ (разные клиенты)'
                 ELSE 'ВНУТРИ ИСТОЧНИКА (дубль записи)' END AS collision_type
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
     WHERE l_report_date = @AsOf AND l_loan_number IS NOT NULL
     GROUP BY l_loan_number
     HAVING COUNT_BIG(*) > 1
@@ -1425,7 +1453,7 @@ FROM (
                 WHEN l_actual_closure_date =  l_scheduled_closure_date THEN 'В СРОК'
                 ELSE 'С ПРОСРОЧКОЙ ЗАКРЫТИЯ' END AS closure_state,
            COUNT_BIG(*) AS loans
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
     WHERE l_report_date = @AsOf
     GROUP BY l_source,
            CASE WHEN l_actual_closure_date IS NULL THEN 'НЕ ЗАКРЫТ'
@@ -1500,13 +1528,13 @@ GO
 ==============================================================================*/
 SET NOCOUNT ON;
 DECLARE @Suite varchar(60) = 'L2B_MEDIUM';
-DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
+DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans]);
 DECLARE @TopN  int  = 20;
 
 IF OBJECT_ID('tempdb..#lattr') IS NOT NULL DROP TABLE #lattr;
 SELECT l.l_gid, l.l_segment, l.l_financial_consultant
 INTO #lattr
-FROM [risk_analytics].[loans] l
+FROM [Dictionaries].[risk_analytics].[loans] l
 WHERE l.l_report_date = @AsOf
   AND EXISTS (SELECT 1 FROM #la k WHERE k.l_gid = l.l_gid)
 OPTION (MAXDOP 1);

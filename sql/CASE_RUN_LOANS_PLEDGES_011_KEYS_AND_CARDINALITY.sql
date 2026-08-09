@@ -61,7 +61,7 @@ DECLARE @CaseRun varchar(120) = 'CASE_RUN_LOANS_PLEDGES_011_KEYS_AND_CARDINALITY
 -- везде (loans/loans_active/pledges) — снимок с этой датой в таблице больше
 -- не существует (l_report_date — маркер ТЕКУЩЕГО состояния, не хранимая
 -- история, см. CLAUDE.md). @AsOf теперь резолвится от факта, не хардкодится.
-DECLARE @AsOf date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans_active]);
+DECLARE @AsOf date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans_active]);
 
 
 /*==============================================================================
@@ -70,9 +70,9 @@ DECLARE @AsOf date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans_act
 ==============================================================================*/
 SELECT @CaseRun AS case_run, '00_SCOPE_CONTROL' AS result_set,
        @AsOf AS resolved_AsOf_from_loans_active,
-       (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]) AS max_l_report_date_in_loans_master,
-       (SELECT MAX(c_reporting_date) FROM [risk_analytics].[pledges]) AS max_c_reporting_date_in_pledges,
-       (SELECT COUNT_BIG(*) FROM [risk_analytics].[loans_active] WHERE l_report_date = @AsOf) AS loans_active_rows_at_resolved_date
+       (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans]) AS max_l_report_date_in_loans_master,
+       (SELECT MAX(c_reporting_date) FROM [Dictionaries].[risk_analytics].[pledges]) AS max_c_reporting_date_in_pledges,
+       (SELECT COUNT_BIG(*) FROM [Dictionaries].[risk_analytics].[loans_active] WHERE l_report_date = @AsOf) AS loans_active_rows_at_resolved_date
 OPTION (MAXDOP 1);
 
 
@@ -82,7 +82,7 @@ OPTION (MAXDOP 1);
 SELECT @CaseRun AS case_run, 'A0_SCHEMA_KEY_CANDIDATES' AS result_set,
        TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH,
        NUMERIC_PRECISION, IS_NULLABLE
-FROM INFORMATION_SCHEMA.COLUMNS
+FROM [Dictionaries].INFORMATION_SCHEMA.COLUMNS
 WHERE TABLE_SCHEMA = 'risk_analytics'
   AND (
        (TABLE_NAME = 'loans'        AND COLUMN_NAME IN ('l_gid','l_source','l_report_date','l_loan_number','l_loan_id','l_collateral_id'))
@@ -103,7 +103,7 @@ SELECT @CaseRun AS case_run, 'A1_GRAIN_TEST' AS result_set, x.* FROM (
            COUNT_BIG(DISTINCT l_gid) AS distinct_gid,
            COUNT_BIG(DISTINCT CONCAT(l_source, N'|', l_gid)) AS distinct_source_gid,
            COUNT_BIG(DISTINCT l_loan_number) AS distinct_loan_number
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
     WHERE l_report_date = @AsOf
     GROUP BY l_source
 
@@ -113,7 +113,7 @@ SELECT @CaseRun AS case_run, 'A1_GRAIN_TEST' AS result_set, x.* FROM (
            COUNT_BIG(DISTINCT l_gid),
            COUNT_BIG(DISTINCT CONCAT(l_source, N'|', l_gid)),
            COUNT_BIG(DISTINCT l_loan_number)
-    FROM [risk_analytics].[loans_active]
+    FROM [Dictionaries].[risk_analytics].[loans_active]
     WHERE l_report_date = @AsOf
     GROUP BY l_source
 
@@ -123,7 +123,7 @@ SELECT @CaseRun AS case_run, 'A1_GRAIN_TEST' AS result_set, x.* FROM (
            COUNT_BIG(DISTINCT c_loan_gid),
            COUNT_BIG(DISTINCT CONCAT(c_source, N'|', c_loan_gid)),
            NULL
-    FROM [risk_analytics].[pledges]
+    FROM [Dictionaries].[risk_analytics].[pledges]
     WHERE c_reporting_date = @AsOf
     GROUP BY c_source
 ) x
@@ -150,7 +150,7 @@ SELECT @CaseRun AS case_run, 'A2_GID_CROSS_SOURCE_COLLISION' AS result_set, z.* 
            END AS verdict
     FROM (
         SELECT l_gid, COUNT(DISTINCT l_source) AS src_count
-        FROM [risk_analytics].[loans]
+        FROM [Dictionaries].[risk_analytics].[loans]
         WHERE l_report_date = @AsOf
         GROUP BY l_gid
     ) g
@@ -169,7 +169,7 @@ SELECT @CaseRun AS case_run, 'A2_GID_CROSS_SOURCE_COLLISION' AS result_set, z.* 
            END
     FROM (
         SELECT l_gid, COUNT(DISTINCT l_source) AS src_count
-        FROM [risk_analytics].[loans_active]
+        FROM [Dictionaries].[risk_analytics].[loans_active]
         WHERE l_report_date = @AsOf
         GROUP BY l_gid
     ) g
@@ -184,7 +184,7 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#loans_active_keys') IS NOT NULL DROP TABLE #loans_active_keys;
 SELECT l_source, l_gid, l_loan_number, l_loan_id, l_collateral_id
 INTO #loans_active_keys
-FROM [risk_analytics].[loans_active]
+FROM [Dictionaries].[risk_analytics].[loans_active]
 WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lak_source_gid ON #loans_active_keys(l_source, l_gid);
@@ -195,7 +195,7 @@ CREATE INDEX ix_lak_loan_id ON #loans_active_keys(l_loan_id);
 IF OBJECT_ID('tempdb..#pledges_slice') IS NOT NULL DROP TABLE #pledges_slice;
 SELECT c_source, c_loan_gid, c_loan_id, c_contract_number, c_collateral_id
 INTO #pledges_slice
-FROM [risk_analytics].[pledges]
+FROM [Dictionaries].[risk_analytics].[pledges]
 WHERE c_reporting_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_ps_source_gid ON #pledges_slice(c_source, c_loan_gid);
@@ -437,7 +437,7 @@ DROP TABLE #collateral_mult;
 IF OBJECT_ID('tempdb..#loans_master_keys') IS NOT NULL DROP TABLE #loans_master_keys;
 SELECT DISTINCT l_source, l_gid
 INTO #loans_master_keys
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lmk ON #loans_master_keys(l_source, l_gid);
