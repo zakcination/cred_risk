@@ -66,6 +66,8 @@ DECLARE @LoansAsOf   date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk
 DECLARE @ForecastMon int = 12;    -- H13: горизонт прогноза денежного потока
 DECLARE @GapTolPct   decimal(9,4) = 5.0;   -- H14: допуск отклонения план/факт, %
 DECLARE @TrendMonths int = 6;     -- H18: окно тренда DPD
+DECLARE @Dpd90       int = 90;    -- H15: порог просрочки, не хардкод в теле
+DECLARE @PledgeDate  date = (SELECT MAX(c_reporting_date) FROM [Dictionaries].[risk_analytics].[pledges]);
 
 SELECT @Suite AS suite, '00_SCOPE' AS scenario, @LoansAsOf AS loans_asof,
        @ForecastMon AS forecast_months, @GapTolPct AS gap_tolerance_pct,
@@ -76,42 +78,42 @@ OPTION (MAXDOP 1);
 /*------------------------------------------------------------------------------
   МАТЕРИАЛИЗАЦИЯ. Последняя дата КАЖДОГО источника (T35).
 ------------------------------------------------------------------------------*/
-IF OBJECT_ID('tempdb..#src_last') IS NOT NULL DROP TABLE #src_last;
+IF OBJECT_ID('tempdb..#hb_srclast') IS NOT NULL DROP TABLE #hb_srclast;
 SELECT la_source, MAX(la_reporting_date) AS last_date
-INTO #src_last FROM [Dictionaries].[risk_analytics].[loan_account] GROUP BY la_source
+INTO #hb_srclast FROM [Dictionaries].[risk_analytics].[loan_account] GROUP BY la_source
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_srclast ON #src_last(la_source);
+CREATE CLUSTERED INDEX ix_srclast ON #hb_srclast(la_source);
 
-IF OBJECT_ID('tempdb..#acct') IS NOT NULL DROP TABLE #acct;
+IF OBJECT_ID('tempdb..#hb_acct') IS NOT NULL DROP TABLE #hb_acct;
 SELECT a.la_source, a.la_gid, a.la_reporting_date, a.days_past_due,
        a.delinquency_bucket, a.total_balance_debt
-INTO #acct
+INTO #hb_acct
 FROM [Dictionaries].[risk_analytics].[loan_account] a
-JOIN #src_last k ON k.la_source = a.la_source
+JOIN #hb_srclast k ON k.la_source = a.la_source
 WHERE a.la_reporting_date > DATEADD(MONTH, -@TrendMonths, k.last_date)
   AND a.la_reporting_date <= k.last_date
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_acct ON #acct(la_gid, la_reporting_date);
+CREATE CLUSTERED INDEX ix_acct ON #hb_acct(la_gid, la_reporting_date);
 
 /* Только ПОСЛЕДНИЙ снимок каждого источника. Отдельная таблица нужна потому,
-   что LEFT JOIN к #acct без этого фильтра даёт до @TrendMonths строк на договор
+   что LEFT JOIN к #hb_acct без этого фильтра даёт до @TrendMonths строк на договор
    и молча множит любые COUNT/SUM по портфелю. */
-IF OBJECT_ID('tempdb..#acct_last') IS NOT NULL DROP TABLE #acct_last;
+IF OBJECT_ID('tempdb..#hb_acctlast') IS NOT NULL DROP TABLE #hb_acctlast;
 SELECT a.la_source, a.la_gid, a.la_reporting_date, a.days_past_due,
        a.delinquency_bucket, a.total_balance_debt
-INTO #acct_last
-FROM #acct a
-JOIN #src_last k ON k.la_source = a.la_source AND k.last_date = a.la_reporting_date
+INTO #hb_acctlast
+FROM #hb_acct a
+JOIN #hb_srclast k ON k.la_source = a.la_source AND k.last_date = a.la_reporting_date
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_acctlast ON #acct_last(la_gid);
+CREATE CLUSTERED INDEX ix_acctlast ON #hb_acctlast(la_gid);
 
-IF OBJECT_ID('tempdb..#ln') IS NOT NULL DROP TABLE #ln;
+IF OBJECT_ID('tempdb..#hb_ln') IS NOT NULL DROP TABLE #hb_ln;
 SELECT l_source, l_gid, l_loan_id, l_loan_number, l_borrower_id,
        l_loan_amount, l_actual_closure_date
-INTO #ln FROM [Dictionaries].[risk_analytics].[loans] WHERE l_report_date = @LoansAsOf
+INTO #hb_ln FROM [Dictionaries].[risk_analytics].[loans] WHERE l_report_date = @LoansAsOf
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_ln ON #ln(l_gid);
-CREATE INDEX ix_ln_num ON #ln(l_source, l_loan_number);
+CREATE CLUSTERED INDEX ix_ln ON #hb_ln(l_gid);
+CREATE INDEX ix_ln_num ON #hb_ln(l_source, l_loan_number);
 
 
 /*==============================================================================
@@ -121,12 +123,12 @@ CREATE INDEX ix_ln_num ON #ln(l_source, l_loan_number);
   выпадут из прогноза МОЛЧА. Поэтому сначала печатается покрытие графиком, и
   только потом — сам поток. Прогноз без знаменателя не является прогнозом.
 ==============================================================================*/
-IF OBJECT_ID('tempdb..#sched_keys') IS NOT NULL DROP TABLE #sched_keys;
+IF OBJECT_ID('tempdb..#hb_sched') IS NOT NULL DROP TABLE #hb_sched;
 SELECT DISTINCT rs_source, rs_loan_id
-INTO #sched_keys FROM [Dictionaries].[risk_analytics].[repayment_schedule]
+INTO #hb_sched FROM [Dictionaries].[risk_analytics].[repayment_schedule]
 WHERE rs_loan_id IS NOT NULL
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_sk ON #sched_keys(rs_loan_id);
+CREATE CLUSTERED INDEX ix_sk ON #hb_sched(rs_loan_id);
 
 /* Покрытие графиком проверяем по ОБЕИМ гипотезам ключа: rs_loan_id как
    loan_id (T4) и как gid (по прецеденту interest_rates, P9d). */
@@ -137,14 +139,14 @@ FROM (
     SELECT 'rs_loan_id = l_loan_id (bigint)' AS key_hypothesis,
            l.l_source AS source, COUNT_BIG(*) AS active_loans,
            SUM(CASE WHEN s.rs_loan_id IS NOT NULL THEN 1 ELSE 0 END) AS loans_with_schedule
-    FROM (SELECT l_source, TRY_CONVERT(bigint, l_loan_id) AS k FROM #ln) l
-    LEFT JOIN (SELECT DISTINCT rs_loan_id FROM #sched_keys) s ON s.rs_loan_id = l.k
+    FROM (SELECT l_source, TRY_CONVERT(bigint, l_loan_id) AS k FROM #hb_ln) l
+    LEFT JOIN (SELECT DISTINCT rs_loan_id FROM #hb_sched) s ON s.rs_loan_id = l.k
     GROUP BY l.l_source
     UNION ALL
     SELECT 'rs_loan_id = l_gid', l.l_source, COUNT_BIG(*),
            SUM(CASE WHEN s.rs_loan_id IS NOT NULL THEN 1 ELSE 0 END)
-    FROM #ln l
-    LEFT JOIN (SELECT DISTINCT rs_loan_id FROM #sched_keys) s ON s.rs_loan_id = l.l_gid
+    FROM #hb_ln l
+    LEFT JOIN (SELECT DISTINCT rs_loan_id FROM #hb_sched) s ON s.rs_loan_id = l.l_gid
     GROUP BY l.l_source
 ) d
 ORDER BY key_hypothesis, source
@@ -216,18 +218,30 @@ OPTION (MAXDOP 1);
 
   T13 (off-by-one) здесь двигает результат напрямую, поэтому 90+ отбирается
   ПО ОБОИМ определениям рядом. S01 отделён (D4.2): по нему цифра непригодна.
+
+  ПОРЯДОК ОПЕРАЦИЙ — не стиль, а причина зависания. В первой редакции
+  `CROSS APPLY (VALUES …)` стоял ДО фильтра `is_90 = 1`. Конструктор VALUES
+  ссылается на внешнюю колонку, поэтому предикат вычисляется уже после
+  размножения: план читал весь последний срез портфеля целиком, для каждой
+  строки ходил в `#hb_plsum`, удваивал результат — и только потом выбрасывал
+  почти всё как не-90+. 09.08 прогон на этом месте не вернулся.
+
+  Фильтр поднят к источнику. Второе определение — строгое ПОДМНОЖЕСТВО
+  первого (`dpd - 1 > 90` ⇔ `dpd > 91`), поэтому одного предиката
+  `days_past_due > @Dpd90` достаточно для обеих выборок, а различие между ними
+  считается уже на отобранном наборе. Цифры прежние, объём работы — нет.
 ==============================================================================*/
-IF OBJECT_ID('tempdb..#pl_sum') IS NOT NULL DROP TABLE #pl_sum;
-SELECT c_source, c_loan_gid,
+IF OBJECT_ID('tempdb..#hb_plsum') IS NOT NULL DROP TABLE #hb_plsum;
+SELECT c_loan_gid,
        SUM(CASE WHEN c_source = 'S01'
                  AND c_collateral_type IN (N'Поручительство', N'Страховой полис')
                 THEN 0 ELSE ISNULL(c_collateral_value, 0) END) AS pledge_property_only
-INTO #pl_sum
+INTO #hb_plsum
 FROM [Dictionaries].[risk_analytics].[pledges]
-WHERE c_reporting_date = (SELECT MAX(c_reporting_date) FROM [Dictionaries].[risk_analytics].[pledges])
-GROUP BY c_source, c_loan_gid
+WHERE c_reporting_date = @PledgeDate
+GROUP BY c_loan_gid
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_plsum ON #pl_sum(c_loan_gid);
+CREATE CLUSTERED INDEX ix_plsum ON #hb_plsum(c_loan_gid);
 
 SELECT @Suite AS suite, 'H15_UNCOVERED_EXPOSURE_90PLUS' AS scenario,
        source, dpd_definition,
@@ -239,14 +253,18 @@ SELECT @Suite AS suite, 'H15_UNCOVERED_EXPOSURE_90PLUS' AS scenario,
        SUM(CASE WHEN pledge = 0 THEN 1 ELSE 0 END) AS contracts_without_pledge,
        CASE WHEN source = 'S01' THEN N'НЕ ИСПОЛЬЗОВАТЬ — D4.2' ELSE N'' END AS trust_note
 FROM (
-    SELECT a.la_source AS source, d.dpd_definition,
-           ISNULL(a.total_balance_debt, 0) AS exposure,
-           ISNULL(p.pledge_property_only, 0) AS pledge
-    FROM #acct_last a
-    LEFT JOIN #pl_sum p ON p.c_loan_gid = a.la_gid
+    SELECT b.source, d.dpd_definition, b.exposure, b.pledge
+    FROM (
+        SELECT a.la_source AS source, a.days_past_due,
+               ISNULL(a.total_balance_debt, 0) AS exposure,
+               ISNULL(p.pledge_property_only, 0) AS pledge
+        FROM #hb_acctlast a
+        LEFT JOIN #hb_plsum p ON p.c_loan_gid = a.la_gid
+        WHERE a.days_past_due > @Dpd90        -- отбор ДО размножения
+    ) b
     CROSS APPLY (VALUES
-        (N'days_past_due > 90 (сырое поле)',      CASE WHEN a.days_past_due     > 90 THEN 1 ELSE 0 END),
-        (N'days_past_due - 1 > 90 (T13)',         CASE WHEN a.days_past_due - 1 > 90 THEN 1 ELSE 0 END)
+        (N'days_past_due > 90 (сырое поле)', CASE WHEN b.days_past_due     > @Dpd90 THEN 1 ELSE 0 END),
+        (N'days_past_due - 1 > 90 (T13)',    CASE WHEN b.days_past_due - 1 > @Dpd90 THEN 1 ELSE 0 END)
     ) d(dpd_definition, is_90)
     WHERE d.is_90 = 1
 ) x
@@ -278,11 +296,11 @@ FROM (
                              WHEN '1818'  THEN a.la_account_1818
                              ELSE              a.la_account_1838 END AS v
     FROM [Dictionaries].[risk_analytics].[loan_account] a
-    JOIN #src_last k0 ON k0.la_source = a.la_source
+    JOIN #hb_srclast k0 ON k0.la_source = a.la_source
                      AND k0.last_date = a.la_reporting_date   -- фильтр ДО размножения
     CROSS JOIN (VALUES ('1428'),('18771'),('1818'),('1838')) g(gl_account)
 ) a
-JOIN #src_last k ON k.la_source = a.la_source AND k.last_date = a.la_reporting_date
+JOIN #hb_srclast k ON k.la_source = a.la_source AND k.last_date = a.la_reporting_date
 GROUP BY a.la_source, k.last_date, gl_account
 ORDER BY source, gl_account
 OPTION (MAXDOP 1);
@@ -341,8 +359,8 @@ FROM (
                  AND cur.days_past_due > old.days_past_due THEN 1 ELSE 0 END
          + CASE WHEN rs.dlcr_gid IS NOT NULL THEN 1 ELSE 0 END
          + CASE WHEN pl.no_appraisal = 1 THEN 1 ELSE 0 END AS signals_count
-    FROM #acct_last cur
-    LEFT JOIN #acct old ON old.la_gid = cur.la_gid
+    FROM #hb_acctlast cur
+    LEFT JOIN #hb_acct old ON old.la_gid = cur.la_gid
                        AND old.la_reporting_date = DATEADD(MONTH, -@TrendMonths + 1, cur.la_reporting_date)
     OUTER APPLY (
         SELECT TOP 1 r.dlcr_gid FROM [Dictionaries].[risk_analytics].[restructuring_v2] r
@@ -387,7 +405,7 @@ FROM (
                 WHEN COUNT_BIG(*) < 1000 THEN N'3_100-999'
                 ELSE N'4_1000+' END AS channel_size_bucket
     FROM [Dictionaries].[risk_analytics].[loans] l
-    LEFT JOIN #acct_last a ON a.la_gid = l.l_gid   -- ровно один снимок на договор
+    LEFT JOIN #hb_acctlast a ON a.la_gid = l.l_gid   -- ровно один снимок на договор
     WHERE l.l_report_date = @LoansAsOf
       AND l.l_financial_consultant IS NOT NULL
       AND LTRIM(RTRIM(l.l_financial_consultant)) <> N''
@@ -424,7 +442,7 @@ FROM (
                     WHEN a.days_past_due <= 0    THEN N'1_БЕЗ ПРОСРОЧКИ'
                     WHEN a.days_past_due <= 90   THEN N'2_1-90'
                     ELSE                              N'3_90+ (ДЕФОЛТ)' END AS dpd_state
-        FROM #acct_last a
+        FROM #hb_acctlast a
         WHERE a.la_gid = r.dlcr_gid
     ) cur
     WHERE r.dlcr_gid IS NOT NULL
@@ -485,7 +503,7 @@ SELECT @Suite AS suite, 'H21b_90PLUS_TO_WRITEOFF' AS scenario,
        CASE WHEN a.la_source IN ('S02','S17')
             THEN N'СТУПЕНЬ ОТСУТСТВУЕТ — writeoff не покрывает этот источник'
             ELSE N'' END AS coverage_note
-FROM #acct_last a
+FROM #hb_acctlast a
 LEFT JOIN (SELECT DISTINCT w_dlcrp_dlcr_gid FROM [Dictionaries].[risk_analytics].[writeoff]
            WHERE w_dlcrp_dlcr_gid IS NOT NULL) w
        ON w.w_dlcrp_dlcr_gid = a.la_gid
@@ -509,7 +527,7 @@ SELECT @Suite AS suite, 'H22_POST_WRITEOFF_RECOVERY' AS scenario,
        CAST(SUM(ISNULL(pay.amount_after, 0)) AS decimal(38,2)) AS recovered_amount,
        CAST(SUM(ISNULL(w.w_dlcrp_write_off_amount, 0)) AS decimal(38,2)) AS written_off_amount
 FROM [Dictionaries].[risk_analytics].[writeoff] w
-LEFT JOIN #ln l ON l.l_gid = w.w_dlcrp_dlcr_gid
+LEFT JOIN #hb_ln l ON l.l_gid = w.w_dlcrp_dlcr_gid
 OUTER APPLY (
     SELECT COUNT_BIG(*) AS payments_after, SUM(ISNULL(p.p_TOTAL, 0)) AS amount_after
     FROM [Dictionaries].[risk_analytics].[payments] p
@@ -562,13 +580,13 @@ FROM (
     SELECT N'ЕСТЬ В ВИТРИНЕ, НЕТ В loans' AS bucket, m.source,
            COUNT(DISTINCT m.contract_number) AS contracts
     FROM [Dictionaries].[risk_analytics].[brm_all_data] m
-    LEFT JOIN #ln l ON l.l_source = m.source AND l.l_loan_number = m.contract_number
+    LEFT JOIN #hb_ln l ON l.l_source = m.source AND l.l_loan_number = m.contract_number
     WHERE l.l_gid IS NULL
     GROUP BY m.source
     UNION ALL
     SELECT N'ЕСТЬ В loans, НЕТ В ВИТРИНЕ', l.l_source,
            COUNT(DISTINCT l.l_loan_number)
-    FROM #ln l
+    FROM #hb_ln l
     LEFT JOIN (SELECT DISTINCT source, contract_number FROM [Dictionaries].[risk_analytics].[brm_all_data]) m
            ON m.source = l.l_source AND m.contract_number = l.l_loan_number
     WHERE m.contract_number IS NULL AND l.l_loan_number IS NOT NULL
@@ -665,7 +683,7 @@ SELECT @Suite AS suite, 'H25b_PERIMETER_OLD_VS_NEW' AS scenario,
        bucket, contracts
 FROM (
     SELECT N'ONLY_NEW (нет в старой ветке)' AS bucket, COUNT_BIG(*) AS contracts
-    FROM #ln l
+    FROM #hb_ln l
     WHERE NOT EXISTS (SELECT 1 FROM [CL_PORTFOLIO].[dbo].[<таблица>] o
                       WHERE o.<номер> = l.l_loan_number)
 ) d
@@ -676,9 +694,9 @@ OPTION (MAXDOP 1);
 /*------------------------------------------------------------------------------
   УБОРКА — немедленно
 ------------------------------------------------------------------------------*/
-IF OBJECT_ID('tempdb..#acct')       IS NOT NULL DROP TABLE #acct;
-IF OBJECT_ID('tempdb..#acct_last')  IS NOT NULL DROP TABLE #acct_last;
-IF OBJECT_ID('tempdb..#ln')         IS NOT NULL DROP TABLE #ln;
-IF OBJECT_ID('tempdb..#src_last')   IS NOT NULL DROP TABLE #src_last;
-IF OBJECT_ID('tempdb..#sched_keys') IS NOT NULL DROP TABLE #sched_keys;
-IF OBJECT_ID('tempdb..#pl_sum')     IS NOT NULL DROP TABLE #pl_sum;
+IF OBJECT_ID('tempdb..#hb_acct')       IS NOT NULL DROP TABLE #hb_acct;
+IF OBJECT_ID('tempdb..#hb_acctlast')  IS NOT NULL DROP TABLE #hb_acctlast;
+IF OBJECT_ID('tempdb..#hb_ln')         IS NOT NULL DROP TABLE #hb_ln;
+IF OBJECT_ID('tempdb..#hb_srclast')   IS NOT NULL DROP TABLE #hb_srclast;
+IF OBJECT_ID('tempdb..#hb_sched') IS NOT NULL DROP TABLE #hb_sched;
+IF OBJECT_ID('tempdb..#hb_plsum')     IS NOT NULL DROP TABLE #hb_plsum;
