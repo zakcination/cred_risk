@@ -131,13 +131,45 @@ OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_sk ON #hb_sched(rs_loan_id);
 
 /* Покрытие графиком проверяем по ОБЕИМ гипотезам ключа: rs_loan_id как
-   loan_id (T4) и как gid (по прецеденту interest_rates, P9d). */
+   loan_id (T4) и как gid (по прецеденту interest_rates, P9d).
+
+   ЗНАМЕНАТЕЛЬ ИСПРАВЛЕН 09.08. Первая редакция считала долю от `#hb_ln` —
+   это ВСЕ договоры `loans` на дату, вместе с закрытыми, а колонка называлась
+   `active_loans`. Отсюда «3,20%» у S03: 226 973 договора с графиком против
+   7 099 915 всех, тогда как активных у источника 220 589 — то есть график
+   покрывает практически весь активный портфель. Цифра была занижена в 32 раза
+   собственным знаменателем, а название колонки это скрывало.
+
+   Теперь печатаются ОБА знаменателя рядом: доля от активного портфеля и доля
+   от всех договоров. Расхождение между ними — само по себе результат: оно
+   показывает, ведёт ли витрина график по закрытым договорам. */
+IF OBJECT_ID('tempdb..#hb_act') IS NOT NULL DROP TABLE #hb_act;
+SELECT l_source, l_gid
+INTO #hb_act
+FROM [Dictionaries].[risk_analytics].[loans_active]
+WHERE l_report_date = @LoansAsOf
+OPTION (MAXDOP 1);
+CREATE CLUSTERED INDEX ix_hb_act ON #hb_act(l_gid);
+
+SELECT @Suite AS suite, 'H13a0_SCHEDULE_COVERAGE_ACTIVE' AS scenario,
+       'rs_loan_id = l_gid, знаменатель — АКТИВНЫЕ' AS key_hypothesis,
+       l.l_source AS source, COUNT_BIG(*) AS active_loans,
+       SUM(CASE WHEN s.rs_loan_id IS NOT NULL THEN 1 ELSE 0 END) AS loans_with_schedule,
+       CAST(100.0 * SUM(CASE WHEN s.rs_loan_id IS NOT NULL THEN 1 ELSE 0 END)
+            / NULLIF(COUNT_BIG(*), 0) AS decimal(9,4)) AS coverage_pct
+FROM #hb_act l
+LEFT JOIN (SELECT DISTINCT rs_loan_id FROM #hb_sched) s ON s.rs_loan_id = l.l_gid
+GROUP BY l.l_source
+ORDER BY source
+OPTION (MAXDOP 1);
+
 SELECT @Suite AS suite, 'H13a_SCHEDULE_COVERAGE' AS scenario,
-       key_hypothesis, source, active_loans, loans_with_schedule,
-       CAST(100.0 * loans_with_schedule / NULLIF(active_loans, 0) AS decimal(9,4)) AS coverage_pct
+       key_hypothesis, source,
+       all_loans AS loans_ALL_STATUSES_not_active, loans_with_schedule,
+       CAST(100.0 * loans_with_schedule / NULLIF(all_loans, 0) AS decimal(9,4)) AS coverage_pct
 FROM (
     SELECT 'rs_loan_id = l_loan_id (bigint)' AS key_hypothesis,
-           l.l_source AS source, COUNT_BIG(*) AS active_loans,
+           l.l_source AS source, COUNT_BIG(*) AS all_loans,
            SUM(CASE WHEN s.rs_loan_id IS NOT NULL THEN 1 ELSE 0 END) AS loans_with_schedule
     FROM (SELECT l_source, TRY_CONVERT(bigint, l_loan_id) AS k FROM #hb_ln) l
     LEFT JOIN (SELECT DISTINCT rs_loan_id FROM #hb_sched) s ON s.rs_loan_id = l.k
@@ -700,3 +732,4 @@ IF OBJECT_ID('tempdb..#hb_ln')         IS NOT NULL DROP TABLE #hb_ln;
 IF OBJECT_ID('tempdb..#hb_srclast')   IS NOT NULL DROP TABLE #hb_srclast;
 IF OBJECT_ID('tempdb..#hb_sched') IS NOT NULL DROP TABLE #hb_sched;
 IF OBJECT_ID('tempdb..#hb_plsum')     IS NOT NULL DROP TABLE #hb_plsum;
+IF OBJECT_ID('tempdb..#hb_act')       IS NOT NULL DROP TABLE #hb_act;
