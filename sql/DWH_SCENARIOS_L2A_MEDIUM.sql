@@ -67,8 +67,6 @@ OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_srclast ON #src_last(la_source);
 
 IF OBJECT_ID('tempdb..#acct') IS NOT NULL DROP TABLE #acct;
-IF OBJECT_ID('tempdb..#src_last') IS NOT NULL DROP TABLE #src_last;
-IF OBJECT_ID('tempdb..#ir') IS NOT NULL DROP TABLE #ir;
 SELECT a.la_source, a.la_gid, a.la_reporting_date,
        a.total_balance_debt, a.principal_balance_debt,
        a.days_past_due, a.delinquency_bucket
@@ -665,3 +663,5 @@ DROP TABLE #restr;
 DROP TABLE #pl;
 DROP TABLE #acct;
 DROP TABLE #la;
+IF OBJECT_ID('tempdb..#src_last') IS NOT NULL DROP TABLE #src_last;
+IF OBJECT_ID('tempdb..#ir') IS NOT NULL DROP TABLE #ir;
