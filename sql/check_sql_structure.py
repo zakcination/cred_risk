@@ -17,7 +17,8 @@
   5. Двухчастные имена объектов и `INFORMATION_SCHEMA` без БД — они молча
      резолвятся в текущую БД сессии (по умолчанию `CL_PORTFOLIO`), а
      `INFORMATION_SCHEMA` при этом вернёт 0 строк БЕЗ ошибки.
-  6. Отдельно, как ПРЕДУПРЕЖДЕНИЕ: отсутствие `OPTION (MAXDOP 1)`. Скрипты
+  6. `#temp`, дропнутая между созданием и использованием (Msg 208).
+  7. Отдельно, как ПРЕДУПРЕЖДЕНИЕ: отсутствие `OPTION (MAXDOP 1)`. Скрипты
      stage3/b3b написаны до этого правила и отработали как есть — смешивать
      их с ошибками структуры нельзя, иначе список FAIL перестают читать.
 
@@ -170,6 +171,26 @@ def check(path):
         problems.append('`INFORMATION_SCHEMA` без имени БД — в чужой БД вернёт '
                         '0 строк БЕЗ ошибки; нужно `[Dictionaries].INFORMATION_SCHEMA.`')
         break
+
+    # #temp, ДРОПНУТАЯ между созданием и использованием. Ровно так уехал L2A
+    # 09.08: правка уборки попала в блок материализации, и `#src_last` был
+    # удалён за 7 строк до JOIN по нему. Отсюда Msg 208, а всё остальное в
+    # том прогоне (Msg 207 на существующие колонки, Msg 208 на #b) было
+    # каскадом: батч упал, уборка не отработала, следующий скомпилировался
+    # против унаследованной структуры.
+    for name in set(re.findall(r'INTO\s+(#\w+)', code_only)):
+        pos_create = [m.start() for m in re.finditer(r'INTO\s+' + re.escape(name) + r'\b', code_only)]
+        pos_drop = [m.start() for m in re.finditer(r'DROP\s+TABLE\s+' + re.escape(name) + r'\b', code_only)]
+        pos_use = [m.start() for m in re.finditer(r'(?:FROM|JOIN)\s+' + re.escape(name) + r'\b', code_only)]
+        for d in pos_drop:
+            if not any(c < d for c in pos_create):
+                continue                      # дроп до создания — штатная страховка
+            after = [u for u in pos_use if u > d]
+            if after and not any(d < c < after[0] for c in pos_create):
+                problems.append(
+                    f'{name}: DROP между созданием и использованием — таблицы '
+                    f'не будет в момент обращения (Msg 208)')
+                break
 
     # Голый текст сразу после закрытия шапки комментария — подпись правки,
     # вставленной мимо блока (ровно так уехал L2B 09.08).

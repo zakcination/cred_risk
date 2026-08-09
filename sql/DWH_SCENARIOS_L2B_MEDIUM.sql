@@ -99,8 +99,21 @@ OPTION (MAXDOP 1);
 
 /*------------------------------------------------------------------------------
   МАТЕРИАЛИЗАЦИЯ
+
+  ИМЕНА #temp НАМЕРЕННО ОТЛИЧАЮТСЯ ОТ L2A (`#lb`, `#acctb`, `#plb`, `#brw`
+  против `#la`, `#acct`, `#pl`, `#b`). Причина — реальный отказ 09.08.
+
+  SQL Server связывает ссылки на `#temp` при КОМПИЛЯЦИИ батча, а
+  `IF OBJECT_ID(...) DROP` выполняется во время ВЫПОЛНЕНИЯ. Если L2A упал и
+  не дошёл до своей уборки, его `#la` остаётся в сессии — и батч L2B
+  компилируется против ЧУЖОЙ структуры. Отсюда `Msg 207` на `l_loan_number`,
+  `l_funding_date`, `l_first_repayment_date`: колонки во вьюхе ЕСТЬ, но в
+  унаследованном `#la` от L2A их не было.
+
+  Разные имена убирают этот класс отказа целиком: части перестают зависеть
+  от того, дожил ли предыдущий скрипт до уборки.
 ------------------------------------------------------------------------------*/
-IF OBJECT_ID('tempdb..#la') IS NOT NULL DROP TABLE #la;
+IF OBJECT_ID('tempdb..#lb') IS NOT NULL DROP TABLE #lb;
 /* СОСТАВ ПОДТВЕРЖДЁН АУДИТОМ СХЕМЫ 09.08, а не взят из канваса.
    `loans_active` содержит: l_loan_number, l_funding_date,
    l_first_repayment_date, l_entrepreneur_category, l_loan_open_date,
@@ -112,56 +125,56 @@ SELECT l_source, l_gid, l_borrower_id, l_loan_id, l_loan_number,
        l_loan_amount, l_currency, l_product_type, l_entrepreneur_category,
        l_loan_open_date, l_funding_date, l_first_repayment_date,
        l_scheduled_closure_date, l_actual_closure_date
-INTO #la
+INTO #lb
 FROM [Dictionaries].[risk_analytics].[loans_active]
 WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_la_gid ON #la(l_gid);
-CREATE INDEX ix_la_borrower ON #la(l_borrower_id);
+CREATE CLUSTERED INDEX ix_lb_gid ON #lb(l_gid);
+CREATE INDEX ix_lb_borrower ON #lb(l_borrower_id);
 
 /* Последняя дата КАЖДОГО источника — см. шапку (T26). */
-IF OBJECT_ID('tempdb..#la_last') IS NOT NULL DROP TABLE #la_last;
+IF OBJECT_ID('tempdb..#lb_last') IS NOT NULL DROP TABLE #lb_last;
 SELECT la_source, MAX(la_reporting_date) AS last_date
-INTO #la_last
+INTO #lb_last
 FROM [Dictionaries].[risk_analytics].[loan_account]
 GROUP BY la_source
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_lalast ON #la_last(la_source);
+CREATE CLUSTERED INDEX ix_lblast ON #lb_last(la_source);
 
-IF OBJECT_ID('tempdb..#acct') IS NOT NULL DROP TABLE #acct;
+IF OBJECT_ID('tempdb..#acctb') IS NOT NULL DROP TABLE #acctb;
 SELECT a.la_source, a.la_gid, a.la_reporting_date,
        a.total_balance_debt, a.principal_balance_debt,
        a.days_past_due, a.delinquency_bucket
-INTO #acct
+INTO #acctb
 FROM [Dictionaries].[risk_analytics].[loan_account] a
-JOIN #la_last k ON k.la_source = a.la_source
+JOIN #lb_last k ON k.la_source = a.la_source
                AND k.last_date = a.la_reporting_date
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_acct_gid ON #acct(la_gid);
+CREATE CLUSTERED INDEX ix_acctb_gid ON #acctb(la_gid);
 
-/* #b содержит b_iin_bin — он нужен M27/M32 для группировки, но НИ В ОДНОМ
+/* #brw содержит b_iin_bin — он нужен M27/M32 для группировки, но НИ В ОДНОМ
    результате не выводится: наружу идут только счётчики групп. */
-IF OBJECT_ID('tempdb..#b') IS NOT NULL DROP TABLE #b;
+IF OBJECT_ID('tempdb..#brw') IS NOT NULL DROP TABLE #brw;
 SELECT b_source, b_borrower_id, b_borrower_type,
        b_individual_entrepreneur_flag, b_iin_bin,
        b_date_of_death, b_date_of_imprisonment, b_status_change_date_prison,
        b_active_loans_count, b_closed_loans_count,
        b_client_rating, b_client_rating_date
-INTO #b
+INTO #brw
 FROM [Dictionaries].[risk_analytics].[borrower]
 WHERE b_report_date = @BAsOf
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_b_id ON #b(b_borrower_id);
+CREATE CLUSTERED INDEX ix_brw_id ON #brw(b_borrower_id);
 
-IF OBJECT_ID('tempdb..#pl') IS NOT NULL DROP TABLE #pl;
+IF OBJECT_ID('tempdb..#plb') IS NOT NULL DROP TABLE #plb;
 SELECT c_source, c_loan_gid, c_collateral_type, c_car_year,
        c_collateral_value, c_market_collateral_value,
        c_car_value, c_market_car_value
-INTO #pl
+INTO #plb
 FROM [Dictionaries].[risk_analytics].[pledges]
 WHERE c_reporting_date = @AsOf
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_pl_gid ON #pl(c_loan_gid);
+CREATE CLUSTERED INDEX ix_plb_gid ON #plb(c_loan_gid);
 
 /* Эффективные даты счётного слоя — печатаем ДО любых сумм по нему. */
 SELECT @Suite AS suite, 'M20b_ACCOUNT_EFFECTIVE_DATES' AS scenario,
@@ -169,8 +182,8 @@ SELECT @Suite AS suite, 'M20b_ACCOUNT_EFFECTIVE_DATES' AS scenario,
        CASE WHEN k.last_date = @AsOf THEN 'СОВПАДАЕТ С loans'
             ELSE 'СЕТКА СДВИНУТА ОТНОСИТЕЛЬНО loans' END AS grid_state,
        COUNT_BIG(a.la_gid) AS accounts
-FROM #la_last k
-LEFT JOIN #acct a ON a.la_source = k.la_source
+FROM #lb_last k
+LEFT JOIN #acctb a ON a.la_source = k.la_source
 GROUP BY k.la_source, k.last_date,
        CASE WHEN k.last_date = @AsOf THEN 'СОВПАДАЕТ С loans'
             ELSE 'СЕТКА СДВИНУТА ОТНОСИТЕЛЬНО loans' END
@@ -203,13 +216,13 @@ FROM (
            SUM(CASE WHEN x.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows,
            COUNT_BIG(*) AS total_rows
     FROM [Dictionaries].[risk_analytics].[ratings] r
-    LEFT JOIN #la x ON x.l_gid = r.r_deal_gid
+    LEFT JOIN #lb x ON x.l_gid = r.r_deal_gid
     UNION ALL
     SELECT 'r_dog_num -> l_loan_number',
            SUM(CASE WHEN y.l_loan_number IS NOT NULL THEN 1 ELSE 0 END),
            COUNT_BIG(*)
     FROM [Dictionaries].[risk_analytics].[ratings] r
-    LEFT JOIN (SELECT DISTINCT l_loan_number FROM #la) y
+    LEFT JOIN (SELECT DISTINCT l_loan_number FROM #lb) y
            ON y.l_loan_number = r.r_dog_num
 ) d
 ORDER BY key_tested
@@ -227,8 +240,8 @@ FROM (
                    = CONVERT(nvarchar(50), r.r_loan_rating) THEN 'СОВПАДАЮТ'
                 ELSE 'РАСХОДЯТСЯ' END AS rating_state,
            COUNT_BIG(*) AS borrowers_or_deals
-    FROM #la l
-    LEFT JOIN #b b ON b.b_borrower_id = l.l_borrower_id
+    FROM #lb l
+    LEFT JOIN #brw b ON b.b_borrower_id = l.l_borrower_id
     LEFT JOIN [Dictionaries].[risk_analytics].[ratings] r ON r.r_deal_gid = l.l_gid
     GROUP BY CASE WHEN b.b_client_rating IS NULL AND r.r_loan_rating IS NULL
                      THEN 'НЕТ НИ ОДНОГО РЕЙТИНГА'
@@ -294,13 +307,13 @@ FROM (
            SUM(CASE WHEN x.l_gid IS NOT NULL THEN 1 ELSE 0 END) AS matched_rows,
            COUNT_BIG(*) AS total_rows
     FROM [Dictionaries].[risk_analytics].[Guarantees] g
-    LEFT JOIN #la x ON x.l_gid = g.g_clnt_gid
+    LEFT JOIN #lb x ON x.l_gid = g.g_clnt_gid
     UNION ALL
     SELECT 'g_clnt_gid -> l_borrower_id',
            SUM(CASE WHEN y.l_borrower_id IS NOT NULL THEN 1 ELSE 0 END),
            COUNT_BIG(*)
     FROM [Dictionaries].[risk_analytics].[Guarantees] g
-    LEFT JOIN (SELECT DISTINCT l_borrower_id FROM #la) y
+    LEFT JOIN (SELECT DISTINCT l_borrower_id FROM #lb) y
            ON y.l_borrower_id = g.g_clnt_gid
 ) d
 ORDER BY link_tested
@@ -322,8 +335,8 @@ FROM (
     SELECT l.l_source AS source,
            ISNULL(l.l_product_type, N'(NULL)') AS product_type,
            CASE WHEN p.c_loan_gid IS NULL THEN 0 ELSE 1 END AS has_pledge
-    FROM #la l
-    LEFT JOIN (SELECT DISTINCT c_loan_gid FROM #pl) p ON p.c_loan_gid = l.l_gid
+    FROM #lb l
+    LEFT JOIN (SELECT DISTINCT c_loan_gid FROM #plb) p ON p.c_loan_gid = l.l_gid
 ) d
 GROUP BY source, product_type
 ORDER BY source, loans DESC
@@ -344,9 +357,9 @@ FROM (
     SELECT a.la_source AS source, d.dpd_definition,
            CASE WHEN p.c_loan_gid IS NULL THEN 0 ELSE 1 END AS has_pledge,
            a.total_balance_debt AS bal
-    FROM #acct a
-    JOIN #la l ON l.l_gid = a.la_gid
-    LEFT JOIN (SELECT DISTINCT c_loan_gid FROM #pl) p ON p.c_loan_gid = a.la_gid
+    FROM #acctb a
+    JOIN #lb l ON l.l_gid = a.la_gid
+    LEFT JOIN (SELECT DISTINCT c_loan_gid FROM #plb) p ON p.c_loan_gid = a.la_gid
     CROSS APPLY (VALUES
         ('days_past_due > 90 (сырое поле)', CASE WHEN a.days_past_due > 90 THEN 1 ELSE 0 END),
         ('dpd = days_past_due - 1 > 90 (T13)', CASE WHEN a.days_past_due - 1 > 90 THEN 1 ELSE 0 END)
@@ -381,7 +394,7 @@ FROM (
                    + MIN(ISNULL(CONVERT(nvarchar(20), b_individual_entrepreneur_flag), N'(NULL)'))
                 ELSE N'РАЗНЫЕ ЗНАЧЕНИЯ ФЛАГА НА ОДНОМ ИИН/БИН (раздвоение роли)'
            END AS roles_present
-    FROM #b
+    FROM #brw
     WHERE b_iin_bin IS NOT NULL AND LTRIM(RTRIM(b_iin_bin)) <> N''
     GROUP BY b_iin_bin
 ) d
@@ -401,9 +414,9 @@ SELECT @Suite AS suite, 'M28_DECEASED_ACTIVE_LOANS' AS scenario,
        SUM(CASE WHEN b.b_date_of_death > @AsOf THEN 1 ELSE 0 END) AS death_date_future_ANOMALY,
        CAST(SUM(ISNULL(a.total_balance_debt, 0)) AS decimal(38,2)) AS sum_balance_where_known,
        SUM(CASE WHEN a.la_gid IS NULL THEN 1 ELSE 0 END) AS no_account_row
-FROM #la l
-JOIN #b b ON b.b_borrower_id = l.l_borrower_id
-LEFT JOIN #acct a ON a.la_gid = l.l_gid
+FROM #lb l
+JOIN #brw b ON b.b_borrower_id = l.l_borrower_id
+LEFT JOIN #acctb a ON a.la_gid = l.l_gid
 WHERE b.b_date_of_death IS NOT NULL
 GROUP BY l.l_source
 ORDER BY source
@@ -420,8 +433,8 @@ SELECT @Suite AS suite, 'M29_IMPRISONED_ACTIVE_LOANS' AS scenario,
        SUM(CASE WHEN b.b_status_change_date_prison IS NULL THEN 1 ELSE 0 END) AS no_status_change_date,
        SUM(CASE WHEN b.b_status_change_date_prison < b.b_date_of_imprisonment
                 THEN 1 ELSE 0 END) AS status_before_imprisonment_ANOMALY
-FROM #la l
-JOIN #b b ON b.b_borrower_id = l.l_borrower_id
+FROM #lb l
+JOIN #brw b ON b.b_borrower_id = l.l_borrower_id
 WHERE b.b_date_of_imprisonment IS NOT NULL
 GROUP BY l.l_source
 ORDER BY source
@@ -452,10 +465,10 @@ FROM (
                 WHEN TRY_CONVERT(int, b.b_active_loans_count) > ISNULL(f.actual_cnt, 0)
                      THEN 'СЧЁТЧИК ЗАВЫШЕН'
                 ELSE 'СЧЁТЧИК ЗАНИЖЕН' END AS diff_bucket
-    FROM #b b
+    FROM #brw b
     LEFT JOIN (
         SELECT l_borrower_id, COUNT_BIG(*) AS actual_cnt
-        FROM #la GROUP BY l_borrower_id
+        FROM #lb GROUP BY l_borrower_id
     ) f ON f.l_borrower_id = b.b_borrower_id
 ) d
 GROUP BY diff_bucket
@@ -505,7 +518,7 @@ FROM (
                 WHEN COUNT(DISTINCT b_borrower_id) = 2 THEN '2'
                 WHEN COUNT(DISTINCT b_borrower_id) <= 5 THEN '3-5'
                 ELSE '6+' END AS ids_per_identifier_bucket
-    FROM #b
+    FROM #brw
     WHERE b_iin_bin IS NOT NULL AND LTRIM(RTRIM(b_iin_bin)) <> N''
     GROUP BY b_iin_bin
 ) d
@@ -530,7 +543,7 @@ FROM (
            CASE WHEN c_market_collateral_value > c_collateral_value
                 THEN c_market_collateral_value / NULLIF(c_collateral_value, 0)
                 ELSE c_collateral_value / NULLIF(c_market_collateral_value, 0) END AS gap_x
-    FROM #pl
+    FROM #plb
     WHERE c_collateral_value > 0 AND c_market_collateral_value > 0
 ) d
 WHERE gap_x >= @ValueGap
@@ -552,7 +565,7 @@ SELECT @Suite AS suite, 'M34a_CAR_YEAR_TYPE_AUDIT' AS scenario,
                  AND TRY_CONVERT(int, c_car_year) IS NULL THEN 1 ELSE 0 END) AS year_not_numeric,
        SUM(CASE WHEN TRY_CONVERT(int, c_car_year) NOT BETWEEN 1900 AND YEAR(@AsOf) + 1
                 THEN 1 ELSE 0 END) AS year_out_of_range_ANOMALY
-FROM #pl
+FROM #plb
 GROUP BY c_source
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -562,7 +575,7 @@ SELECT @Suite AS suite, 'M34b_OLD_CARS' AS scenario,
        COUNT_BIG(*) AS old_car_pledges,
        MIN(TRY_CONVERT(int, c_car_year)) AS oldest_year,
        CAST(SUM(ISNULL(c_collateral_value, 0)) AS decimal(38,2)) AS sum_collateral_value
-FROM #pl
+FROM #plb
 WHERE TRY_CONVERT(int, c_car_year) BETWEEN 1900 AND YEAR(@AsOf) - @OldCarYrs
 GROUP BY c_source
 ORDER BY source
@@ -581,7 +594,7 @@ SELECT @Suite AS suite, 'M35_ACCOUNT_GRAIN' AS scenario,
        MAX(rows_in_group) AS max_rows_per_gid
 FROM (
     SELECT la_source, la_reporting_date, la_gid, COUNT_BIG(*) AS rows_in_group
-    FROM #acct
+    FROM #acctb
     GROUP BY la_source, la_reporting_date, la_gid
     HAVING COUNT_BIG(*) > 1
 ) d
@@ -608,7 +621,7 @@ FROM (
                 WHEN DATEDIFF(DAY, l_funding_date, l_first_repayment_date) <= 365 THEN '63-365'
                 ELSE '>365 (АНОМАЛИЯ)' END AS gap_bucket,
            COUNT_BIG(*) AS loans
-    FROM #la
+    FROM #lb
     GROUP BY l_source,
            CASE WHEN l_funding_date IS NULL OR l_first_repayment_date IS NULL
                      THEN '(НЕТ ОДНОЙ ИЗ ДАТ)'
@@ -667,7 +680,7 @@ SELECT @Suite AS suite, 'M38_PROVISION_COVERAGE' AS scenario,
        CAST(SUM(ISNULL(a.principal_balance_debt, 0)) AS decimal(38,2)) AS sum_principal,
        CAST(100.0 * SUM(CASE WHEN a.total_balance_debt IS NOT NULL THEN 1 ELSE 0 END)
             / NULLIF(COUNT_BIG(*), 0) AS decimal(9,4)) AS balance_fill_pct
-FROM #acct a
+FROM #acctb a
 GROUP BY a.la_source, a.la_reporting_date
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -689,8 +702,8 @@ SELECT @Suite AS suite, 'M39_FX_POPULATION' AS scenario,
        COUNT_BIG(*) AS loans,
        SUM(CASE WHEN a.la_gid IS NULL THEN 1 ELSE 0 END) AS no_account_row,
        CAST(SUM(ISNULL(a.total_balance_debt, 0)) AS decimal(38,2)) AS sum_balance
-FROM #la l
-LEFT JOIN #acct a ON a.la_gid = l.l_gid
+FROM #lb l
+LEFT JOIN #acctb a ON a.la_gid = l.l_gid
 WHERE l.l_currency IS NOT NULL AND l.l_currency <> N'KZT'
 GROUP BY l.l_source, l.l_currency
 ORDER BY source, currency
@@ -704,10 +717,10 @@ GO
 
   Отделён `GO` НАМЕРЕННО. 09.08 прогон упал с `Msg 207 Invalid column name
   'l_segment'` / `'l_financial_consultant'`: эти поля живут в `loans`, но не
-  во вьюхе `loans_active`, на которой строится `#la`. Одна неверная колонка
+  во вьюхе `loans_active`, на которой строится `#lb`. Одна неверная колонка
   уносила все 18 остальных сценариев батча.
 
-  Здесь периметр по-прежнему задаёт `#la` (активные договоры), а атрибуты
+  Здесь периметр по-прежнему задаёт `#lb` (активные договоры), а атрибуты
   подтягиваются из `loans` по gid. Если их нет и там — умрёт только этот
   батч, а фактические имена уже напечатаны батчем 0.
   #temp переживают GO; заново объявляются только переменные (Msg 137).
@@ -722,7 +735,7 @@ SELECT l.l_gid, l.l_segment, l.l_financial_consultant
 INTO #lattr
 FROM [Dictionaries].[risk_analytics].[loans] l
 WHERE l.l_report_date = @AsOf
-  AND EXISTS (SELECT 1 FROM #la k WHERE k.l_gid = l.l_gid)
+  AND EXISTS (SELECT 1 FROM #lb k WHERE k.l_gid = l.l_gid)
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lattr ON #lattr(l_gid);
 
@@ -739,9 +752,9 @@ FROM (
            ISNULL(b.b_borrower_type, N'(НЕТ В borrower)') AS borrower_type,
            COUNT_BIG(*) AS loans,
            ROW_NUMBER() OVER (PARTITION BY l.l_source ORDER BY COUNT_BIG(*) DESC) AS rn
-    FROM #la l
+    FROM #lb l
     LEFT JOIN #lattr at ON at.l_gid = l.l_gid
-    LEFT JOIN #b b ON b.b_borrower_id = l.l_borrower_id
+    LEFT JOIN #brw b ON b.b_borrower_id = l.l_borrower_id
     GROUP BY l.l_source, ISNULL(at.l_segment, N'(NULL)'),
              ISNULL(l.l_entrepreneur_category, N'(NULL)'),
              ISNULL(b.b_borrower_type, N'(НЕТ В borrower)')
@@ -766,7 +779,7 @@ SELECT @Suite AS suite, 'M40_CONSULTANT_CONCENTRATION' AS scenario,
 FROM (
     SELECT l_source AS source, at_l_financial_consultant, COUNT_BIG(*) AS loans
     FROM (SELECT k.l_source, at.l_financial_consultant AS at_l_financial_consultant
-        FROM #la k JOIN #lattr at ON at.l_gid = k.l_gid) z
+        FROM #lb k JOIN #lattr at ON at.l_gid = k.l_gid) z
     WHERE at_l_financial_consultant IS NOT NULL
       AND LTRIM(RTRIM(at_l_financial_consultant)) <> N''
     GROUP BY l_source, at_l_financial_consultant
@@ -786,7 +799,7 @@ SELECT @Suite AS suite, 'M40b_CONSULTANT_FILL_RATE' AS scenario,
    активным портфелем. INNER занизил бы active_loans на договоры без атрибута
    и превратил бы метрику пропусков в метрику наличия. */
 FROM (SELECT k.l_source, at.l_financial_consultant AS at_l_financial_consultant
-        FROM #la k LEFT JOIN #lattr at ON at.l_gid = k.l_gid) z
+        FROM #lb k LEFT JOIN #lattr at ON at.l_gid = k.l_gid) z
 GROUP BY l_source
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -796,9 +809,9 @@ OPTION (MAXDOP 1);
 /*------------------------------------------------------------------------------
   УБОРКА (немедленная — после переполнения tempdb 17.07)
 ------------------------------------------------------------------------------*/
-IF OBJECT_ID('tempdb..#la')      IS NOT NULL DROP TABLE #la;
+IF OBJECT_ID('tempdb..#lb')      IS NOT NULL DROP TABLE #lb;
 IF OBJECT_ID('tempdb..#lattr')   IS NOT NULL DROP TABLE #lattr;
-IF OBJECT_ID('tempdb..#la_last') IS NOT NULL DROP TABLE #la_last;
-IF OBJECT_ID('tempdb..#acct')    IS NOT NULL DROP TABLE #acct;
-IF OBJECT_ID('tempdb..#b')       IS NOT NULL DROP TABLE #b;
-IF OBJECT_ID('tempdb..#pl')      IS NOT NULL DROP TABLE #pl;
+IF OBJECT_ID('tempdb..#lb_last') IS NOT NULL DROP TABLE #lb_last;
+IF OBJECT_ID('tempdb..#acctb')    IS NOT NULL DROP TABLE #acctb;
+IF OBJECT_ID('tempdb..#brw')       IS NOT NULL DROP TABLE #brw;
+IF OBJECT_ID('tempdb..#plb')      IS NOT NULL DROP TABLE #plb;
