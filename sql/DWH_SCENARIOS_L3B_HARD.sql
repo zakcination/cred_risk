@@ -184,20 +184,52 @@ FROM (
 ORDER BY key_hypothesis, source
 OPTION (MAXDOP 1);
 
-/* Сам поток. Ключ НЕ фиксируем — печатаем сумму по источнику графика, без
-   джойна к портфелю: пока H13a не назовёт рабочий ключ, привязка к портфелю
-   была бы вымышленной. */
+/*  Сам поток. ПЕРИМЕТР ДОБАВЛЕН 09.08 ПО РЕЗУЛЬТАТУ P11.
+
+    Первая редакция суммировала таблицу целиком, без джойна к портфелю. Это
+    было осознанное решение: на момент написания рабочий ключ ещё не был
+    подтверждён, и привязка к портфелю была бы вымышленной. Ключ подтверждён с
+    обеих сторон — H11 сверху (`rs_loan_id → l_gid` = 100%), P11e снизу (ни
+    одной строки-сироты), — и решение перестало быть верным.
+
+    P11d показала цену: у S17 **231 328 договоров вне активного периметра
+    несут график, 4 767 282 платежа — 63,9% всех строк источника**, и у 229 454
+    из них платежи датированы будущим. То есть почти две трети «прогноза
+    поступлений» по S17 приходили с договоров, которых в активном портфеле
+    нет. У S03 та же доля 0,6%, у S01 — 0,2%: дефект посточниковый.
+
+    Теперь поток печатается ДВАЖДЫ — по активному периметру и по таблице
+    целиком. Разница между строками и есть размер вопроса; печатать только
+    отфильтрованную цифру означало бы спрятать его.  */
 SELECT @Suite AS suite, 'H13b_SCHEDULED_CASHFLOW' AS scenario,
-       rs_source AS source,
-       CONVERT(char(7), rs_repayment_date, 126) AS repayment_month,
-       COUNT_BIG(*) AS installments,
-       CAST(SUM(ISNULL(rs_principal_repayment_amount, 0)) AS decimal(38,2)) AS principal_due,
-       CAST(SUM(ISNULL(rs_interest_repayment_amount, 0))  AS decimal(38,2)) AS interest_due
-FROM [Dictionaries].[risk_analytics].[repayment_schedule]
-WHERE rs_repayment_date >  @LoansAsOf
-  AND rs_repayment_date <= DATEADD(MONTH, @ForecastMon, @LoansAsOf)
-GROUP BY rs_source, CONVERT(char(7), rs_repayment_date, 126)
-ORDER BY source, repayment_month
+       perimeter, source, repayment_month, installments,
+       CAST(principal_due AS decimal(38,2)) AS principal_due,
+       CAST(interest_due  AS decimal(38,2)) AS interest_due
+FROM (
+    SELECT N'1_АКТИВНЫЙ ПОРТФЕЛЬ' AS perimeter,
+           r.rs_source AS source,
+           CONVERT(char(7), r.rs_repayment_date, 126) AS repayment_month,
+           COUNT_BIG(*) AS installments,
+           SUM(ISNULL(r.rs_principal_repayment_amount, 0)) AS principal_due,
+           SUM(ISNULL(r.rs_interest_repayment_amount, 0))  AS interest_due
+    FROM [Dictionaries].[risk_analytics].[repayment_schedule] r
+    JOIN #hb_act a ON a.l_gid = r.rs_loan_id
+    WHERE r.rs_repayment_date >  @LoansAsOf
+      AND r.rs_repayment_date <= DATEADD(MONTH, @ForecastMon, @LoansAsOf)
+    GROUP BY r.rs_source, CONVERT(char(7), r.rs_repayment_date, 126)
+    UNION ALL
+    SELECT N'2_ВСЯ ТАБЛИЦА (для сравнения)',
+           r.rs_source,
+           CONVERT(char(7), r.rs_repayment_date, 126),
+           COUNT_BIG(*),
+           SUM(ISNULL(r.rs_principal_repayment_amount, 0)),
+           SUM(ISNULL(r.rs_interest_repayment_amount, 0))
+    FROM [Dictionaries].[risk_analytics].[repayment_schedule] r
+    WHERE r.rs_repayment_date >  @LoansAsOf
+      AND r.rs_repayment_date <= DATEADD(MONTH, @ForecastMon, @LoansAsOf)
+    GROUP BY r.rs_source, CONVERT(char(7), r.rs_repayment_date, 126)
+) d
+ORDER BY perimeter, source, repayment_month
 OPTION (MAXDOP 1);
 
 
