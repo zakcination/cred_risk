@@ -114,6 +114,34 @@
   идентификаторы; ИИН/ФИО/номера договоров/IBAN не выводятся). @AsOf — от факта.
 ==============================================================================*/
 
+/*==============================================================================
+  DWH_SCENARIOS_L2A_MEDIUM — сценарии M01–M20 (уровень 2, часть A)
+
+  Исполняемая версия из `docs/analysis/risk_dwh_reconciliation/
+  DWH_TEST_SCENARIOS.md`. Уровень 2 проверяет КЛЮЧИ, КАРДИНАЛЬНОСТЬ и
+  ЦЕЛОСТНОСТЬ связей — то, чего уровень 1 не трогает.
+
+  ПОЧЕМУ ЧЕРЕЗ #temp, А НЕ НАПРЯМУЮ. Коррелированный `NOT EXISTS`, у которого
+  внутренняя (пересканируемая) сторона обёрнута в CONVERT/CAST, делает JOIN
+  non-sargable и вызывает полный пересчёт на каждую внешнюю строку. В этом
+  проекте это дважды приводило к зависанию прогона на 2+ часа (L11.1, L4.1).
+  Здесь везде один и тот же безопасный паттерн: ключ материализуется в
+  индексированный #temp ОДИН раз, дальше сравниваются голые значения.
+
+  НА ЧЁМ СТОЯТ ДЖОЙНЫ (подтверждено живыми прогонами этой сессии):
+  - `*_gid = l_gid` — канонический путь. `l_gid` глобально уникален: коллизий
+    между source НЕТ (CASE_RUN_011 A1/A2), поэтому джойн только по gid
+    безопасен, а source — избыточная, но безвредная страховка.
+  - `borrower` НЕ имеет gid — только `borrower_id` (T16). При этом
+    `loans_active.l_borrower_id` уже bigint, как и `b_borrower_id`, а вот
+    `loans.l_borrower_id` — varchar (T3). Досье строится на `loans_active`
+    именно поэтому: там приведение типов не нужно.
+  - `l_collateral_id` → pledges ОПРОВЕРГНУТ (T1). Только `c_loan_gid`.
+
+  Правила: read-only, MAXDOP 1, без PII (gid/borrower_id — технические
+  идентификаторы; ИИН/ФИО/номера договоров/IBAN не выводятся). @AsOf — от факта.
+==============================================================================*/
+
 USE [Dictionaries];
 SET NOCOUNT ON;
 
@@ -859,13 +887,15 @@ OPTION (MAXDOP 1);
   МАТЕРИАЛИЗАЦИЯ
 ------------------------------------------------------------------------------*/
 IF OBJECT_ID('tempdb..#la') IS NOT NULL DROP TABLE #la;
-/* ИСПРАВЛЕНО ПОСЛЕ ПРОГОНА 09.08 (Msg 207). `loans_active` НЕ содержит
-   `l_segment` и `l_financial_consultant` — они есть только в `loans`.
-   Батч 0 этого не поймал, потому что аудитировал их в `loans`, а не в
-   `loans_active`: собственная слепота аудита, теперь закрыта. Атрибуты
-   вынесены в отдельный батч, чтобы их отсутствие не роняло 18 сценариев. */
+/* СОСТАВ ПОДТВЕРЖДЁН АУДИТОМ СХЕМЫ 09.08, а не взят из канваса.
+   `loans_active` содержит: l_loan_number, l_funding_date,
+   l_first_repayment_date, l_entrepreneur_category, l_loan_open_date,
+   l_scheduled_closure_date, l_actual_closure_date.
+   НЕ содержит: `l_segment`, `l_financial_consultant`, `l_currency_rate` —
+   они есть только в `loans`. Эти два вынесены в батч 2 (M26/M40), чтобы их
+   отсутствие не роняло 18 остальных сценариев. */
 SELECT l_source, l_gid, l_borrower_id, l_loan_id, l_loan_number,
-       l_loan_amount, l_currency, l_product_type,
+       l_loan_amount, l_currency, l_product_type, l_entrepreneur_category,
        l_loan_open_date, l_funding_date, l_first_repayment_date,
        l_scheduled_closure_date, l_actual_closure_date
 INTO #la
@@ -1474,7 +1504,7 @@ DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
 DECLARE @TopN  int  = 20;
 
 IF OBJECT_ID('tempdb..#lattr') IS NOT NULL DROP TABLE #lattr;
-SELECT l.l_gid, l.l_segment, l.l_entrepreneur_category, l.l_financial_consultant
+SELECT l.l_gid, l.l_segment, l.l_financial_consultant
 INTO #lattr
 FROM [risk_analytics].[loans] l
 WHERE l.l_report_date = @AsOf
@@ -1491,7 +1521,7 @@ SELECT @Suite AS suite, 'M26_SEGMENT_CONSISTENCY' AS scenario,
 FROM (
     SELECT l.l_source AS source,
            ISNULL(at.l_segment, N'(NULL)') AS segment,
-           ISNULL(at.l_entrepreneur_category, N'(NULL)') AS entrepreneur_category,
+           ISNULL(l.l_entrepreneur_category, N'(NULL)') AS entrepreneur_category,
            ISNULL(b.b_borrower_type, N'(НЕТ В borrower)') AS borrower_type,
            COUNT_BIG(*) AS loans,
            ROW_NUMBER() OVER (PARTITION BY l.l_source ORDER BY COUNT_BIG(*) DESC) AS rn
@@ -1499,7 +1529,7 @@ FROM (
     LEFT JOIN #lattr at ON at.l_gid = l.l_gid
     LEFT JOIN #b b ON b.b_borrower_id = l.l_borrower_id
     GROUP BY l.l_source, ISNULL(at.l_segment, N'(NULL)'),
-             ISNULL(at.l_entrepreneur_category, N'(NULL)'),
+             ISNULL(l.l_entrepreneur_category, N'(NULL)'),
              ISNULL(b.b_borrower_type, N'(НЕТ В borrower)')
 ) d
 WHERE rn <= @TopN

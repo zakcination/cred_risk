@@ -101,13 +101,15 @@ OPTION (MAXDOP 1);
   МАТЕРИАЛИЗАЦИЯ
 ------------------------------------------------------------------------------*/
 IF OBJECT_ID('tempdb..#la') IS NOT NULL DROP TABLE #la;
-/* ИСПРАВЛЕНО ПОСЛЕ ПРОГОНА 09.08 (Msg 207). `loans_active` НЕ содержит
-   `l_segment` и `l_financial_consultant` — они есть только в `loans`.
-   Батч 0 этого не поймал, потому что аудитировал их в `loans`, а не в
-   `loans_active`: собственная слепота аудита, теперь закрыта. Атрибуты
-   вынесены в отдельный батч, чтобы их отсутствие не роняло 18 сценариев. */
+/* СОСТАВ ПОДТВЕРЖДЁН АУДИТОМ СХЕМЫ 09.08, а не взят из канваса.
+   `loans_active` содержит: l_loan_number, l_funding_date,
+   l_first_repayment_date, l_entrepreneur_category, l_loan_open_date,
+   l_scheduled_closure_date, l_actual_closure_date.
+   НЕ содержит: `l_segment`, `l_financial_consultant`, `l_currency_rate` —
+   они есть только в `loans`. Эти два вынесены в батч 2 (M26/M40), чтобы их
+   отсутствие не роняло 18 остальных сценариев. */
 SELECT l_source, l_gid, l_borrower_id, l_loan_id, l_loan_number,
-       l_loan_amount, l_currency, l_product_type,
+       l_loan_amount, l_currency, l_product_type, l_entrepreneur_category,
        l_loan_open_date, l_funding_date, l_first_repayment_date,
        l_scheduled_closure_date, l_actual_closure_date
 INTO #la
@@ -716,7 +718,7 @@ DECLARE @AsOf  date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
 DECLARE @TopN  int  = 20;
 
 IF OBJECT_ID('tempdb..#lattr') IS NOT NULL DROP TABLE #lattr;
-SELECT l.l_gid, l.l_segment, l.l_entrepreneur_category, l.l_financial_consultant
+SELECT l.l_gid, l.l_segment, l.l_financial_consultant
 INTO #lattr
 FROM [risk_analytics].[loans] l
 WHERE l.l_report_date = @AsOf
@@ -733,7 +735,7 @@ SELECT @Suite AS suite, 'M26_SEGMENT_CONSISTENCY' AS scenario,
 FROM (
     SELECT l.l_source AS source,
            ISNULL(at.l_segment, N'(NULL)') AS segment,
-           ISNULL(at.l_entrepreneur_category, N'(NULL)') AS entrepreneur_category,
+           ISNULL(l.l_entrepreneur_category, N'(NULL)') AS entrepreneur_category,
            ISNULL(b.b_borrower_type, N'(НЕТ В borrower)') AS borrower_type,
            COUNT_BIG(*) AS loans,
            ROW_NUMBER() OVER (PARTITION BY l.l_source ORDER BY COUNT_BIG(*) DESC) AS rn
@@ -741,7 +743,7 @@ FROM (
     LEFT JOIN #lattr at ON at.l_gid = l.l_gid
     LEFT JOIN #b b ON b.b_borrower_id = l.l_borrower_id
     GROUP BY l.l_source, ISNULL(at.l_segment, N'(NULL)'),
-             ISNULL(at.l_entrepreneur_category, N'(NULL)'),
+             ISNULL(l.l_entrepreneur_category, N'(NULL)'),
              ISNULL(b.b_borrower_type, N'(НЕТ В borrower)')
 ) d
 WHERE rn <= @TopN
