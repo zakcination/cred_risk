@@ -303,9 +303,15 @@ WHERE dlcr_gid IS NOT NULL AND restructuring_date IS NOT NULL
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_restr ON #restr(dlcr_gid, restructuring_date);
 
+/*  ИМЯ КОЛОНКИ ИСПРАВЛЕНО 09.08. Считалось `contracts`, а строка здесь — не
+    договор, а ЭПИЗОД дефолта: один договор может войти в дефолт, излечиться и
+    войти снова, и каждый вход даёт свою строку. Прогон это показал прямо — у
+    S01 сумма по исходам 11 083 при 6 171 различном договоре в окне (H00c).
+    С прежним именем доли читались бы как «доля договоров», что завышало бы
+    знаменатель молча.  */
 SELECT @Suite AS suite, 'H03_CURE_RATE' AS scenario,
        source, outcome,
-       COUNT_BIG(*) AS contracts,
+       COUNT_BIG(*) AS default_episodes_NOT_contracts,
        CAST(SUM(bal) AS decimal(38,2)) AS sum_balance_at_default
 FROM (
     SELECT d.la_source AS source, d.la_gid, d.total_balance_debt AS bal,
@@ -346,7 +352,7 @@ OPTION (MAXDOP 1);
 ==============================================================================*/
 SELECT @Suite AS suite, 'H04_REDEFAULT_AFTER_CURE' AS scenario,
        source, outcome,
-       COUNT_BIG(*) AS contracts,
+       COUNT_BIG(*) AS cure_episodes_NOT_contracts,
        CAST(100.0 * COUNT_BIG(*) / NULLIF(SUM(COUNT_BIG(*)) OVER (PARTITION BY source), 0)
             AS decimal(9,4)) AS share_pct
 FROM (

@@ -448,40 +448,62 @@ GROUP BY source_count ORDER BY source_count OPTION (MAXDOP 1);
   b_group_affiliation имеет тип text — для группировки приводим к nvarchar(400).
   Усечение осознанное: длинные значения всё равно не годятся как ключ группы.
 ==============================================================================*/
+/*  PII. Первая редакция печатала `b_group_affiliation` как есть. В прогоне
+    09.08 это вывело ФИО физлиц: названия групп имеют вид «ГК <ФАМИЛИЯ ИМЯ
+    ОТЧЕСТВО>». Прямое нарушение правила «PII не выводить» — и вывод такого
+    результата пересылается дальше по почте.
+
+    Группа теперь идентифицируется рангом и усечённым SHA2-хешем: сопоставить
+    строки между прогонами можно, восстановить имя — нет. Для вопроса
+    «насколько концентрирована групповая экспозиция» имя не нужно; если оно
+    понадобится для конкретной группы, оно поднимается точечно и вне переписки.  */
 SELECT TOP (50) @Suite AS suite, 'M12_GROUP_EXPOSURE' AS scenario,
-       CONVERT(nvarchar(400), ISNULL(b.b_group_affiliation, N'(группа не указана)')) AS group_affiliation,
-       COUNT_BIG(DISTINCT k.l_borrower_id) AS clients,
-       COUNT_BIG(*) AS loans,
-       CAST(SUM(a.total_balance_debt) AS decimal(38,2)) AS exposure_T15_CAVEAT
-FROM #la k
-INNER JOIN [Dictionaries].[risk_analytics].[borrower] b
-        ON b.b_borrower_id = k.l_borrower_id AND b.b_report_date = @AsOf
-LEFT JOIN #acct a ON a.la_gid = k.l_gid
-WHERE b.b_group_affiliation IS NOT NULL
-GROUP BY CONVERT(nvarchar(400), ISNULL(b.b_group_affiliation, N'(группа не указана)'))
-ORDER BY exposure_T15_CAVEAT DESC OPTION (MAXDOP 1);
+       ROW_NUMBER() OVER (ORDER BY exposure DESC) AS group_rank,
+       group_hash, clients, loans,
+       CAST(exposure AS decimal(38,2)) AS exposure_T15_CAVEAT
+FROM (
+    SELECT LEFT(CONVERT(varchar(64),
+                HASHBYTES('SHA2_256', CONVERT(nvarchar(400), b.b_group_affiliation)), 2), 12) AS group_hash,
+           COUNT_BIG(DISTINCT k.l_borrower_id) AS clients,
+           COUNT_BIG(*) AS loans,
+           SUM(a.total_balance_debt) AS exposure
+    FROM #la k
+    INNER JOIN [Dictionaries].[risk_analytics].[borrower] b
+            ON b.b_borrower_id = k.l_borrower_id AND b.b_report_date = @AsOf
+    LEFT JOIN #acct a ON a.la_gid = k.l_gid
+    WHERE b.b_group_affiliation IS NOT NULL
+    GROUP BY LEFT(CONVERT(varchar(64),
+                  HASHBYTES('SHA2_256', CONVERT(nvarchar(400), b.b_group_affiliation)), 2), 12)
+) g
+ORDER BY exposure DESC OPTION (MAXDOP 1);
 
 
 /*==============================================================================
   M13 — Договоры без графика погашения (T4)
-  Ключ графика материализуется В ТОМ ЖЕ ТИПЕ, что l_loan_id, ОДИН раз.
-  Именно отсутствие этого шага дало ложные «все 586 717» в прогоне №1.
+
+  ИСПРАВЛЕНО 09.08 ПО РЕЗУЛЬТАТУ ЭТОГО ЖЕ ПРОГОНА. Первая редакция джойнила
+  `rs_loan_id` к `l_loan_id` и отрапортовала «ГРАФИКА НЕТ» у 100% активных
+  договоров ВСЕХ четырёх источников. H11 в том же прогоне измерил ключ прямо:
+  `rs_loan_id → l_gid` = 100,0000% на S01/S03/S17, `rs_loan_id → l_loan_id` =
+  0,0000%. То есть 100% были артефактом ключа, а не находкой.
+
+  Урок повторный: имя колонки (`loan_id`) снова оказалось ложным указателем —
+  ровно как в `interest_rates` (§14). Ключ проверяется покрытием ДО того, как
+  на нём строится сценарий; здесь порядок был обратный.
 ==============================================================================*/
 IF OBJECT_ID('tempdb..#rs_keys') IS NOT NULL DROP TABLE #rs_keys;
-SELECT DISTINCT rs_source, CAST(rs_loan_id AS nvarchar(255)) AS rs_loan_id_txt
+SELECT DISTINCT rs_loan_id
 INTO #rs_keys
 FROM [Dictionaries].[risk_analytics].[repayment_schedule]
 WHERE rs_loan_id IS NOT NULL
 OPTION (MAXDOP 1);
-CREATE CLUSTERED INDEX ix_rs ON #rs_keys(rs_source, rs_loan_id_txt);
+CREATE CLUSTERED INDEX ix_rs ON #rs_keys(rs_loan_id);
 
 SELECT @Suite AS suite, 'M13_LOANS_WITHOUT_SCHEDULE' AS scenario,
        source, schedule_state, COUNT_BIG(*) AS loans
 FROM (
     SELECT k.l_source AS source,
-           CASE WHEN k.l_loan_id IS NULL THEN 'l_loan_id ПУСТ — СОПОСТАВИТЬ НЕЧЕМ'
-                WHEN EXISTS (SELECT 1 FROM #rs_keys r
-                             WHERE r.rs_source = k.l_source AND r.rs_loan_id_txt = k.l_loan_id)
+           CASE WHEN EXISTS (SELECT 1 FROM #rs_keys r WHERE r.rs_loan_id = k.l_gid)
                      THEN 'ГРАФИК ЕСТЬ'
                 ELSE 'ГРАФИКА НЕТ' END AS schedule_state
     FROM #la k
