@@ -30,7 +30,8 @@ Ground truth — `docs/analysis/risk_dwh_reconciliation/FINDINGS.md`.
 | `DWH_PROBE_H15_STANDALONE` | 09.08 | ✅ | ✅ FINDINGS §16 |
 | `DWH_PROBE_P10_S02_DPD_AND_PLEDGE_TYPES` | 09.08 | ✅ | ✅ FINDINGS §17 — **сузил H15 до нижней границы** |
 | `DWH_PROBE_P11_SCHEDULE_TRUTH` | 09.08 | ✅ | ✅ FINDINGS §19 — **отменил M13 и H13a, вскрыл завышение H13b** |
-| **`DWH_PROBE_P12_SNAPSHOT_INVENTORY`** | 09.08 | ❌ **НЕ ЗАПУСКАЛСЯ** | — |
+| `DWH_PROBE_P12_SNAPSHOT_INVENTORY` | 09.08 | ✅ | ✅ FINDINGS §20 — **исправил две мои формулировки; обрыв оказался у трёх источников** |
+| **`DWH_PROBE_P13_SNAPSHOT_INVENTORY_REST`** | 09.08 | ❌ **НЕ ЗАПУСКАЛСЯ** | — |
 
 **Уровень 2 не пропущен — он написан, но не выполнен.** L2A вдобавок был написан
 ДО проб P1–P9 и опирался на два уже опровергнутых допущения; исправлен 09.08
@@ -40,9 +41,10 @@ Ground truth — `docs/analysis/risk_dwh_reconciliation/FINDINGS.md`.
 
 ## Порядок запуска (по эффективности, не по номеру)
 
-1. **`DWH_PROBE_P12_SNAPSHOT_INVENTORY`** — полный ряд срезов по каждой таблице
-   и источнику. Нужен под черновик 8 (глубина хранения и обрывы рядов) и даёт
-   блок «срез данных» для всех остальных писем.
+1. **`DWH_PROBE_P13_SNAPSHOT_INVENTORY_REST`** — семь таблиц, не покрытых P12.
+   Среди них `repayment_schedule` с колонкой `rs_report_date`, которую я не
+   проверил: от неё зависит, верен ли вывод §19.3 «график не хранит прошлое».
+   Черновик 8 до этого ответа неполон.
 2. **`DWH_SCENARIOS_L3B_HARD`, батчи 2–4** — H21–H25 (writeoff/collections,
    витрина `brm_all_data`, межбазовая сверка). Не выполнялись ни разу.
 3. **Исходный скрипт от 04.08 по `Guarantees`** — отношение ×100 на данных
