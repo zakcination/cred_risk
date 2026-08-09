@@ -12,7 +12,7 @@
 SET NOCOUNT ON;
 
 DECLARE @Suite   sysname = N'L1_PROBES';
-DECLARE @AsOf    date    = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans]);
+DECLARE @AsOf    date    = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans]);
 DECLARE @MinCnt  bigint  = 100;    -- P2: не показывать значения реже этого (шум/уникаты)
 DECLARE @BigAmt  decimal(38,2) = 1000000000.00;  -- P6: порог «крупная сумма», 1 млрд ₸
 
@@ -35,7 +35,7 @@ SELECT @Suite AS suite, 'P1a_LOAN_ACCOUNT_DATE_SPACE' AS scenario,
        MIN(la_reporting_date)              AS min_date,
        MAX(la_reporting_date)              AS max_date,
        SUM(CASE WHEN la_reporting_date = @AsOf THEN 1 ELSE 0 END) AS rows_at_asof
-FROM [risk_analytics].[loan_account]
+FROM [Dictionaries].[risk_analytics].[loan_account]
 GROUP BY la_source
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -46,7 +46,7 @@ SELECT @Suite AS suite, 'P1b_LOAN_ACCOUNT_TOP_DATES' AS scenario,
 FROM (
     SELECT la_source AS source, la_reporting_date, COUNT_BIG(*) AS accounts,
            ROW_NUMBER() OVER (PARTITION BY la_source ORDER BY la_reporting_date DESC) AS rn
-    FROM [risk_analytics].[loan_account]
+    FROM [Dictionaries].[risk_analytics].[loan_account]
     GROUP BY la_source, la_reporting_date
 ) d
 WHERE rn <= 12
@@ -77,7 +77,7 @@ SELECT @Suite AS suite, 'P2a_RATE_SHAPE' AS scenario,
        MIN(LEN(l_rate)) AS min_len,
        MAX(LEN(l_rate)) AS max_len,
        COUNT_BIG(*)     AS rows_cnt
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf
 GROUP BY l_source,
        CASE WHEN l_rate IS NULL                 THEN N'(NULL)'
@@ -110,7 +110,7 @@ SELECT @Suite AS suite, 'P2b_RATE_CONVERTIBILITY' AS scenario,
                    l_rate, N'%', N''), NCHAR(160), N''), N' ', N''), N',', N'.')
                  ) IS NOT NULL
                 THEN 1 ELSE 0 END) AS fully_normalized_ok
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf
 GROUP BY l_source
 ORDER BY source
@@ -122,7 +122,7 @@ SELECT @Suite AS suite, 'P2c_RATE_TOP_VALUES' AS scenario,
 FROM (
     SELECT l_source AS source, l_rate AS rate_value, COUNT_BIG(*) AS rows_cnt,
            ROW_NUMBER() OVER (PARTITION BY l_source ORDER BY COUNT_BIG(*) DESC) AS rn
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
     WHERE l_report_date = @AsOf AND l_rate IS NOT NULL
     GROUP BY l_source, l_rate
     HAVING COUNT_BIG(*) >= @MinCnt
@@ -146,7 +146,7 @@ CREATE TABLE #la_last (la_source varchar(10) NOT NULL PRIMARY KEY, last_date dat
 
 INSERT INTO #la_last (la_source, last_date)
 SELECT la_source, MAX(la_reporting_date)
-FROM [risk_analytics].[loan_account]
+FROM [Dictionaries].[risk_analytics].[loan_account]
 GROUP BY la_source
 OPTION (MAXDOP 1);
 
@@ -165,7 +165,7 @@ FROM (
                 WHEN '1818'  THEN a.la_account_1818
                 ELSE              a.la_account_1838
            END AS v
-    FROM [risk_analytics].[loan_account] a
+    FROM [Dictionaries].[risk_analytics].[loan_account] a
     JOIN #la_last k
       ON k.la_source = a.la_source AND k.last_date = a.la_reporting_date
     CROSS JOIN (VALUES ('1401'),('1428'),('18771'),('1818'),('1838')) g(gl_account)
@@ -190,7 +190,7 @@ SELECT @Suite AS suite, 'P4_RESTR_DATE_COVERAGE' AS scenario,
                  AND restructuring_date <= @AsOf THEN 1 ELSE 0 END) AS inside_window,
        MIN(restructuring_date) AS min_date,
        MAX(restructuring_date) AS max_date
-FROM [risk_analytics].[restructuring_v2]
+FROM [Dictionaries].[risk_analytics].[restructuring_v2]
 GROUP BY [dlcr$source]
 ORDER BY source
 OPTION (MAXDOP 1);
@@ -208,7 +208,7 @@ SELECT @Suite AS suite, 'P5a_OPEN_DATE_EDGE' AS scenario,
        MAX(l_funding_date)     AS max_funding_date,
        MAX(l_loan_maturity_date) AS max_maturity_date,
        SUM(CASE WHEN l_loan_open_date > @AsOf THEN 1 ELSE 0 END) AS opened_after_asof_ANOMALY
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 WHERE l_report_date = @AsOf
 GROUP BY l_source
 ORDER BY source
@@ -226,7 +226,7 @@ FROM (
 ) m
 LEFT JOIN (
     SELECT CONVERT(char(7), l_loan_open_date, 126) AS ym, COUNT_BIG(*) AS loans_opened
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
     WHERE l_report_date = @AsOf AND l_source = 'S03'
       AND l_loan_open_date >= DATEADD(MONTH, -12, @AsOf)
     GROUP BY CONVERT(char(7), l_loan_open_date, 126)
@@ -234,7 +234,7 @@ LEFT JOIN (
 LEFT JOIN (
     SELECT CONVERT(char(7), p_VALUE_DATE, 126) AS ym, COUNT_BIG(*) AS payment_rows,
            CAST(SUM(p_TOTAL) AS decimal(38,2)) AS payment_sum
-    FROM [risk_analytics].[payments]
+    FROM [Dictionaries].[risk_analytics].[payments]
     WHERE p_source = 'S03' AND p_VALUE_DATE >= DATEADD(MONTH, -12, @AsOf)
       AND p_VALUE_DATE <= @AsOf
     GROUP BY CONVERT(char(7), p_VALUE_DATE, 126)
@@ -256,7 +256,7 @@ SELECT @Suite AS suite, 'P6_BIG_AMOUNT_BY_CURRENCY' AS scenario,
        CAST(MIN(l_loan_amount) AS decimal(38,2)) AS min_amount,
        CAST(MAX(l_loan_amount) AS decimal(38,2)) AS max_amount,
        CAST(SUM(l_loan_amount) AS decimal(38,2)) AS sum_amount
-FROM [risk_analytics].[loans_active]
+FROM [Dictionaries].[risk_analytics].[loans_active]
 WHERE l_report_date = @AsOf AND l_loan_amount >= @BigAmt
 GROUP BY l_source, ISNULL(l_currency, N'(NULL)')
 ORDER BY source, currency

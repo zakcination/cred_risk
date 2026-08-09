@@ -52,7 +52,7 @@ USE [Dictionaries];
 SET NOCOUNT ON;
 
 DECLARE @CaseRun varchar(120) = 'CASE_RUN_LOANS_PLEDGES_013_COVERAGE_AND_LTV';
-DECLARE @AsOf date = (SELECT MAX(l_report_date) FROM [risk_analytics].[loans_active]);
+DECLARE @AsOf date = (SELECT MAX(l_report_date) FROM [Dictionaries].[risk_analytics].[loans_active]);
 
 
 /*==============================================================================
@@ -71,7 +71,7 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#loans_active_keys') IS NOT NULL DROP TABLE #loans_active_keys;
 SELECT l_source, l_gid, l_loan_amount, l_collateral_id
 INTO #loans_active_keys
-FROM [risk_analytics].[loans_active]
+FROM [Dictionaries].[risk_analytics].[loans_active]
 WHERE l_report_date = @AsOf
 OPTION (MAXDOP 1);
 CREATE CLUSTERED INDEX ix_lak ON #loans_active_keys(l_source, l_gid);
@@ -80,7 +80,7 @@ IF OBJECT_ID('tempdb..#matched_pledges') IS NOT NULL DROP TABLE #matched_pledges
 SELECT p.c_source, p.c_loan_gid, p.c_collateral_id, p.c_bpm_object_id,
        p.c_collateral_value, p.last_appraisal_date
 INTO #matched_pledges
-FROM [risk_analytics].[pledges] p
+FROM [Dictionaries].[risk_analytics].[pledges] p
 WHERE p.c_reporting_date = @AsOf
   AND EXISTS (SELECT 1 FROM #loans_active_keys k WHERE k.l_source = p.c_source AND k.l_gid = p.c_loan_gid)
 OPTION (MAXDOP 1);

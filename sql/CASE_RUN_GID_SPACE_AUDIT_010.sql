@@ -55,70 +55,70 @@ SELECT @CaseRun AS case_run, '01_GID_COLUMN_STATS' AS result_set, x.* FROM (
            MIN(l_gid) AS min_val, MAX(l_gid) AS max_val,
            MIN(LEN(CAST(l_gid AS varchar(20)))) AS min_digit_len,
            MAX(LEN(CAST(l_gid AS varchar(20)))) AS max_digit_len
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
 
     UNION ALL
     SELECT 'loans', 'dlcr_dprt_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT dlcr_dprt_gid),
            MIN(dlcr_dprt_gid), MAX(dlcr_dprt_gid),
            MIN(LEN(CAST(dlcr_dprt_gid AS varchar(20)))), MAX(LEN(CAST(dlcr_dprt_gid AS varchar(20))))
-    FROM [risk_analytics].[loans] WHERE dlcr_dprt_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[loans] WHERE dlcr_dprt_gid IS NOT NULL
 
     UNION ALL
     SELECT 'loan_account', 'la_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT la_gid),
            MIN(la_gid), MAX(la_gid),
            MIN(LEN(CAST(la_gid AS varchar(20)))), MAX(LEN(CAST(la_gid AS varchar(20))))
-    FROM [risk_analytics].[loan_account]
+    FROM [Dictionaries].[risk_analytics].[loan_account]
 
     UNION ALL
     SELECT 'pledges', 'c_loan_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT c_loan_gid),
            MIN(c_loan_gid), MAX(c_loan_gid),
            MIN(LEN(CAST(c_loan_gid AS varchar(20)))), MAX(LEN(CAST(c_loan_gid AS varchar(20))))
-    FROM [risk_analytics].[pledges] WHERE c_loan_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[pledges] WHERE c_loan_gid IS NOT NULL
 
     UNION ALL
     SELECT 'restructuring_v2', 'dlcr_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT dlcr_gid),
            MIN(dlcr_gid), MAX(dlcr_gid),
            MIN(LEN(CAST(dlcr_gid AS varchar(20)))), MAX(LEN(CAST(dlcr_gid AS varchar(20))))
-    FROM [risk_analytics].[restructuring_v2] WHERE dlcr_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[restructuring_v2] WHERE dlcr_gid IS NOT NULL
 
     UNION ALL
     SELECT 'writeoff', 'w_dlcrp_dlcr_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT w_dlcrp_dlcr_gid),
            MIN(w_dlcrp_dlcr_gid), MAX(w_dlcrp_dlcr_gid),
            MIN(LEN(CAST(w_dlcrp_dlcr_gid AS varchar(20)))), MAX(LEN(CAST(w_dlcrp_dlcr_gid AS varchar(20))))
-    FROM [risk_analytics].[writeoff] WHERE w_dlcrp_dlcr_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[writeoff] WHERE w_dlcrp_dlcr_gid IS NOT NULL
 
     UNION ALL
     SELECT 'bankrupt', 'b_dog_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT b_dog_gid),
            MIN(b_dog_gid), MAX(b_dog_gid),
            MIN(LEN(CAST(b_dog_gid AS varchar(20)))), MAX(LEN(CAST(b_dog_gid AS varchar(20))))
-    FROM [risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL
 
     UNION ALL
     SELECT 'ratings', 'r_deal_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT r_deal_gid),
            MIN(r_deal_gid), MAX(r_deal_gid),
            MIN(LEN(CAST(r_deal_gid AS varchar(20)))), MAX(LEN(CAST(r_deal_gid AS varchar(20))))
-    FROM [risk_analytics].[ratings] WHERE r_deal_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[ratings] WHERE r_deal_gid IS NOT NULL
 
     UNION ALL
     SELECT 'Guarantees', 'g_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT g_gid),
            MIN(g_gid), MAX(g_gid),
            MIN(LEN(CAST(g_gid AS varchar(20)))), MAX(LEN(CAST(g_gid AS varchar(20))))
-    FROM [risk_analytics].[Guarantees]
+    FROM [Dictionaries].[risk_analytics].[Guarantees]
 
     UNION ALL
     SELECT 'Guarantees', 'g_clnt_gid',
            COUNT_BIG(*), COUNT_BIG(DISTINCT g_clnt_gid),
            MIN(g_clnt_gid), MAX(g_clnt_gid),
            MIN(LEN(CAST(g_clnt_gid AS varchar(20)))), MAX(LEN(CAST(g_clnt_gid AS varchar(20))))
-    FROM [risk_analytics].[Guarantees] WHERE g_clnt_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[Guarantees] WHERE g_clnt_gid IS NOT NULL
 ) x
 OPTION (MAXDOP 1);
 
@@ -129,34 +129,34 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#loans_gid') IS NOT NULL DROP TABLE #loans_gid;
 SELECT DISTINCT l_gid
 INTO #loans_gid
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 OPTION (MAXDOP 1);
 CREATE UNIQUE CLUSTERED INDEX ix_loans_gid ON #loans_gid(l_gid);
 
 ;WITH Candidates AS (
     SELECT 'loans' AS table_name, 'dlcr_dprt_gid' AS gid_column, dlcr_dprt_gid AS gid_value
-        FROM [risk_analytics].[loans] WHERE dlcr_dprt_gid IS NOT NULL
+        FROM [Dictionaries].[risk_analytics].[loans] WHERE dlcr_dprt_gid IS NOT NULL
     UNION ALL
     SELECT 'loan_account', 'la_gid', la_gid
-        FROM [risk_analytics].[loan_account]
+        FROM [Dictionaries].[risk_analytics].[loan_account]
     UNION ALL
     SELECT 'pledges', 'c_loan_gid', c_loan_gid
-        FROM [risk_analytics].[pledges] WHERE c_loan_gid IS NOT NULL
+        FROM [Dictionaries].[risk_analytics].[pledges] WHERE c_loan_gid IS NOT NULL
     UNION ALL
     SELECT 'restructuring_v2', 'dlcr_gid', dlcr_gid
-        FROM [risk_analytics].[restructuring_v2] WHERE dlcr_gid IS NOT NULL
+        FROM [Dictionaries].[risk_analytics].[restructuring_v2] WHERE dlcr_gid IS NOT NULL
     UNION ALL
     SELECT 'writeoff', 'w_dlcrp_dlcr_gid', w_dlcrp_dlcr_gid
-        FROM [risk_analytics].[writeoff] WHERE w_dlcrp_dlcr_gid IS NOT NULL
+        FROM [Dictionaries].[risk_analytics].[writeoff] WHERE w_dlcrp_dlcr_gid IS NOT NULL
     UNION ALL
     SELECT 'bankrupt', 'b_dog_gid', b_dog_gid
-        FROM [risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL
+        FROM [Dictionaries].[risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL
     UNION ALL
     SELECT 'ratings', 'r_deal_gid', r_deal_gid
-        FROM [risk_analytics].[ratings] WHERE r_deal_gid IS NOT NULL
+        FROM [Dictionaries].[risk_analytics].[ratings] WHERE r_deal_gid IS NOT NULL
     UNION ALL
     SELECT 'Guarantees', 'g_clnt_gid', g_clnt_gid
-        FROM [risk_analytics].[Guarantees] WHERE g_clnt_gid IS NOT NULL
+        FROM [Dictionaries].[risk_analytics].[Guarantees] WHERE g_clnt_gid IS NOT NULL
 ),
 Distinct_Candidates AS (
     SELECT DISTINCT table_name, gid_column, gid_value FROM Candidates
@@ -200,39 +200,39 @@ SELECT
 FROM (
     SELECT DISTINCT 'loans' AS table_name, 'l_gid' AS gid_column,
         LEFT(CAST(l_gid AS varchar(20)), 2) AS gid_prefix_2, l_gid AS gid_value
-    FROM [risk_analytics].[loans]
+    FROM [Dictionaries].[risk_analytics].[loans]
 
     UNION ALL
     SELECT DISTINCT 'loan_account', 'la_gid', LEFT(CAST(la_gid AS varchar(20)), 2), la_gid
-    FROM [risk_analytics].[loan_account]
+    FROM [Dictionaries].[risk_analytics].[loan_account]
 
     UNION ALL
     SELECT DISTINCT 'pledges', 'c_loan_gid', LEFT(CAST(c_loan_gid AS varchar(20)), 2), c_loan_gid
-    FROM [risk_analytics].[pledges] WHERE c_loan_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[pledges] WHERE c_loan_gid IS NOT NULL
 
     UNION ALL
     SELECT DISTINCT 'restructuring_v2', 'dlcr_gid', LEFT(CAST(dlcr_gid AS varchar(20)), 2), dlcr_gid
-    FROM [risk_analytics].[restructuring_v2] WHERE dlcr_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[restructuring_v2] WHERE dlcr_gid IS NOT NULL
 
     UNION ALL
     SELECT DISTINCT 'writeoff', 'w_dlcrp_dlcr_gid', LEFT(CAST(w_dlcrp_dlcr_gid AS varchar(20)), 2), w_dlcrp_dlcr_gid
-    FROM [risk_analytics].[writeoff] WHERE w_dlcrp_dlcr_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[writeoff] WHERE w_dlcrp_dlcr_gid IS NOT NULL
 
     UNION ALL
     SELECT DISTINCT 'bankrupt', 'b_dog_gid', LEFT(CAST(b_dog_gid AS varchar(20)), 2), b_dog_gid
-    FROM [risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[bankrupt] WHERE b_dog_gid IS NOT NULL
 
     UNION ALL
     SELECT DISTINCT 'ratings', 'r_deal_gid', LEFT(CAST(r_deal_gid AS varchar(20)), 2), r_deal_gid
-    FROM [risk_analytics].[ratings] WHERE r_deal_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[ratings] WHERE r_deal_gid IS NOT NULL
 
     UNION ALL
     SELECT DISTINCT 'Guarantees', 'g_gid', LEFT(CAST(g_gid AS varchar(20)), 2), g_gid
-    FROM [risk_analytics].[Guarantees]
+    FROM [Dictionaries].[risk_analytics].[Guarantees]
 
     UNION ALL
     SELECT DISTINCT 'Guarantees', 'g_clnt_gid', LEFT(CAST(g_clnt_gid AS varchar(20)), 2), g_clnt_gid
-    FROM [risk_analytics].[Guarantees] WHERE g_clnt_gid IS NOT NULL
+    FROM [Dictionaries].[risk_analytics].[Guarantees] WHERE g_clnt_gid IS NOT NULL
 ) y
 GROUP BY y.table_name, y.gid_column, y.gid_prefix_2
 ORDER BY y.table_name, y.gid_column, distinct_values_with_this_prefix DESC
@@ -255,7 +255,7 @@ SELECT
     LEFT(CAST(l_gid AS varchar(20)), 2) AS gid_prefix_2,
     l_source,
     COUNT_BIG(DISTINCT l_gid) AS distinct_gid_count
-FROM [risk_analytics].[loans]
+FROM [Dictionaries].[risk_analytics].[loans]
 GROUP BY LEFT(CAST(l_gid AS varchar(20)), 2), l_source
 ORDER BY gid_prefix_2, distinct_gid_count DESC
 OPTION (MAXDOP 1);
