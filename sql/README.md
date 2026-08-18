@@ -72,7 +72,10 @@ stored here.
   `canc_date`). The RS event log (`Реструктуризация_RS$`) was a dead end
   (one field only); the `KAN_*_for_LGD` monthly family goes back to 2018 but
   has 7+ inconsistent spellings of the restructuring-end-date column across
-  2023 — moot now.
+  2023 — moot now. The §1 table inventory that establishes all of this (5 151
+  column rows, 311 tables in `IFRS9` + 6 in `CL_PORTFOLIO`) lives in
+  [`docs/analysis/stage3_kan_table_inventory.md`](../docs/analysis/stage3_kan_table_inventory.md);
+  the script keeps only the rows its conclusions rest on.
 - **`stage3_safezone_rolling_extract.sql`** — **purest raw pulls for the
   12-month DPD safe-zone / re-default simulation** (notebook-side): a 12-date
   report ladder (`MMYYYYPORTFOLIO` labels), the raw Stage 3 pool at each date,
@@ -81,12 +84,16 @@ stored here.
   restructuring-event pull from `restructuring_v2` (§3, resolved — no longer a
   placeholder). Encodes the locked-in methodology for traceability only —
   restructuring-covered clean months stay in the pool but get flagged (not
-  excluded); re-default = first later month where `category` returns to `'3'`
-  for any reason; the downward-trend hypothesis is strict monotonic
-  non-increasing DPD across the 6-month window.
+  excluded); re-default = first later month with **DPD ≥ 91**, with the
+  `category`-returns-to-`'3'` version kept as a cross-check only (revised
+  27.07.2026 — on this population `category` is still `'3'` at M+1 by
+  construction, so read literally every flagged loan would score as a
+  re-default; see "Locked methodology" in
+  `docs/analysis/stage3_safezone_plan.md`); the downward-trend hypothesis is
+  strict monotonic non-increasing DPD across the 6-month window.
   All threshold/streak/re-default logic itself runs in pandas, not SQL.
 - **`stage3_delinquency_groups.sql`** — per-loan monthly DPD **and** delinquency
-  flag, a pattern-group label (e.g. `@345` = delinquent in the 3rd/4th/5th
+  flag, a pattern-group label (e.g. `@3-4-5` = delinquent in the 3rd/4th/5th
   observed months), and **episode-aware severity**: DPD is a running day-count,
   so a 3-month-consecutive delinquency doesn't show 3 independent readings — it
   shows one number growing by ~30/31 days/month. This decomposes each loan's
@@ -97,6 +104,27 @@ stored here.
   (q25/median/q75) of both the raw and corrected metric — compare them to see
   how much a naive `MAX(dpd)` threshold would be misled, and to pick a sensible
   relax threshold on the corrected metric instead.
+
+### Два разных определения просрочки — не сравнивать цифры напрямую
+
+Внутри `sql/` слово «просрочка» значит разное в разных скриптах, и это не
+недосмотр, а разные вопросы:
+
+| Скрипт | Определение | Вопрос, на который отвечает |
+|---|---|---|
+| `stage3_delinquency_groups.sql` | `dpd > 0` — любая просрочка | **В КАКИХ МЕСЯЦАХ** займ срывался (форма паттерна) |
+| safe-zone исследование (`stage3_safezone_rolling_extract.sql` + ноутбук) | `dpd <= n` весь 6-месячный период | Насколько **ГЛУБОКО** можно допустить просрочку, не теряя оздоровление |
+
+Из-за этого «просрочивших» по первому скрипту всегда будет больше, чем
+«сорвавшихся» по второму при любом `n > 0`: заём с `dpd = 3` попадёт в группу
+`@2-4`, но при пороге `n = 5` останется в безопасной зоне. Числа из двух
+отчётов сопоставимы только после приведения к одному определению — не по
+формулировке «просрочка» в заголовке колонки.
+
+Третье определение, **не** совпадающее ни с одним из этих двух: re-default =
+`dpd >= 91` (порог возврата в Стадию 3). Оно применяется только вперёд по
+времени — к горизонту после наблюдения, — тогда как первые два описывают само
+окно наблюдения.
 
 ## `b3b_reconciliation_2025.sql` — closed-before-audited-year check
 
