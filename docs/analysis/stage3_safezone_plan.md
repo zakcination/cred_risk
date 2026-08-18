@@ -124,13 +124,25 @@ counts match before moving to Phase C.
       sources, sales outnumbered write-offs **21 341 to 5 016**, so had sales
       been happening unseen elsewhere, the invisible half would have been the
       larger one.
-- [ ] **Confirm the six write-off-free months** — 09, 11·2025 and 01, 02,
-      03, 07·2026 have no rows in the archive, but no confirmation that no
-      batch ran either, so they stand at `НЕ ПОДТВЕРЖДЕНО`. Once confirmed
-      they go into `WRITEOFF_DID_NOT_OCCUR` and the coverage table reads
-      "полное" across all twelve months — at which point the lower-bound
-      caveat disappears from Phase C entirely. Until then those six months
-      carry it.
+- [x] **Six write-off-free months confirmed — the lower-bound caveat is gone.**
+      09, 11·2025 and 01, 02, 03, 07·2026 have no rows in the Credilogic
+      archive, and БРМ confirmed 27.07.2026 that **no write-off batch ran** in
+      them — "не проводилось", not "файла нет". Recorded as a dated, attributed
+      constant (`WRITEOFF_DID_NOT_OCCUR` + `WRITEOFF_DID_NOT_OCCUR_SOURCE`)
+      alongside the sales equivalent, listed literally by month rather than
+      derived as "whatever the archive lacks" — otherwise a future panel month
+      would inherit a confirmation nobody gave for it.
+      With this, **both** exit types are covered across all twelve months, the
+      coverage table reads `полное` throughout, and Phase C's re-default rate is
+      an exact number rather than a lower bound.
+      Two things to keep in view, since the whole censoring layer now rests on
+      them: the coverage is carried by **two verbal confirmations, not by data**
+      — if either is withdrawn, those months must return to `НЕ ПОДТВЕРЖДЕНО`
+      rather than stay as last computed. And a declaration can go stale in one
+      direction: a later scanner run finding events in a month declared empty.
+      `declared_but_present` raises on exactly that, because the coverage table
+      gives evidence priority and would otherwise read `полное` off the new
+      events while the contradicted confirmation sat unnoticed in the code.
 - [x] **Restorations — the file cannot answer it, so the panel does.**
       Confirmed 27.07.2026 that «Приложение №1» has **no operation-type
       column**: `Контракт · Дни просрочки · КОРЗИНА · Провизии % в LAM ·
@@ -181,29 +193,124 @@ counts match before moving to Phase C.
 - [x] **Threshold × cohort matrices built** (`redefault_matrix`) for each K,
       returning rate, denominator and censored-out count together — a rate
       without its base invites reading 100% off two loans.
-- [ ] Split the matrix by restructuring state, reporting the `unknown` share
-      per cell: a split built mostly on `unknown` months is not evidence
-      about restructuring in either direction.
+- [x] **First real run 27.07.2026 — two defects found, both now closed in code.**
+      - *The `category` cross-check was returning exactly 0.0% on all twelve
+        cohorts.* Not "small, as expected" — empty. One missing value anywhere
+        in the column makes pandas read it as `float64`, after which
+        `astype(str)` yields `"3.0"`, every comparison to `"3"` is False,
+        `exits` matches every row and `returned` matches none. The printed
+        commentary explained a small number, so an empty set read as a finding.
+        `_norm_category` strips the `.0`, and the run now raises if `"3"` is
+        absent from the normalised column rather than reporting 0.0%.
+      - *`censoring_events.csv` only ever contained the Credilogic write-off
+        annexes.* The December sales (`Prodaja&Proschenie_12_2025`, 21 341
+        contracts) are not in it, so those loans carry no boundary and score as
+        **survivors**. The coverage table still read `полное` — correctly, since
+        it audits whether a source exists, not whether its rows reached the
+        censoring set. Those are different questions and the table only ever
+        answered the first.
+- [x] **The silent-exit bracket** (`censored_from_silent`, `MATRIX_BOUNDS`).
+      The fix for the above is deliberately **not** "treat every disappearance
+      as an exit": a loan repaid in full and closed also disappears, and
+      censoring it deletes a real survivor. So the run reports two matrices —
+      disappearance-means-survived (lower bound on re-default) and
+      disappearance-means-unobserved (upper bound) — and the truth sits between
+      them in proportion to how many departures were repayments rather than
+      sales. If the bracket is narrow the sales register need not be loaded at
+      all; if it is wide, loading it is a precondition for quoting any rate.
+- [x] **Split the matrix by restructuring state** — built
+      (`redefault_split_matrix`), with the `unknown` share reported per cell
+      (threshold × cohort) and pooled, plus an explicit verdict per threshold.
+      Two things worth stating, because they decide how the output reads:
+      - The loan-level segment follows the same priority as the month-level
+        rule — `restructured` (any confirmed `active` month) > `unknown` (any
+        unanswerable month, **including** a state that was never computed) >
+        `not_restructured` (every observed month confirmed `not_active`). A
+        `NaN` state goes to `unknown`, never to `not_restructured`: that
+        collapse is the exact one the locked methodology forbids.
+      - `UNKNOWN_MATERIALITY = 0.10` is set **before** the numbers are seen, and
+        a cell above it prints `НЕ ПОДДЕРЖАНО` rather than a difference. A thin
+        base (< `MIN_BASE` either side) prints `НЕТ БАЗЫ` instead — deliberately
+        a separate verdict, since thin bases are fixed by accumulating cohorts
+        and `unknown` is fixed only by populating grace dates upstream.
+      Verified on synthetic cohorts: segment priority (including `active` beating
+      `unknown` on the same loan), censored loans leaving the denominator without
+      becoming survivors, `unknown` share measured off the flagged population
+      rather than the pool, and all three verdict branches.
 - [ ] Visualize: re-default % vs. n, one line per report month (or a summary
       band) — pick the threshold at the **elbow** where re-default stops
       being flat and starts climbing, rather than a hard-coded cutoff.
-      *(Open decision: confirm what "acceptably low" re-default means before
-      this step — a fixed ceiling, e.g. <10%, or the visual elbow — flag for
-      sign-off once the matrix is in front of us.)*
+      **Settled 27.07.2026: the matrix is read first, and the criterion for
+      "acceptably low" is chosen after seeing it** — an explicit call, not an
+      oversight. What that costs is one specific thing, and it should be
+      written into the Phase E methodology rather than left for a reviewer to
+      notice: a threshold selected after the outcome is visible cannot also be
+      presented as a prediction that the data then confirmed. State plainly
+      that `n*` was chosen from this matrix.
+      The cheap mitigation, which costs nothing here because all three horizons
+      are already computed: pick `n*` on the pooled K=6 curve, then check it
+      holds on views not used to pick it — the per-cohort spread and the K=3 /
+      K=9 curves. Agreement there is genuine out-of-sample support for the
+      choice; disagreement means `n*` is an artefact of the view it was read
+      off, and must be quoted with that view attached.
 - [ ] **Decision checkpoint:** lock the DPD safe-zone threshold `n*`.
 
 ## Phase D — Task #2: size the candidate list, pick the rule
 
-- [ ] Apply `n*` to the **latest** 6-month window to build the current
-      recovery candidate list.
-- [ ] **Hypothesis 1 (straight-line):** DPD ≤ n* for all 6 months. Break down
-      by delinquent-months-count (1–6) with count / balance / provisions.
-- [ ] **Hypothesis 2 (downward-trend, more conservative):** strictly
-      monotonic non-increasing DPD across the 6 months
-      (`dpd(m-6) ≥ … ≥ dpd(m-1)`), regardless of whether it ever hit zero.
-- [ ] Compare H1 vs. H2: overlap, size, balance, provisions, and cross-check
-      each against Phase C's re-default matrix for the segment each
-      hypothesis would have flagged historically.
+- [x] **Built** (`build_candidates`, `rule_sets`, `phase_d_detail`) — runs for
+      any `n`, pending only the locked `n*`. Reports count, **balance and
+      provisions in ₸** against РБ's 12 bn, which is the form the original ask
+      was in and which Phase C's output did not have at all.
+- [x] **The target set is `max_dpd ∈ [1, n]`, not `≤ n`.** A loan at
+      `max_dpd = 0` cures under the *strict* rule already; relaxing releases
+      nobody there. Counting it toward the 12 bn comparison would credit the
+      relaxation with loans it does not free. Paired with `dpd_asof ≤
+      CURE_ENTRY_DPD` — the overdue has to be repaid *now*, or this is not a
+      cure question.
+- [x] **Hypothesis 1 (straight-line):** DPD ≤ n* for all 6 months, broken down
+      by delinquent-months-count with count / balance / provisions.
+- [x] **Hypothesis 2 (downward-trend)** — implemented exactly as locked
+      ("regardless of whether it ever hit zero"), **and that is a problem worth
+      settling before it is quoted.** As written the rule admits 500 → 400 →
+      300: the trend is perfect and the loan is in deep default. On the
+      synthetic check every single loan H2 admitted was one no cure rule should
+      release. `H2+` is therefore computed alongside it — same trend plus H1's
+      requirement that the overdue be cleared now. Both are printed; choosing
+      between them is a decision, not an implementation detail.
+      *Note the rule is independent of `n` entirely* — it is a shape test, not
+      a threshold, so its population does not move as the threshold is tuned.
+- [x] **`H2` now names two different rules, and they are kept apart in code.**
+      A second candidate arrived 28.07.2026: a **sloped threshold** running from
+      `n` in the first window month down to `n/2` at the as-of month. That is
+      not the locked shape test, so both live under explicit keys —
+      `H2T` (trend) and `H2K` (corridor), with `RULE_NAMES` carrying the display
+      text. Leaving both as "H2" is how a figure ends up produced by whichever
+      cell happened to run last.
+      They are opposite in structure, which is the part that matters for the
+      choice: **`H2K ⊆ H1` always** — the line is never above `n`, so the
+      corridor can only tighten the flat threshold — while `H2T` is not nested
+      in `H1` at all and picks up high-but-falling DPD that a flat rule never
+      sees. Hence the observed contrast: H1 and H2T overlap on 2 loans, whereas
+      H2K is a strict subset of H1.
+      Implemented inside `rule_sets` rather than as a separate pass. The test
+      "`dpd(m) ≤ n·shape(m)` for every month" is equivalent to
+      "`n ≥ max_m dpd(m)/shape(m)`", so `build_candidates` stores that single
+      `corridor_need` per loan and every threshold becomes one comparison — no
+      re-reading the panel per `n`, and the rule flows into the side-by-side
+      table, the money totals and the charts without a parallel code path.
+- [ ] **Decide which `H2` goes into the recommended rule.** No re-default rate
+      exists for the corridor: Phase C's matrix is built on the flat threshold,
+      and its rate does not transfer to a differently-shaped population. Either
+      re-run the cohorts under the corridor, or state plainly that the corridor
+      is being chosen on shape and volume alone.
+- [x] Compare H1 vs. H2: overlap, size, balance, provisions, and cross-check
+      against Phase C's re-default matrix — the historical rate at the matching
+      `n` is applied to today's population to state roughly how many of the
+      released loans would come back, flagged explicitly as a transfer of a
+      historical share and **not** a forecast (re-default plausibly correlates
+      with balance, and that decomposition has not been tested).
+- [x] Window sensitivity 3 vs 6 months (`CANDIDATE_WINDOWS`) — part of the
+      original ask, previously not built.
 - [ ] **Final decision:** recommended rule (H1 / H2 / hybrid), resulting
       population (count / balance / provisions), vs. Retail Business's 12bn ₸
       estimate.
@@ -216,6 +323,18 @@ counts match before moving to Phase C.
       notebook work that belong in the repo.
 
 ## Locked methodology (do not re-litigate mid-analysis)
+
+- **`category` IS the IFRS stage; `category = '3'` means Stage 3** (Miras,
+  27.07.2026). Every pool in `stage3_safezone_rolling_extract.sql` is built on
+  `category = '3' AND tag <> '11'`, and Phases C and D inherit that population,
+  so this settles what they were already doing rather than changing it.
+  `stage3_cure_analysis.md` had carried the opposite reading — "the delinquency
+  bucket, not the IFRS stage" — as an open decision since 17.07; that entry is
+  now corrected at source, because a stale open question standing next to its
+  answer reads as an unresolved one.
+  Recorded as a methodology call: no confirmation from the owner of
+  `CL_PORTFOLIO_2` is on file. If one is obtained, it belongs in that entry with
+  a date and attribution, like the censoring confirmations.
 
 - Restructuring-covered clean months: **kept in the pool, flagged**
   (`restr_active_pct`) — not excluded.
@@ -263,3 +382,13 @@ counts match before moving to Phase C.
   that none occurred (`SALES_DID_NOT_OCCUR`, `WRITEOFF_DID_NOT_OCCUR`).
   Anything else is `НЕ ПОДТВЕРЖДЕНО` and makes that month's re-default rate a
   lower bound. An empty month is never silently read as a clean month.
+  As of 27.07.2026 every panel month satisfies one of the two, so no month is
+  `НЕ ПОДТВЕРЖДЕНО` — but the rule stands, and a wider `@LastAsOf` will pull in
+  months that fail it again. The confirmations are scoped to the months named in
+  them, never extended forward.
+- **A confirmation that contradicts the evidence is a stop, not a precedence
+  rule.** If a month declared event-free later shows events in the archive, the
+  run raises (`declared_but_present`) instead of quietly preferring either side.
+  The declaration may have covered a different period, or the archive may have
+  been extended; both are answerable questions, and neither is answered by
+  picking the source that happens to be checked first.

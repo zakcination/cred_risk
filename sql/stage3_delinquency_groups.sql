@@ -3,7 +3,7 @@
    Апгрейд помесячного отчёта по пулу Стадии 3. Для каждого займа:
    (1) DPD по месяцам + флаг «была ли просрочка» по месяцам (0/1);
    (2) «группа» — последовательность номеров месяцев, где была просрочка,
-       например «@345» = просрочка была в 3-м, 4-м и 5-м наблюдаемых месяцах;
+       например «@3-4-5» = просрочка была в 3-м, 4-м и 5-м наблюдаемых месяцах;
    (3) ВАЖНО про природу DPD: если займ просрочен ПОДРЯД несколько месяцев,
        raw dpd не «сбрасывается» — он растёт примерно на ~30/31 день за месяц,
        пока не заплатят. То есть dpd=63 на 3-м месяце подряд просрочки — это
@@ -15,7 +15,7 @@
    first_episode_start_dpd — это и есть настоящая «изначальная» просрочка, не
    раздутая накоплением дней. Отдельно храним длину самого длинного эпизода
    (сколько месяцев подряд не платили) — это отдельный сигнал хроничности.
-   Потом по каждой «группе» (@345, @25, @CLEAN, …) считаем количество займов
+   Потом по каждой «группе» (@3-4-5, @2-5, @CLEAN, …) считаем количество займов
    и квартили (q25/медиана/q75) ОБОИХ метрик — сырой (max_dpd_raw, раздутой) и
    исправленной (first_episode_start_dpd) — чтобы наглядно видеть завышение и
    осознанно выбирать порог n для смягчения правил оздоровления.
@@ -29,9 +29,13 @@
 
    Month numbering: month_no = month_idx + 1 (1-based, WINDOW-relative — "month 1"
    is the first observed calendar month, i.e. @MonthFrom from the pool build, not
-   literally January). A group label like '@345' means "delinquent in the 3rd,
+   literally January). A group label like '@3-4-5' means "delinquent in the 3rd,
    4th and 5th observed months of the window" — read alongside default_date /
    cure_date for calendar context.
+
+   WINDOW WIDTH: the per-month pivot is written out by hand to dpd_m7/flag_m7, so
+   this script covers a window of at most 7 months. §0a fails loudly rather than
+   silently truncating a wider one.
 
    Two result sets:
      (1) Per-loan report — dpd + flag per month, group label, episode metrics.
@@ -39,6 +43,58 @@
          and the episode-corrected severity metric.
    T-SQL (Microsoft SQL Server 2017+ for STRING_AGG / PERCENTILE_CONT).
    ============================================================================= */
+
+-------------------------------------------------------------------------------
+-- 0a. Preconditions. Both are cheap; both fail silently and expensively if left
+--     unchecked, and in the same direction — the report still renders, just
+--     wrong.
+--
+--     (i) Window width. The pivot below is hand-written to dpd_m7/flag_m7.
+--         A wider window would drop months 8+ from those columns while the
+--         group label and the episode metrics kept counting them, so the two
+--         halves of the same row would quietly describe different windows.
+--
+--     (ii) One row per (contract, month). Episodes are built by gaps-and-islands
+--          (month_no − ROW_NUMBER()), and duplicates shift that arithmetic:
+--          a doubled month makes ROW_NUMBER outrun month_no and splits one
+--          episode into two. The pivot, being MAX(CASE ...), would survive the
+--          same duplicates unscathed — so the per-loan row would look right
+--          while first_episode_start_dpd / worst_episode_length were computed
+--          off a corrupted run structure. Nothing downstream would flag it.
+--          stage3_cure_pool.sql §2a now refuses to build a pool with duplicates,
+--          so this is the second line of the same defence — kept because the
+--          ## table outlives the script that made it and this one reads whatever
+--          is in the session, not necessarily what that script produced.
+-------------------------------------------------------------------------------
+DECLARE @MaxMonthNo int = (SELECT MAX(month_idx) + 1 FROM ##STAGE3_CURE_POOL_DPD);
+IF @MaxMonthNo > 7
+BEGIN
+    DECLARE @msg_width nvarchar(400) = CONCAT(
+        N'Окно ', @MaxMonthNo, N' мес. шире пивота этого скрипта (7 мес.). ',
+        N'Месяцы 8+ выпали бы из dpd_m*/flag_m*, хотя метка группы и эпизоды их ',
+        N'учитывают. Допишите колонки dpd_m8../flag_m8.. (или переведите пивот на ',
+        N'динамический SQL) и только потом снимайте эту проверку.');
+    THROW 50001, @msg_width, 1;
+END;
+
+DECLARE @Dupes int = (
+    SELECT COUNT(*) FROM (
+        SELECT contract_number, month_idx
+        FROM ##STAGE3_CURE_POOL_DPD
+        GROUP BY contract_number, month_idx
+        HAVING COUNT(*) > 1
+    ) d
+);
+IF @Dupes > 0
+BEGIN
+    DECLARE @msg_dupes nvarchar(400) = CONCAT(
+        N'##STAGE3_CURE_POOL_DPD: ', @Dupes, N' пар (contract_number, month_idx) ',
+        N'встречаются больше одного раза. Эпизоды считаются через ',
+        N'month_no − ROW_NUMBER() и на дублях разъедутся, а пивот через MAX(CASE) ',
+        N'этого не покажет. Устраните дубли в stage3_cure_pool.sql, затем ',
+        N'перезапустите.');
+    THROW 50002, @msg_dupes, 1;
+END;
 
 -------------------------------------------------------------------------------
 -- 0. Per (contract, month) delinquency flag. NULL dpd -> NULL flag (no data;
@@ -57,8 +113,8 @@
 ),
 
 -------------------------------------------------------------------------------
--- 1. Group label per loan: concatenated month numbers where delinquent,
---    e.g. '345'. Loans with zero delinquent months get 'CLEAN' explicitly (a
+-- 1. Group label per loan: the delinquent month numbers joined by '-',
+--    e.g. '3-4-5'. Loans with zero delinquent months get 'CLEAN' explicitly (a
 --    LEFT JOIN keeps them — they must not silently disappear from the group
 --    breakdown, they are the largest and most important group).
 -------------------------------------------------------------------------------
@@ -76,7 +132,9 @@ loan_group AS (
     FROM ##STAGE3_CURE_POOL_HEAD h
     OUTER APPLY (
         SELECT
-            STRING_AGG(CAST(month_no AS varchar(2)), '') WITHIN GROUP (ORDER BY month_no) AS pattern,
+            -- Separator is load-bearing, not cosmetic: without it '@112' reads as
+            -- both {1,1,2} and {11,2} once the window passes 9 months.
+            STRING_AGG(CAST(month_no AS varchar(2)), '-') WITHIN GROUP (ORDER BY month_no) AS pattern,
             COUNT(*)   AS n_delinquent_months,
             MAX([dpd]) AS max_dpd_raw
         FROM delinquent_months dm
@@ -248,7 +306,20 @@ ORDER BY loans_in_group DESC, delinquency_group;
 --   or definition flag worth a manual look.
 -- * Group label months are WINDOW-relative (month_no = month_idx+1, 1 = the
 --   first observed month = @MonthFrom from the pool build), not calendar month
---   numbers — pair with default_date/cure_date for calendar context.
+--   numbers — pair with default_date/cure_date for calendar context. Months are
+--   joined by '-' ('@3-4-5'): unseparated, '@112' would read as both {1,1,2} and
+--   {11,2} the moment the window reaches 10 months.
+-- * "Delinquent" here is dpd > 0 — ANY lateness, because the question is which
+--   MONTHS slipped, not how far. The safe-zone study asks a different question
+--   (dpd <= n for the whole window) and uses a different definition. Both are
+--   correct for their own purpose and their numbers are NOT interchangeable;
+--   see sql/README.md § "Два разных определения просрочки" before comparing
+--   counts across the two reports.
+-- * §0a refuses to run on a window wider than 7 months, or on a pool with
+--   duplicate (contract_number, month_idx) rows. Neither would raise an error on
+--   its own: the first drops months 8+ from the pivot only, the second corrupts
+--   episode detection only — in both cases the rest of the row still renders
+--   normally, which is what makes them worth failing on.
 -- * NULL dpd (missing snapshot) is excluded from both the group label and
 --   episode detection — it neither confirms nor breaks a run. A loan with gaps
 --   can therefore show an artificially short/split episode if a snapshot is
