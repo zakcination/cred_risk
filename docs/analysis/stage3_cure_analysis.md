@@ -42,11 +42,23 @@ to bracket the number and find which relaxed rule reproduces РБ's 12 bn.
 - `NULL` DPD is treated as **"no data"** (ignored), not as 0.
 
 ## Open decisions (blocking a final number)
-1. **Stage-3 source.** `category`/`Basket` is the *delinquency bucket*, not the
-   IFRS stage. Pick one: **(A)** РБ's contract list (Bereket asked РБ for it) →
-   load into `#stage3`; **(B)** a stage column if one exists; **(C)** derive from
-   default markers (ever-90+ / `collections` / `writeoff` / `bankrupt`). Default
-   in the script is (A).
+1. ~~**Stage-3 source.**~~ **RESOLVED 27.07.2026 (Miras): `category` IS the IFRS
+   stage — `category = '3'` means Stage 3.** This entry previously read
+   "`category`/`Basket` is the *delinquency bucket*, not the IFRS stage" and
+   listed three options; that reading was wrong and is corrected here rather
+   than left standing next to the answer, since a stale "open decision" beside a
+   settled one is read as unsettled.
+   This is what every downstream artefact already assumed —
+   `stage3_safezone_rolling_extract.sql` builds all twelve pools on
+   `category = '3' AND tag <> '11'`, and Phases C and D inherit it — so the
+   resolution confirms the existing numbers rather than invalidating them.
+   Recorded as a methodology call, not as a cited source: no external
+   confirmation from the owner of `CL_PORTFOLIO_2` is on file. If one is ever
+   obtained it belongs here with its date and attribution, in the same form as
+   the censoring confirmations.
+   Options (B) a dedicated stage column and (C) derivation from default markers
+   are closed as unnecessary. Option (A) — РБ's contract list — remains worth
+   having, but as the **reconciliation** input below, not as the stage source.
 2. **DPD source & off-by-one.** Portfolio `dpd` is off-by-one (`= days_past_due − 1`)
    and NULL-heavy for S03. For the defensible number, drive off the mart
    `loan_account.days_past_due` or, best, **actual payments** (Diana: pull
@@ -62,6 +74,14 @@ Load their list into `#stage3`, run our query on it, and diff: same loans? same
 balance? The gap tells us whether the 12 bn holds, and our sensitivity grid shows
 which rule assumptions produce it.
 
+Still outstanding, and it is the difference between two questions. Everything
+built so far answers **"how much is there by our definition"**. The July ask was
+**"does РБ's 12 bn hold"** — which is a comparison of two contract lists, not a
+single number. Our figure landing near 12 bn would not by itself confirm theirs:
+the same total can sit on a different population. Without their list the honest
+form of the answer is "by our rule the sum is X", with the reconciliation named
+as not done.
+
 ## Review verification (21.07.2026)
 
 Коллега прислал структурированную ревизию `sql/stage3_cure_candidates.sql` (7
@@ -76,8 +96,12 @@ which rule assumptions produce it.
 скрипта), `@AsOf`/`@WindowMonths`/`@DpdTolerance` параметризованы, `NULL dpd`
 не приравнивается к 0 (`MAX(w.dpd)` игнорирует NULL по семантике SQL Server,
 и в шапке скрипта это явно оговорено), `category`/`Basket` прямо названы
-delinquency bucket, а не IFRS stage (см. открытый вопрос §1 выше и docstring
-скрипта), sensitivity grid присутствует (§3, закомментирован), сверка с РБ
+delinquency bucket, а не IFRS stage — **этот пункт впоследствии отменён:
+27.07.2026 зафиксировано обратное, `category` и есть стадия IFRS (см. §1
+выше). Запись оставлена как есть: это датированный протокол ревью от
+21.07.2026, а не текущее утверждение, и переписывать его задним числом
+означало бы стереть след того, что мы считали верным в тот момент** —
+sensitivity grid присутствует (§3, закомментирован), сверка с РБ
 предложена (раздел "To reconcile" выше), и платёжный refinement
 (`repayment_schedule` vs `payments`/`payments_wiring`) заложен как §PAYMENTS
 в скрипте.

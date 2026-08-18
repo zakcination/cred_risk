@@ -77,12 +77,49 @@ WHERE p.[date] >= @MonthFrom
   AND p.[date] <= @AsOf;                                     -- 01.01.2026 → last available
 
 -------------------------------------------------------------------------------
+-- 2a. ЕДИНСТВЕННОСТЬ строки на (contract_number, month_idx).
+--     §2 джойнит CL_PORTFOLIO_2 по contract_number, не проверяя, что снимок на
+--     дату один. Если их два, ломается не сумма, а СТРУКТУРА: всё, что считает
+--     «сколько месяцев подряд», работает через month_idx − ROW_NUMBER(), и
+--     дубль сдвигает ROW_NUMBER относительно month_idx — один непрерывный
+--     пробег распадается на два. Это и раздел (C) ниже (тот самый счёт
+--     «оздоровимых» займов против оценки РБ в 12 млрд ₸), и эпизоды в
+--     stage3_delinquency_groups.sql.
+--     Опасно оно тем, что тихое: COUNT/MAX/пивот через MAX(CASE ...) дубли
+--     переживают без единого признака, что что-то не так. Поэтому падаем здесь,
+--     на входе, а не разбираемся потом, почему пробег «прервался».
+-------------------------------------------------------------------------------
+DECLARE @DupRows int = (
+    SELECT COUNT(*) FROM (
+        SELECT contract_number, month_idx
+        FROM ##STAGE3_CURE_POOL_DPD
+        GROUP BY contract_number, month_idx
+        HAVING COUNT(*) > 1
+    ) d
+);
+IF @DupRows > 0
+BEGIN
+    DECLARE @msg nvarchar(400) = CONCAT(
+        N'##STAGE3_CURE_POOL_DPD: ', @DupRows, N' пар (contract_number, month_idx) ',
+        N'дублируются — в CL_PORTFOLIO_2 нашлось больше одного снимка на контракт ',
+        N'и дату. Разберитесь, чем они отличаются, и сверните до одной строки ',
+        N'(осознанным правилом, не DISTINCT наугад) — иначе счёт непрерывных ',
+        N'месяцев ниже и эпизоды в stage3_delinquency_groups.sql будут неверны.');
+    THROW 50010, @msg, 1;
+END;
+
+-------------------------------------------------------------------------------
 -- 3. Проверка объёма пула
 -------------------------------------------------------------------------------
 SELECT
     (SELECT COUNT(*)                  FROM ##STAGE3_CURE_POOL_HEAD) AS pool_contracts,
     (SELECT COUNT(*)                  FROM ##STAGE3_CURE_POOL_DPD)  AS pool_month_rows,
     (SELECT COUNT(DISTINCT snap_date) FROM ##STAGE3_CURE_POOL_DPD)  AS months_in_window,
+    -- Ожидается ровно 0. Печатается рядом с объёмами, чтобы «проверка прошла»
+    -- было видно в выводе, а не только по отсутствию ошибки.
+    (SELECT COUNT(*) FROM (
+        SELECT contract_number, month_idx FROM ##STAGE3_CURE_POOL_DPD
+        GROUP BY contract_number, month_idx HAVING COUNT(*) > 1) d) AS dup_contract_month_pairs,
     (SELECT SUM(balance)              FROM ##STAGE3_CURE_POOL_HEAD) AS pool_balance,
     (SELECT SUM(provisions_total)     FROM ##STAGE3_CURE_POOL_HEAD) AS pool_provisions;
 
