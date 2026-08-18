@@ -34,9 +34,15 @@
 | `ACTION_PLAN.md` | План действий: немедленные шаги, структура плана мероприятий для АРРФР по п. 99, меры по сегментам, GR-практика, внутренний контур РА |
 | `calc/limits98.py` | Калькулятор триггеров: пп. 107-1/2/3/7/8 и проекции негативного влияния п. 105. Проверен на синтетической фикстуре (`--selftest`) |
 | `data/npl_series_template.csv` | Шаблон помесячного ряда для калькулятора (7+ месяцев) |
+| `out/Razbor_glavy_11_N85_v0.1.docx` | CHAPTER11_MAP в Word — для передачи |
+| `out/Plan_deystviy_98-3_v0.1.docx` | ACTION_PLAN в Word — для передачи |
+| `build/render.js`, `build/make_docs.py` | Сборка .docx (docx-js). Правки текста вносить в make_docs.py и в markdown |
 
 Запуск калькулятора: `python3 calc/limits98.py data/npl_series_template.csv`
 (самопроверка: `python3 calc/limits98.py --selftest`).
+
+Пересборка Word-файлов: `python3 build/make_docs.py` (нужен node и пакет `docx`:
+`cd build && npm install docx`).
 
 ## Статус на 18.08.2026
 
