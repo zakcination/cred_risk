@@ -387,6 +387,92 @@ def ex8():
     fig.subplots_adjust(top=0.80, left=0.24, bottom=0.19)
     save(fig, "ex8_stress_mildness")
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# 9. Занижение сценариев и точка исправления
+# ══════════════════════════════════════════════════════════════════════════
+def ex9():
+    r = rows("monthly_credit_stress_2026.csv")
+    dates = sorted({x["as_of"] for x in r})
+    lab = [d[8:10] + "." + d[5:7] for d in dates]
+    def series(sc, key):
+        return [float(next(x for x in r if x["as_of"] == d and x["scenario"] == sc)[key])
+                for d in dates]
+    fixed_from = [i for i, d in enumerate(dates)
+                  if next(x for x in r if x["as_of"] == d)["formula_base"] == "fact"][0]
+
+    fig, ax = plt.subplots(figsize=(10, 4.8))
+    ax.axvspan(-0.4, fixed_from - 0.5, color=CRIT, alpha=0.07, zorder=0)
+    ax.axvline(fixed_from - 0.5, color=INK2, lw=1.2, ls=(0, (4, 3)), zorder=1)
+    ax.text(fixed_from - 0.42, 258, "формула исправлена", fontsize=9.5,
+            color=INK, weight="bold", va="top")
+    ax.text(-0.3, 258, "инкрементальная база", fontsize=9.5, color=CRIT, va="top")
+    for sc, col, nm in (("3", CRIT, "кризисный"), ("2", S2, "стрессовый")):
+        rep = series(sc, "R_reported"); ok = series(sc, "R_vs_fact")
+        ax.plot(range(len(dates)), [v/1000 for v in ok], "-o", color=col, lw=2, ms=7,
+                label=f"{nm} — от факта")
+        ax.plot(range(len(dates)), [v/1000 for v in rep], "--o", color=col, lw=1.6, ms=6,
+                mfc=SURFACE, alpha=0.85, label=f"{nm} — как в отчёте")
+        for i in range(fixed_from):
+            ax.annotate("", xy=(i, rep[i]/1000), xytext=(i, ok[i]/1000),
+                        arrowprops=dict(arrowstyle="-", color=col, lw=0.9, alpha=0.5))
+    ax.text(2, 160, "занижение\n×1,84 — ×2,15", ha="center", fontsize=9.5,
+            color=INK, weight="bold")
+    ax.set_xticks(range(len(dates))); ax.set_xticklabels(lab)
+    ax.set_ylabel("дополнительные провизии в сценарии, млрд ₸")
+    ax.set_ylim(0, 272); ax.set_xlim(-0.4, len(dates) - 0.6)
+    ax.legend(loc="lower right", fontsize=9, ncol=2)
+    frame(fig, "Пять отчётов вышли с заниженными вдвое потерями, шестой — уже нет",
+          "ЭКСПОНАТ 9 · МЕСЯЧНЫЙ СТРЕСС-ТЕСТ 2026",
+          "Сплошная линия — пересчёт от факта, пунктир — значение отчёта. Базовый сценарий "
+          "считался от факта всегда и потому не показан: у него расхождения нет.")
+    fig.subplots_adjust(top=0.80, bottom=0.14)
+    save(fig, "ex9_understatement")
+
+# ══════════════════════════════════════════════════════════════════════════
+# 10. Из чего складывается результат
+# ══════════════════════════════════════════════════════════════════════════
+def ex10():
+    names = ["Автомобильное обеспечение", "Недвижимость", "Девальвация", "Нефть"]
+    val   = [182268, 37298, 11834, 303]
+    tot   = sum(val)
+    share = [v / tot * 100 for v in val]
+    cols  = [S2, S1, S3, MUTED]
+    fig, ax = plt.subplots(figsize=(10, 4.4))
+    left = 0
+    for v, sh, c in zip(val, share, cols):
+        ax.barh(0.45, sh, left=left, height=0.34, color=c,
+                edgecolor=SURFACE, linewidth=2)
+        if sh > 8:
+            ax.text(left + sh/2, 0.45, f"{sh:.1f} %".replace(".", ","), ha="center",
+                    va="center", fontsize=12, color="white", weight="bold")
+        left += sh
+    ax.annotate("нефть — 0,13 %,\nполоска шириной в волос", xy=(99.95, 0.62),
+                xytext=(86, 0.74), fontsize=9.5, color=INK2, ha="center", va="bottom",
+                arrowprops=dict(arrowstyle="->", color=MUTED, lw=1))
+    for k, (n, v, sh, c) in enumerate(zip(names, val, share, cols)):
+        y = -0.30 - k * 0.17
+        ax.add_patch(Rectangle((1.5, y - 0.045), 2.2, 0.09, facecolor=c, edgecolor="none"))
+        ax.text(5.5, y, n, va="center", fontsize=10, color=INK)
+        ax.text(52, y, f"{v:,.0f}".replace(",", " ") + " млн ₸", va="center",
+                ha="right", fontsize=10, color=INK2)
+        ax.text(64, y, f"{sh:.2f} %".replace(".", ","), va="center", ha="right",
+                fontsize=10, color=INK, weight="bold")
+    ax.text(52, -0.30 + 0.17, "вклад", ha="right", fontsize=9, color=MUTED)
+    ax.text(64, -0.30 + 0.17, "доля", ha="right", fontsize=9, color=MUTED)
+    ax.set_xlim(0, 100); ax.set_ylim(-1.26, 1.00)
+    ax.set_yticks([]); ax.set_xticks([]); ax.grid(False)
+    for sp in ax.spines.values(): sp.set_visible(False)
+    ax.text(100, -1.10, "«Падение мировых цен на нефть на 40 %» стоит первым во всех формулировках\n"
+                        "сценария и даёт 0,13 % результата: доля нефтяного портфеля — 0,11 %.",
+            ha="right", va="center", fontsize=10.5, color=INK, weight="bold")
+    frame(fig, "Сценарий назван по фактору, который на него почти не влияет",
+          "ЭКСПОНАТ 10 · ВКЛАД ФАКТОРОВ, КРИЗИСНЫЙ СЦЕНАРИЙ",
+          "Месячная форма на 01.07.2026, после исправления формулы. Сумма вкладов равна "
+          "прогнозному изменению стоимости портфеля 231 703 млн ₸.")
+    fig.subplots_adjust(top=0.78, bottom=0.08)
+    save(fig, "ex10_factor_contribution")
+
 if __name__ == "__main__":
-    for f in (ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8):
+    for f in (ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9, ex10):
         f()
