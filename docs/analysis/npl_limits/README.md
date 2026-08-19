@@ -36,7 +36,7 @@
 | `data/npl_series_template.csv` | Шаблон помесячного ряда для калькулятора (7+ месяцев) |
 | `out/Razbor_glavy_11_N85_v0.2.docx` | CHAPTER11_MAP в Word — для передачи |
 | `out/Plan_deystviy_98-3_v0.2.docx` | ACTION_PLAN в Word — для передачи |
-| `out/Zapiska_rukovoditelyu_98-3_v0.1.docx` | Короткая записка руководителю: дословные цитаты норм о сроках, сценарии А–Г из статус-кво (источник текста — make_docs.py) |
+| `out/Zapiska_rukovoditelyu_98-3_v0.2.docx` | Короткая записка руководителю: дословные цитаты норм о сроках, сценарии А–Г из статус-кво, пометки \* по положениям, меняющимся с 01.01.2027 (источник текста — make_docs.py) |
 | `build/render.js`, `build/make_docs.py` | Сборка .docx (docx-js). Правки текста вносить в make_docs.py и в markdown |
 
 Запуск калькулятора: `python3 calc/limits98.py data/npl_series_template.csv`
