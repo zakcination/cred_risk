@@ -25,10 +25,13 @@
 # %%
 CONFIG = {
     # --- файл ---
-    "path": "b1a_for_tree.csv",
+    # Windows-путь писать через r"..." либо прямыми слэшами, иначе \n и \t
+    # будут прочитаны как управляющие символы:
+    #   r"R:\!!!!!НСТ2026\FIXING_SEGMENTATION\B1A_FOR_TREE.csv"
+    "path": r"B1A_FOR_TREE.csv",
     "sheet": 0,
-    "sep": ";",
-    "usecols": None,                # None = все; список — если Colab не тянет память
+    "sep": None,                    # None = определить разделитель автоматически
+    "usecols": None,                # None = все; список — если не хватает памяти
     # --- две сегментации ---
     "target": "segment_afr",        # ЭТАЛОН: сегментация АФР
     "legacy": "segment_eub",        # ПРЕЖНЯЯ: как делил банк
@@ -116,6 +119,7 @@ PRIORITY = ["DISASS", "RELATE", "CORGOV", "CORINV", "Individual loans", "COREST"
 # ## 2. Загрузка и первый взгляд на две сегментации
 
 # %%
+import io
 import warnings
 import numpy as np
 import pandas as pd
@@ -125,17 +129,37 @@ pd.set_option("display.width", 220)
 pd.set_option("display.max_columns", 90)
 
 
-def read_any(path, sheet=0, sep=";", usecols=None):
-    low = str(path).lower()
-    if low.endswith((".xlsx", ".xlsm", ".xls")):
+def sniff(path, enc):
+    """Разделитель по первой строке: побеждает тот, что даёт больше колонок."""
+    with io.open(path, encoding=enc, errors="strict") as f:
+        head = f.readline()
+    best = max((";", ",", "\t", "|"), key=lambda d: head.count(d))
+    if head.count(best) == 0:
+        raise RuntimeError("в первой строке нет ни одного из ; , tab |")
+    print("разделитель определён: %r (колонок в шапке: %d)"
+          % (best, head.count(best) + 1))
+    return best
+
+
+def read_any(path, sheet=0, sep=None, usecols=None):
+    if str(path).lower().endswith((".xlsx", ".xlsm", ".xls")):
         return pd.read_excel(path, sheet_name=sheet, dtype=str, usecols=usecols)
+    last = None
     for enc in ("utf-8-sig", "utf-8", "cp1251"):
         try:
-            return pd.read_csv(path, sep=sep, dtype=str, encoding=enc,
-                               usecols=usecols, low_memory=False)
-        except UnicodeDecodeError:
+            d = sep or sniff(path, enc)
+            df_ = pd.read_csv(path, sep=d, dtype=str, encoding=enc,
+                              usecols=usecols, low_memory=False)
+            print("кодировка: %s" % enc)
+            if df_.shape[1] < 5:
+                raise RuntimeError(
+                    "прочитано всего %d колонок — почти наверняка не тот "
+                    "разделитель. Задать вручную CONFIG['sep']." % df_.shape[1])
+            return df_
+        except UnicodeDecodeError as e:
+            last = e
             continue
-    raise RuntimeError("не удалось определить кодировку файла")
+    raise RuntimeError("не удалось прочитать файл: %s" % last)
 
 
 df = read_any(CONFIG["path"], CONFIG["sheet"], CONFIG["sep"], CONFIG["usecols"])
@@ -241,14 +265,37 @@ if bk in df.columns and d_scr is not None:
 if {"loan_start_date", "loan_end_date"} <= set(df.columns):
     ds = pd.to_datetime(df["loan_start_date"], errors="coerce", dayfirst=True)
     de = pd.to_datetime(df["loan_end_date"], errors="coerce", dayfirst=True)
+    bad = (ds.isna() | de.isna()).mean()
+    print("срок займа посчитан; даты не распознаны у %.2f%% строк" % (100 * bad))
+    if bad > 0.05:
+        print("  !! формат дат не читается. Пример из файла: %r / %r" %
+              (df["loan_start_date"].dropna().iloc[0],
+               df["loan_end_date"].dropna().iloc[0]))
+        print("  !! CORINV по сроку не восстановится. Задать формат явно:")
+        print("     pd.to_datetime(..., format='%d.%m.%Y')")
     rep = pd.Timestamp(CONFIG["report_date"])
     feat["eng_srok_let"] = (de - ds).dt.days / 365.25
     feat["eng_srok_ost_let"] = (de - rep).dt.days / 365.25
     feat["eng_srok_ge_5let"] = (feat["eng_srok_let"] >= 5).astype(float)
-    print("срок займа посчитан")
+
+# --- контроль: инженерные признаки не должны оказаться пустыми молча -------
+ENG_CRITICAL = {
+    "eng_share_capital": "порог 0,2 % -> Individual loans",
+    "eng_srok_let": "срок >= 5 лет -> CORINV",
+    "eng_zadol_script": "база задолженности",
+}
+print("\n--- контроль инженерных признаков ---")
+for c, why in ENG_CRITICAL.items():
+    if c not in feat.columns:
+        print("  ОТСУТСТВУЕТ %-22s (%s) — не хватило исходных колонок" % (c, why))
+    elif feat[c].notna().sum() == 0:
+        print("  ПУСТ       %-22s (%s) — правило не восстановится" % (c, why))
+    else:
+        print("  ок         %-22s заполнен на %.1f%%"
+              % (c, 100 * feat[c].notna().mean()))
 
 df = df[[c for c in df.columns if c not in set(CONFIG["pii_cols"]) | {bk}]]
-print("PII и ключ заёмщика удалены")
+print("\nPII и ключ заёмщика удалены")
 
 # %% [markdown]
 # ## 4. Кодирование
