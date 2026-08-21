@@ -617,17 +617,58 @@ def tree_rules(model, feature_names, Xr, y_bin, min_samples=1, min_purity=0.0):
     return sorted(out, key=lambda r: (-r["чистота"], -r["из них сегмент"]))
 
 
+OPP = {"<=": ">", ">": "<=", "==": "!=", "!=": "=="}
+
+
+def collapse(rules):
+    """Схлопнуть пары правил, различающиеся только последним условием.
+
+    Дерево обязано доводить ветку до листа, поэтому выдаёт пары вида
+    «... И ead > 42310» и «... И ead <= 42310», обе ведущие в один сегмент.
+    Последнее условие в такой паре ничего не решает и должно уйти —
+    иначе в регламент попадает порог, который ни на что не влияет.
+    """
+    changed = True
+    while changed:
+        changed = False
+        by_prefix = {}
+        for r in rules:
+            if not r["conds"]:
+                continue
+            by_prefix.setdefault(tuple(r["conds"][:-1]), []).append(r)
+        for prefix, group in by_prefix.items():
+            if len(group) != 2:
+                continue
+            a, b = group[0]["conds"][-1], group[1]["conds"][-1]
+            if a[0] == b[0] and a[1] == b[1] and a[3] == b[3] \
+                    and OPP.get(a[2]) == b[2]:
+                merged = {"conds": list(prefix),
+                          "строк": group[0]["строк"] + group[1]["строк"],
+                          "из них сегмент": (group[0]["из них сегмент"] +
+                                             group[1]["из них сегмент"])}
+                merged["чистота"] = round(
+                    merged["из них сегмент"] / max(merged["строк"], 1), 4)
+                rules = [r for r in rules if r not in group] + [merged]
+                changed = True
+                break
+    return sorted(rules, key=lambda r: (-r["чистота"], -r["из них сегмент"]))
+
+
 rules_by_seg, report = {}, []
 for seg in y.value_counts().index:
     tgt = (y == seg).astype(int)
     if tgt.sum() < 30:
         report.append("### %s — %d строк, для правила мало\n" % (seg, tgt.sum()))
         continue
-    m = DecisionTreeClassifier(max_depth=CONFIG["rule_depth"], min_samples_leaf=10,
+    # для малых сегментов глубины 4 не хватает: они составляют доли процента
+    # портфеля, и отделяющие их условия лежат глубже
+    depth = CONFIG["rule_depth"] if tgt.sum() > 5000 else CONFIG["rule_depth"] + 2
+    m = DecisionTreeClassifier(max_depth=depth, min_samples_leaf=10,
                                class_weight="balanced",
                                random_state=CONFIG["random_state"]).fit(X, tgt)
-    rules = tree_rules(m, list(X.columns), X, tgt,
-                       min_samples=10, min_purity=CONFIG["min_rule_purity"])
+    rules = collapse(tree_rules(m, list(X.columns), X, tgt,
+                                min_samples=10,
+                                min_purity=CONFIG["min_rule_purity"]))
     rules_by_seg[seg] = rules
     covered = sum(r["из них сегмент"] for r in rules)
     head = ("### %s — в сегменте %d строк, правилами покрыто %d (%.1f%%)\n"
