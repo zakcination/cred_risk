@@ -59,6 +59,30 @@ CONFIG = {
         "rwa_group_off", "rwa_d1", "rwa_d2", "rwa_d3",
         "rwa1", "rwa2", "rwa3", "rwa_total",
     ],
+    # Технические поля загрузки и учёта. Коррелируют с продуктом, но правилами
+    # сегментации не являются: дерево на них выдаёт условия вида
+    # «source_system = 'CL'», которые нельзя внести ни в один регламент.
+    "tech_cols": [
+        "source_system", "datatype", "kod_podrazdelenia", "fil_code",
+        "doc_type_nb_id", "operation_date", "is_del", "ef_batches_int_id",
+        "ef_contract_id", "nps_1400", "nps_1424", "nps_1740", "nps_1741",
+        "nps_6000", "nps_6000_dop", "nps_1430", "nps_1434", "nps_1434_dop",
+    ],
+    # Колонки с датами. Принимаются и как даты, и как Excel-сериалы.
+    "date_cols": ["loan_start_date", "loan_end_date", "od_del_date",
+                  "interest_del_date", "wo_date", "restr_date", "date_kdn",
+                  "grace_od_date", "grace_int_date", "grace_principal",
+                  "grace_pay"],
+
+    # ---- РЕЖИМ ОТБОРА ПРИЗНАКОВ -------------------------------------------
+    #  "strict"  — только критерии, допустимые Таблицей 4 Методруководства.
+    #              Правила получаются переносимыми на следующий год.
+    #  "explore" — все колонки. Годится для разведки, НЕ для регламента:
+    #              дерево найдёт условия вроде «ltv <> 47.5» — запоминание
+    #              конкретной когорты, которой в следующем году не будет.
+    "mode": "strict",
+    "compare_modes": True,          # показать, сколько теряется на дисциплине
+
     "borrower_key": "iin_bin",
     # --- модель ---
     "max_depth": 12,
@@ -74,6 +98,46 @@ CONFIG = {
 }
 
 STUBS = {"1111111111111", "9999999999999", "1111111111111.0", "9999999999999.0"}
+
+# ============================================================================
+# Признаки, допустимые как КРИТЕРИИ сегментации.
+# Основание — Таблица 4 Методруководства; расшифровка — GROUND_TRUTH_SEGMENTS.md.
+# Каждая строка: признак -> какой критерий он обслуживает.
+# ============================================================================
+ALLOWED = {
+    "entity":        "ОУСА: «все займы на балансе ОУСА»",
+    "lsboo":         "ЛСБОО: «согласно требованиям регуляторной отчётности»",
+    "f_inv":         "инвестиционные: флаг по трём признакам ПП",
+    "debtor_type":   "юрлицо/физлицо — входит в критерии размера и розницы",
+    "debtor_se":     "ИП: субъект малого предпринимательства по ст. 24",
+    "ent_type":      "размер бизнеса по ст. 24 Предпринимательского кодекса",
+    "loan_obj":      "объект кредитования — справочник АФР",
+    "loan_purp":     "цель кредитования — справочник АФР",
+    "loan_type":     "вид займа/условного обязательства — периметр Таблицы 3",
+    "cl_type":       "тип кредитной линии — отзывность",
+    "collateral":    "наличие обеспечения — розничные портфели",
+    "in_b2a":        "список индивидуальных займов B2A",
+    "ind_sign":      "индивидуально значимый / однородный актив",
+    "eng_share_capital":        "порог 0,2 % капитала (ДОЛЯ, не сумма)",
+    "eng_over_02pct":           "тот же порог индикатором",
+    "eng_contracts_of_borrower":"число договоров заёмщика",
+    "eng_srok_let":             "срок займа: критерий «5 и более лет»",
+    "eng_srok_ge_5let":         "тот же критерий индикатором",
+    "eng_oked_razdel":          "отраслевой раздел ОКЭД (не сам код)",
+    "ead":           "порог 200 млн ₸ в рознице — соглашение банка, не Таблица 4",
+    "portfolio":     "внутренний продукт — прокси, нестабилен между годами",
+}
+
+# Признаки, непригодные для ПЕРЕНОСА на следующий год, даже если работают.
+# Порог в тенге устаревает вместе с капиталом и инфляцией; конкретная дата —
+# это точка, а не правило.
+UNSTABLE = {
+    "eng_zadol_borrower": "абсолютная сумма в ₸ — заменяется на eng_share_capital",
+    "eng_zadol_metod":    "абсолютная сумма в ₸",
+    "eng_zadol_script":   "абсолютная сумма в ₸",
+    "ead":                "абсолютный порог 200 млн ₸ не индексируется",
+    "portfolio":          "перечень продуктов банка меняется между циклами",
+}
 DEBT_BASE_METOD = ["od", "od_del", "interest", "interest_del", "disc_prem"]
 DEBT_BASE_SCRIPT = DEBT_BASE_METOD + ["correction", "penalty"]
 
@@ -213,12 +277,32 @@ def to_num(s):
 
 
 def numeric_share(s, n=5000):
-    smp = s.dropna().head(n)
+    """Доля чисел СРЕДИ НЕ-ЗАГЛУШЕК.
+
+    Считать заглушки нечисловыми нельзя: колонка вроде `ltv`, где 85 % строк —
+    '1111111111111', иначе уезжает в категориальные, и дерево начинает
+    запоминать отдельные значения LTV вместо порогов.
+    """
+    smp = s.dropna().astype(str).str.strip()
+    smp = smp[~smp.isin(STUBS)].head(n)
     return 0.0 if len(smp) == 0 else to_num(smp).notna().mean()
 
 
+def as_date(s):
+    """Дата из строки ИЛИ из Excel-сериала (origin 1899-12-30)."""
+    num = pd.to_numeric(s.astype(str).str.strip().str.replace(",", ".",
+                                                              regex=False),
+                        errors="coerce")
+    looks_serial = num.between(20000, 60000).mean() > 0.5
+    if looks_serial:
+        return pd.to_datetime(num, unit="D", origin="1899-12-30",
+                              errors="coerce"), "Excel-сериал"
+    return pd.to_datetime(s, errors="coerce", dayfirst=True), "строка"
+
+
 service = set(CONFIG["pii_cols"] + CONFIG["id_cols"] + CONFIG["leak_cols"] +
-              [TARGET, LEGACY, CONFIG["borrower_key"]])
+              CONFIG["tech_cols"] + CONFIG["date_cols"] +
+              [TARGET, LEGACY, CONFIG["borrower_key"], "oked"])
 
 num_cols, cat_cols = [], []
 for c in df.columns:
@@ -229,6 +313,8 @@ for c in df.columns:
     else:
         cat_cols.append(c)
 print("числовых:", len(num_cols), "| категориальных:", len(cat_cols))
+print("исключены как технические:",
+      [c for c in CONFIG["tech_cols"] if c in df.columns])
 
 feat = pd.DataFrame(index=df.index)
 for c in num_cols:
@@ -263,20 +349,30 @@ if bk in df.columns and d_scr is not None:
     print("агрегаты по заёмщику посчитаны, заёмщиков:", grp.nunique())
 
 if {"loan_start_date", "loan_end_date"} <= set(df.columns):
-    ds = pd.to_datetime(df["loan_start_date"], errors="coerce", dayfirst=True)
-    de = pd.to_datetime(df["loan_end_date"], errors="coerce", dayfirst=True)
+    ds, fmt_s = as_date(df["loan_start_date"])
+    de, fmt_e = as_date(df["loan_end_date"])
     bad = (ds.isna() | de.isna()).mean()
-    print("срок займа посчитан; даты не распознаны у %.2f%% строк" % (100 * bad))
-    if bad > 0.05:
-        print("  !! формат дат не читается. Пример из файла: %r / %r" %
+    print("даты: формат '%s' / '%s'; не распознано %.2f%% строк"
+          % (fmt_s, fmt_e, 100 * bad))
+    if bad <= 0.5:
+        print("  диапазон выдачи: %s .. %s" % (ds.min().date(), ds.max().date()))
+    else:
+        print("  !! даты не читаются, пример: %r / %r" %
               (df["loan_start_date"].dropna().iloc[0],
                df["loan_end_date"].dropna().iloc[0]))
-        print("  !! CORINV по сроку не восстановится. Задать формат явно:")
-        print("     pd.to_datetime(..., format='%d.%m.%Y')")
     rep = pd.Timestamp(CONFIG["report_date"])
     feat["eng_srok_let"] = (de - ds).dt.days / 365.25
     feat["eng_srok_ost_let"] = (de - rep).dt.days / 365.25
     feat["eng_srok_ge_5let"] = (feat["eng_srok_let"] >= 5).astype(float)
+
+# ОКЭД: как число он бессмыслен (порог «oked <= 46426» неинтерпретируем).
+# Берём двузначный раздел — это отраслевая группировка, и признак заполненности.
+if "oked" in df.columns:
+    ok = df["oked"].astype(str).str.strip().str.replace(r"\D", "", regex=True)
+    feat["eng_oked_razdel"] = ok.str[:2].replace("", np.nan)
+    feat["eng_oked_zapolnen"] = ok.ne("").astype(float)
+    print("ОКЭД: разделов %d, заполнен у %.1f%% строк"
+          % (feat["eng_oked_razdel"].nunique(), 100 * feat["eng_oked_zapolnen"].mean()))
 
 # --- контроль: инженерные признаки не должны оказаться пустыми молча -------
 ENG_CRITICAL = {
@@ -297,6 +393,24 @@ for c, why in ENG_CRITICAL.items():
 df = df[[c for c in df.columns if c not in set(CONFIG["pii_cols"]) | {bk}]]
 print("\nPII и ключ заёмщика удалены")
 
+# --- отбор признаков по методологической допустимости ----------------------
+feat_all = feat.copy()                       # сохраняем для режима explore
+if CONFIG["mode"] == "strict":
+    keep = [c for c in feat.columns if c in ALLOWED]
+    drop = [c for c in feat.columns if c not in ALLOWED]
+    print("\n--- режим strict: только критерии Таблицы 4 ---")
+    print("оставлено %d признаков:" % len(keep))
+    for c in keep:
+        mark = "  (нестабилен между годами)" if c in UNSTABLE else ""
+        print("   %-26s %s%s" % (c, ALLOWED[c], mark))
+    print("отброшено %d: %s" % (len(drop), sorted(drop)))
+    print("\nОтброшенные — это характеристики риска и техника учёта, а не"
+          "\nкритерии отнесения. Правило вида «ltv <> 47.5» описывает конкретную"
+          "\nкогорту этого года и на следующий цикл не переносится.")
+    feat = feat[keep]
+else:
+    print("\n--- режим explore: все признаки, для регламента НЕ применять ---")
+
 # %% [markdown]
 # ## 4. Кодирование
 #
@@ -304,33 +418,37 @@ print("\nPII и ключ заёмщика удалены")
 # а не как бессмысленное `ent_type <= 1.5`.
 
 # %%
-FEATURE_META = {}
-blocks = []
-for c in feat.columns:
-    s = feat[c]
-    if s.dtype.kind in "fiu":
-        col = s.astype(float)
-        if col.isna().any():
-            ind = col.isna().astype(np.int8).rename(c + "__пропуск")
-            blocks.append(ind)
-            FEATURE_META[ind.name] = (c, "пропуск")
-        blocks.append(col.fillna(-9.99e14).rename(c))
-        FEATURE_META[c] = (c, None)
-    else:
-        vc = s.value_counts(dropna=True)
-        vals = (list(vc.index[:CONFIG["onehot_top_n"]])
-                if len(vc) > CONFIG["onehot_max_card"] else list(vc.index))
-        for v in vals:
-            name = "%s == %s" % (c, v)
-            blocks.append((s == v).astype(np.int8).rename(name))
-            FEATURE_META[name] = (c, v)
-        if len(vc) > len(vals):
-            name = "%s == <прочее>" % c
-            blocks.append((~s.isin(vals) & s.notna()).astype(np.int8).rename(name))
-            FEATURE_META[name] = (c, "<прочее>")
+def encode(frame):
+    meta, blocks = {}, []
+    for c in frame.columns:
+        s = frame[c]
+        if s.dtype.kind in "fiu":
+            col = s.astype(float)
+            if col.isna().any():
+                ind = col.isna().astype(np.int8).rename(c + "__пропуск")
+                blocks.append(ind)
+                meta[ind.name] = (c, "пропуск")
+            blocks.append(col.fillna(-9.99e14).rename(c))
+            meta[c] = (c, None)
+        else:
+            vc = s.value_counts(dropna=True)
+            vals = (list(vc.index[:CONFIG["onehot_top_n"]])
+                    if len(vc) > CONFIG["onehot_max_card"] else list(vc.index))
+            for v in vals:
+                name = "%s == %s" % (c, v)
+                blocks.append((s == v).astype(np.int8).rename(name))
+                meta[name] = (c, v)
+            if len(vc) > len(vals):
+                name = "%s == <прочее>" % c
+                blocks.append((~s.isin(vals) & s.notna()).astype(np.int8)
+                              .rename(name))
+                meta[name] = (c, "<прочее>")
+    M = pd.concat(blocks, axis=1)
+    M = M.loc[:, ~M.columns.duplicated()]
+    return M, meta
 
-X = pd.concat(blocks, axis=1)
-X = X.loc[:, ~X.columns.duplicated()]
+
+X, FEATURE_META = encode(feat)
 print("матрица признаков:", X.shape)
 
 rare = y.value_counts()
@@ -361,6 +479,26 @@ print("точность на обучении :", round(clf.score(X_tr, y_tr), 5
 print("точность на контроле :", round(acc, 5))
 print("\nПо сегментам (контроль):")
 print(classification_report(y_te, clf.predict(X_te), zero_division=0, digits=4))
+
+# --- сколько стоит дисциплина: strict против explore -----------------------
+if CONFIG["compare_modes"] and CONFIG["mode"] == "strict":
+    Xa, _ = encode(feat_all)
+    Xa_tr, Xa_te = Xa.loc[X_tr.index], Xa.loc[X_te.index]
+    clf_a = DecisionTreeClassifier(
+        max_depth=CONFIG["max_depth"],
+        min_samples_leaf=CONFIG["min_samples_leaf"], class_weight="balanced",
+        random_state=CONFIG["random_state"]).fit(Xa_tr, y_tr)
+    acc_a = clf_a.score(Xa_te, y_te)
+    print("--- цена дисциплины ---")
+    print("strict  (только критерии Таблицы 4) : %.5f  признаков %d"
+          % (acc, X.shape[1]))
+    print("explore (все колонки)               : %.5f  признаков %d"
+          % (acc_a, Xa.shape[1]))
+    print("разница                             : %+.5f" % (acc - acc_a))
+    print("Если разница мала — переносимые правила почти ничего не теряют,")
+    print("и брать нужно strict. Если велика — эталон опирается на что-то,")
+    print("чего в критериях Таблицы 4 нет; это отдельная находка, а не повод")
+    print("переключаться на explore.")
 
 # %% [markdown]
 # ## 6. Значимые колонки и проверка на тавтологию
@@ -488,8 +626,14 @@ for seg, rules in rules_by_seg.items():
 branches.sort(key=lambda b: (PRIORITY.index(b[2]) if b[2] in PRIORITY else 99,
                              -b[0], -b[1]))
 
+unstable_used = sorted({c[1] for _, _, _, cs in branches for c in cs
+                        if c[1] in UNSTABLE})
 sql = [
     "-- Сегментация, восстановленная из эталона АФР деревом решений.",
+    "-- Режим отбора признаков: %s" % CONFIG["mode"],
+] + (["-- ВНИМАНИЕ: использованы признаки, непереносимые на следующий год:"] +
+     ["--   %-22s %s" % (c, UNSTABLE[c]) for c in unstable_used]
+     if unstable_used else ["-- Все использованные признаки переносимы между циклами."]) + [
     "-- ТРЕБУЕТ СВЕРКИ с Таблицей 4 Методруководства (GROUND_TRUTH_SEGMENTS.md)",
     "-- перед применением: дерево находит корреляцию, а не норму.",
     "--",
