@@ -25,9 +25,10 @@
 # %%
 CONFIG = {
     # --- файл ---
-    "path": "b1a.xlsx",
+    "path": "b1a_for_tree.csv",
     "sheet": 0,
     "sep": ";",
+    "usecols": None,                # None = все; список — если Colab не тянет память
     # --- две сегментации ---
     "target": "segment_afr",        # ЭТАЛОН: сегментация АФР
     "legacy": "segment_eub",        # ПРЕЖНЯЯ: как делил банк
@@ -39,7 +40,22 @@ CONFIG = {
     "pii_cols": ["name", "contract_number", "account_no"],
     "id_cols": ["n_o", "id", "loan_id", "loan_id_kr", "credit_line_id",
                 "ef_batches_int_id", "ef_contract_id", "creditor_no"],
-    "leak_cols": ["stage", "ead_n", "amount"],   # производные того же скрипта
+    # Утечка. Две группы, обе обязаны быть исключены:
+    #  1) производные того же скрипта сегментации;
+    #  2) РЕЗУЛЬТАТЫ AQR — они калиброваны ПО СЕГМЕНТУ, поэтому дерево
+    #     выучит «lgd = 0.695 -> CORLAR» и покажет фиктивную точность.
+    "leak_cols": [
+        "stage", "ead_n", "amount", "segment_nst_credit",
+        "lgd", "lgd_", "pd_c12", "pd_cl", "pd_ol",
+        "pd0_12m", "pd0_srok", "pd_12m", "pd_srok",
+        "provisions", "provisions_1000", "prov_rate", "nps_prov",
+        "privedennaya_st", "obezcenenia", "uvelich_kr_riska", "stadia_kr_riska",
+        "trebovania_k_def_zaimu", "vn_reiting", "kateg_vzveshivania",
+        "ccf", "ccf_rwa", "koef_konverciy",
+        "rwa_base_1", "rwa_base_2", "rwa_base_3", "rwa_group", "rwa_subgroup",
+        "rwa_group_off", "rwa_d1", "rwa_d2", "rwa_d3",
+        "rwa1", "rwa2", "rwa3", "rwa_total",
+    ],
     "borrower_key": "iin_bin",
     # --- модель ---
     "max_depth": 12,
@@ -109,22 +125,27 @@ pd.set_option("display.width", 220)
 pd.set_option("display.max_columns", 90)
 
 
-def read_any(path, sheet=0, sep=";"):
+def read_any(path, sheet=0, sep=";", usecols=None):
     low = str(path).lower()
     if low.endswith((".xlsx", ".xlsm", ".xls")):
-        return pd.read_excel(path, sheet_name=sheet, dtype=str)
+        return pd.read_excel(path, sheet_name=sheet, dtype=str, usecols=usecols)
     for enc in ("utf-8-sig", "utf-8", "cp1251"):
         try:
             return pd.read_csv(path, sep=sep, dtype=str, encoding=enc,
-                               low_memory=False)
+                               usecols=usecols, low_memory=False)
         except UnicodeDecodeError:
             continue
     raise RuntimeError("не удалось определить кодировку файла")
 
 
-df = read_any(CONFIG["path"], CONFIG["sheet"], CONFIG["sep"])
+df = read_any(CONFIG["path"], CONFIG["sheet"], CONFIG["sep"], CONFIG["usecols"])
 df.columns = [str(c).strip().lower() for c in df.columns]
 print("загружено:", df.shape[0], "строк,", df.shape[1], "колонок")
+print("память под таблицу: %.2f ГБ" % (df.memory_usage(deep=True).sum() / 2**30))
+
+dropped_leak = [c for c in CONFIG["leak_cols"] if c in df.columns]
+if dropped_leak:
+    print("исключены как утечка (%d): %s" % (len(dropped_leak), dropped_leak))
 
 TARGET, LEGACY = CONFIG["target"].lower(), CONFIG["legacy"].lower()
 assert TARGET in df.columns, "нет колонки эталона '%s'" % TARGET
