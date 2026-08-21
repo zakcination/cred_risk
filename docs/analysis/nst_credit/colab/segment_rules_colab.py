@@ -94,7 +94,9 @@ CONFIG = {
     "subsample_for_selection": 150_000,
     "selection_eps": 0.001,
     "selection_patience": 3,
-    "rule_depth": 4,                # глубина деревьев «сегмент против всех»
+    "rule_depth": 4,             # глубина деревьев «сегмент против всех»
+    "min_rule_purity": 0.80,     # ФАКТИЧЕСКАЯ доля сегмента в листе
+    "min_fill": 0.02,            # признак с заполненностью ниже — выбросить
 }
 
 STUBS = {"1111111111111", "9999999999999", "1111111111111.0", "9999999999999.0"}
@@ -241,7 +243,13 @@ has_legacy = LEGACY in df.columns
 if not has_legacy:
     print("ВНИМАНИЕ: колонки '%s' нет — разбор расхождений пропускается" % LEGACY)
 
+n_raw = len(df)
 df = df[df[TARGET].notna() & (df[TARGET].astype(str).str.strip() != "")]
+if n_raw - len(df):
+    print("!! отброшено %d строк без эталона (%.1f%% файла)."
+          % (n_raw - len(df), 100 * (n_raw - len(df)) / n_raw))
+    print("   Объяснить до того, как принимать правила: пустые строки Excel,")
+    print("   несопоставленные договоры или лишний блок в выгрузке — разные вещи.")
 y = df[TARGET].astype(str).str.strip()
 legacy = df[LEGACY].astype(str).str.strip() if has_legacy else None
 print("строк с известным эталоном:", len(df))
@@ -408,6 +416,18 @@ if CONFIG["mode"] == "strict":
           "\nкритерии отнесения. Правило вида «ltv <> 47.5» описывает конкретную"
           "\nкогорту этого года и на следующий цикл не переносится.")
     feat = feat[keep]
+
+# --- почти пустые признаки: условия по ним ничего не значат ----------------
+thin = [c for c in feat.columns
+        if feat[c].notna().mean() < CONFIG["min_fill"]]
+if thin:
+    print("\nвыброшены как почти пустые (заполнено < %.0f%%):"
+          % (100 * CONFIG["min_fill"]))
+    for c in thin:
+        print("   %-26s заполнен на %.2f%%" % (c, 100 * feat[c].notna().mean()))
+    print("   Условие по такому признаку истинно почти для всех строк"
+          "\n   и в правило попадает как шум.")
+    feat = feat.drop(columns=thin)
 else:
     print("\n--- режим explore: все признаки, для регламента НЕ применять ---")
 
@@ -524,13 +544,24 @@ outside = {c for c in used if not c.startswith("eng_")} - SCRIPT_COLS
 print("\n--- проверка на тавтологию ---")
 print("точность                       : %.5f" % acc)
 print("колонок вне веток скрипта      : %d %s" % (len(outside), sorted(outside)))
-if acc > 0.999 and not outside:
-    print("ВЫВОД: эталон воспроизводится нашими же колонками почти идеально.")
-    print("       Вероятно, это выход нашего скрипта, а не независимый ответ АФР.")
-    print("       Правила ниже подтверждают код, но не методику. Уточнить источник.")
+# Решающий признак — не точность, а состав значений эталона: наш скрипт выдаёт
+# DISASS / RELATE / Individual loans конечными значениями. Если их в эталоне нет,
+# он точно не является выходом нашего скрипта.
+ours_only = {"DISASS", "RELATE", "Individual loans", "CORINV", "CORGOV"}
+absent = sorted(ours_only - set(y.unique()))
+present_legacy = sorted(ours_only & set(legacy.unique())) if has_legacy else []
+print("сегменты нашего скрипта, которых НЕТ в эталоне: %s" % (absent or "нет"))
+if has_legacy:
+    print("из них присутствуют в прежней сегментации     : %s"
+          % (present_legacy or "нет"))
+if present_legacy and set(present_legacy) <= set(absent):
+    print("ВЫВОД: эталон НЕ является выходом нашего скрипта — он перераспределяет")
+    print("       сегменты, которые наш CASE оставляет конечными. Разбор осмыслен.")
+elif not outside:
+    print("ВЫВОД: эталон воспроизводится ТОЛЬКО нашими же колонками.")
+    print("       Возможна тавтология: уточнить, откуда взялся segment_afr.")
 else:
-    print("ВЫВОД: эталон отличается от простого пересказа нашего CASE —")
-    print("       есть колонки/пороги вне текущих веток. Разбор осмыслен.")
+    print("ВЫВОД: в решении участвуют колонки вне текущих веток — разбор осмыслен.")
 
 # %% [markdown]
 # ## 7. Правила эталона по каждому сегменту
@@ -554,8 +585,19 @@ def human(cond):
     return "%s %s '%s'" % (col, op, val)
 
 
-def tree_rules(model, feature_names, min_samples=1):
+def tree_rules(model, feature_names, Xr, y_bin, min_samples=1, min_purity=0.0):
+    """Правила из дерева с ФАКТИЧЕСКОЙ чистотой листа.
+
+    `tree_.value` при class_weight='balanced' хранит ВЗВЕШЕННЫЕ доли. Для
+    редкого сегмента вес доходит до 12 000 : 1, и лист, где 5 строк из 753
+    относятся к сегменту, показывает «чистоту 98,8 %» вместо настоящих 0,7 %.
+    Поэтому долю считаем по факту: раскладываем строки по листьям через
+    apply() и берём обычные доли.
+    """
     t, out = model.tree_, []
+    leaf_of = model.apply(Xr)
+    stat = (pd.DataFrame({"leaf": leaf_of, "y": np.asarray(y_bin)})
+            .groupby("leaf")["y"].agg(n="size", pos="sum"))
 
     def walk(node, conds):
         if t.feature[node] != -2:
@@ -563,14 +605,16 @@ def tree_rules(model, feature_names, min_samples=1):
             walk(t.children_left[node], conds + [decode(f, thr, True)])
             walk(t.children_right[node], conds + [decode(f, thr, False)])
             return
-        counts = t.value[node][0]
-        n, pred = int(t.n_node_samples[node]), int(np.argmax(counts))
-        purity = counts[pred] / counts.sum() if counts.sum() else 0.0
-        if pred == 1 and n >= min_samples:
-            out.append({"conds": conds, "строк": n, "чистота": round(purity, 4)})
+        if node not in stat.index:
+            return
+        n, pos = int(stat.at[node, "n"]), int(stat.at[node, "pos"])
+        purity = pos / n if n else 0.0
+        if pos >= min_samples and purity >= min_purity:
+            out.append({"conds": conds, "строк": n, "из них сегмент": pos,
+                        "чистота": round(purity, 4)})
 
     walk(0, [])
-    return sorted(out, key=lambda r: (-r["чистота"], -r["строк"]))
+    return sorted(out, key=lambda r: (-r["чистота"], -r["из них сегмент"]))
 
 
 rules_by_seg, report = {}, []
@@ -582,15 +626,21 @@ for seg in y.value_counts().index:
     m = DecisionTreeClassifier(max_depth=CONFIG["rule_depth"], min_samples_leaf=10,
                                class_weight="balanced",
                                random_state=CONFIG["random_state"]).fit(X, tgt)
-    rules = tree_rules(m, list(X.columns))
+    rules = tree_rules(m, list(X.columns), X, tgt,
+                       min_samples=10, min_purity=CONFIG["min_rule_purity"])
     rules_by_seg[seg] = rules
-    head = "### %s — в сегменте %d строк\n" % (seg, tgt.sum())
+    covered = sum(r["из них сегмент"] for r in rules)
+    head = ("### %s — в сегменте %d строк, правилами покрыто %d (%.1f%%)\n"
+            % (seg, tgt.sum(), covered, 100 * covered / max(tgt.sum(), 1)))
     body = ""
     for i, r in enumerate(rules[:6], 1):
-        body += "%d) ЕСЛИ %s\n   ТО %s   (строк %d, чистота %.1f%%)\n" % (
-            i, "\n      И ".join(human(c) for c in r["conds"]),
-            seg, r["строк"], 100 * r["чистота"])
-    report.append(head + (body or "правил не выделено\n"))
+        body += ("%d) ЕСЛИ %s\n   ТО %s   (строк в листе %d, из них %s — %d, "
+                 "чистота %.1f%%)\n" % (
+                     i, "\n      И ".join(human(c) for c in r["conds"]), seg,
+                     r["строк"], seg, r["из них сегмент"], 100 * r["чистота"]))
+    report.append(head + (body or
+                          "правил с чистотой >= %.0f%% не выделено\n"
+                          % (100 * CONFIG["min_rule_purity"])))
 
 print("\n\n".join(report))
 
@@ -616,12 +666,13 @@ def to_sql(cond):
     return "%s %s '%s'" % (col, "<>" if op == "!=" else "=", val)
 
 
-MIN_PURITY, MIN_ROWS = 0.90, 30
+MIN_PURITY, MIN_ROWS = CONFIG["min_rule_purity"], 10
 branches = []
 for seg, rules in rules_by_seg.items():
     for r in rules:
-        if r["чистота"] >= MIN_PURITY and r["строк"] >= MIN_ROWS:
-            branches.append((r["чистота"], r["строк"], seg, r["conds"]))
+        if r["чистота"] >= MIN_PURITY and r["из них сегмент"] >= MIN_ROWS:
+            branches.append((r["чистота"], r["из них сегмент"], seg,
+                             r["conds"]))
 # сначала по смысловому приоритету сегмента, внутри сегмента — по чистоте
 branches.sort(key=lambda b: (PRIORITY.index(b[2]) if b[2] in PRIORITY else 99,
                              -b[0], -b[1]))
@@ -649,8 +700,8 @@ sql = [
     "CASE"]
 for purity, n, seg, conds in branches:
     sql.append("  WHEN %s" % ("\n       AND ".join(to_sql(c) for c in conds)))
-    sql.append("       THEN '%s'   -- строк %d, чистота %.1f%%" %
-               (seg, n, 100 * purity))
+    sql.append("       THEN '%s'   -- сегмента в листе %d, чистота %.1f%%"
+               % (seg, n, 100 * purity))
 sql += ["  ELSE 'X'   -- доля X обязана предъявляться явно, а не молчать",
         "END AS segment_new"]
 sql_text = "\n".join(sql)
@@ -685,11 +736,13 @@ if has_legacy:
     mm = DecisionTreeClassifier(max_depth=CONFIG["rule_depth"], min_samples_leaf=20,
                                 class_weight="balanced",
                                 random_state=CONFIG["random_state"]).fit(X, mism)
-    for i, r in enumerate(tree_rules(mm, list(X.columns))[:8], 1):
-        print("%d) ЕСЛИ %s\n   -> прежние правила расходятся с эталоном"
-              "   (строк %d, доля ошибок %.1f%%)\n" %
+    for i, r in enumerate(tree_rules(mm, list(X.columns), X, mism,
+                                     min_samples=10,
+                                     min_purity=CONFIG["min_rule_purity"])[:8], 1):
+        print("%d) ЕСЛИ %s\n   -> расхождение с эталоном"
+              "   (строк %d, из них расходятся %d — %.1f%%)\n" %
               (i, "\n      И ".join(human(c) for c in r["conds"]),
-               r["строк"], 100 * r["чистота"]))
+               r["строк"], r["из них сегмент"], 100 * r["чистота"]))
 else:
     print("прежняя сегментация не подана")
 
@@ -713,13 +766,14 @@ if has_legacy:
                                     class_weight="balanced",
                                     random_state=CONFIG["random_state"]).fit(
             X[sub], tgt)
-        rr = tree_rules(mt, list(X.columns))
+        rr = tree_rules(mt, list(X.columns), X[sub], tgt,
+                        min_samples=5, min_purity=0.5)
         print("=== было '%s' -> эталон '%s'  (%d строк) ===" %
               (was, became, int(moves.loc[(was, became), "строк"])))
         for r in rr[:3]:
-            print("   ЕСЛИ %s   (строк %d, чистота %.1f%%)" %
+            print("   ЕСЛИ %s   (строк %d, из них перешли %d — %.1f%%)" %
                   ("\n        И ".join(human(c) for c in r["conds"]),
-                   r["строк"], 100 * r["чистота"]))
+                   r["строк"], r["из них сегмент"], 100 * r["чистота"]))
         print()
 
 # %% [markdown]
