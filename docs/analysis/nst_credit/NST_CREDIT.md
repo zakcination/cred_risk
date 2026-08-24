@@ -17,8 +17,9 @@
 | Обучающие материалы НСТ 2025 (84 стр.) | есть | разъяснения |
 | Методруководство и Инструкция **НСТ-2026** | **нет** | обязательны к сверке до подачи |
 | «Приложение 1. Соотнесение сегментации НСТ и статей 700-Н.xlsx» | **нет** | соответствие сегментов формам отчётности |
-| **`[CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]`** | есть | **сегменты, утверждённые АФР — настоящий эталон.** Колонки `LOAN_ID`, `LOAN_ID_KR`, `ID`, `CREDIT_LINE_ID`, `SEGMENT`. До 24.08.2026 не использовался |
-| `[personal_tables].[dbo].[RA_NST_segment_AQR2025]` | есть | **наша выгрузка, не эталон.** Совпадение с действующим скриптом 99,99 % — сверка с ней тавтологична |
+| **`[CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]`**, колонка `SEGMENT` | есть | **сегменты, утверждённые АФР — эталон.** Также `LOAN_ID`, `LOAN_ID_KR`, `ID`, `CREDIT_LINE_ID`. До 24.08.2026 не использовался |
+| `[personal_tables].[dbo].[RA_NST_segment_AQR2025]`, колонка `segment_afr` | есть | **сегментация банка ДО проверки АФР — заведомо ошибочная.** Имя колонки вводит в заблуждение: `segment_afr` означает «в формате АФР», а не «утверждено АФР» |
+| та же таблица, колонка `segment_eub` | есть | внутренняя сегментация банка. Соотношение с `segment_afr` не установлено (О16) |
 | Список инд. заёмщиков Sabila, 66 БИН | есть | **менять нельзя, принимается как данность** |
 
 ---
@@ -109,15 +110,25 @@
 
 ## 3. Что доказано на данных
 
-> ## ⚠ Раздел 3 измерен против неверной таблицы
+> ## ⚠ Раздел 3 измерен против ошибочной сегментации
 >
-> 24.08.2026 обнаружена таблица **`[CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]`**
-> — сегменты, **утверждённые АФР**. Колонки: `LOAN_ID`, `LOAN_ID_KR`, `ID`,
-> `CREDIT_LINE_ID`, `SEGMENT`.
+> 24.08.2026 установлено:
 >
-> Всё, что измерено в 3.0–3.3, сверялось с `[personal_tables].[dbo].[RA_NST_segment_AQR2025]`,
-> а это **наша собственная выгрузка**, а не эталон. Отсюда и совпадение 99,99 % —
-> скрипт сверялся сам с собой.
+> - **`[personal_tables].[dbo].[RA_NST_segment_AQR2025].segment_afr`** —
+>   сегментация **банка до проверки АФР**, то есть **заведомо ошибочная**.
+>   Имя колонки вводит в заблуждение: `_afr` здесь значит «в формате АФР»,
+>   а не «утверждено АФР».
+> - **`[CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR].SEGMENT`** —
+>   сегменты, **утверждённые АФР**. Это эталон.
+>
+> Всё в 3.0–3.3 сверялось с первой. Совпадение 99,99 % означает не то,
+> что скрипт верен, а то, что **скрипт добросовестно воспроизводит ошибки,
+> которые АФР нашёл и исправил**.
+>
+> Это переворачивает знак вывода. Раньше 99,99 % читалось как «слой 1
+> в порядке, трогать не нужно». Правильное чтение — «скрипт содержит
+> ровно тот набор дефектов, за который банк уже получил правки от регулятора,
+> и в цикле 2026 повторит их снова».
 >
 > **Что уцелело независимо от источника сегментации:**
 > - **3.4** (порог 200 млн не связывает) — это факт про EAD, сегмент не участвует;
@@ -125,7 +136,7 @@
 > - вывод, что `personal_tables.RA_NST_segment_AQR2025` — выход нашего скрипта:
 >   99,99 % это подтверждают прямо.
 >
-> **Что подлежит перемеру** (запросы Д5–Д6): 3.0, 3.1, 3.2, 3.2а, 3.3 —
+> **Что подлежит перемеру** (запросы Д5–Д7): 3.0, 3.1, 3.2, 3.2а, 3.3 —
 > то есть наличие `Individual loans` в эталоне, роль `collateral` в рознице,
 > согласие `ent_type` и целостность выгрузки. До перемера ни один из этих
 > выводов силы не имеет — **ни в прежней редакции, ни в отозванной**.
@@ -133,6 +144,19 @@
 > Возвращать отозванные Р1 и Р2 на основании того, что опровержение оказалось
 > негодным, тоже нельзя: негодное опровержение не делает утверждение верным.
 > Решения Р1, Р2 и Р3 переводятся в статус «не решено, ждёт Д6».
+>
+> **И главное — из этого следует, что делать дальше.** Разница между двумя
+> таблицами есть **готовый перечень правок АФР по циклу AQR-2025**: каждая
+> ячейка вне диагонали в шаге 3 запроса Д7 — дефект, который регулятор
+> поймал и исправил руками. Это самый ценный артефакт контура: он конечен,
+> перечислим и прямо говорит, что чинить в скрипте перед подачей 2026 года.
+> Строить правила «из Таблицы 4 и здравого смысла», имея на руках список
+> фактических претензий регулятора, — работа не с того конца.
+>
+> **Р6 отменяется.** «Слой 1 заморожен, правки принимаются только если
+> совпадение не падает» — при таком источнике это правило требует сохранять
+> ошибки. Верное правило обратное: расхождение с `_ot_AFR` должно снижаться,
+> а расхождение с `personal_tables` в тех же местах — расти.
 
 ### 3.0. Чем является `personal_tables.RA_NST_segment_AQR2025`
 
@@ -965,60 +989,75 @@ FROM (SELECT loan_id_kr
       GROUP BY loan_id_kr HAVING COUNT(*) > 1) t;
 ```
 
-Как читать:
+**Результат прогона 24.08.2026 — ключ чистый:**
 
-| Результат | Что делать |
+| Проверка | Значение |
 |---|---|
-| все нули | соединять по `LOAN_ID_KR`, шаг 2 как есть |
-| дубли есть, но с **одним** сегментом | схлопывание в шаге 2 корректно, идти дальше |
-| дубли с **разными** сегментами | `LOAN_ID_KR` не ключ. Разбираться, что различает строки — вероятно `CREDIT_LINE_ID`, то есть часть строк про кредитные линии (`B1B`), а не про займы |
-| `LOAN_ID_KR` пуст у части строк | для них ключ другой; соединять через `COALESCE(LOAN_ID_KR, CREDIT_LINE_ID)` |
+| АФР: ключей с дублями | **0** |
+| АФР: дубли с разным сегментом | **0** |
+| АФР: `LOAN_ID_KR` пуст | **0** |
+| наша выгрузка: ключей с дублями | **0** |
+
+`LOAN_ID_KR` — уникальный ключ с обеих сторон. Соединение 1:1, размножения
+строк не будет, схлопывание через `GROUP BY` не нужно, `COALESCE`
+с `CREDIT_LINE_ID` не нужен. Шаги 2–4 идут в прямой редакции.
 
 **Шаг 2. Соединение (read-only).**
 
-Схлопывание через `GROUP BY` — защита от размножения строк: даже если дубли
-проскочат, число строк нашей выгрузки не изменится.
-
 ```sql
-WITH afr AS (
-    SELECT LOAN_ID_KR
-         , MIN(SEGMENT) AS afr_segment_approved
-         , COUNT(DISTINCT SEGMENT) AS segment_variants   -- контроль: везде 1
-    FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
-    WHERE LOAN_ID_KR IS NOT NULL
-    GROUP BY LOAN_ID_KR
-)
 SELECT
       p.*
-    , a.afr_segment_approved
-    , a.segment_variants
+    , a.SEGMENT AS afr_segment_approved
     , CASE
-        WHEN a.afr_segment_approved IS NULL          THEN 'нет у АФР'
-        WHEN p.segment_afr = a.afr_segment_approved  THEN 'совпало'
-        ELSE                                              'расходится'
+        WHEN a.SEGMENT IS NULL             THEN 'нет у АФР'
+        WHEN p.segment_afr = a.SEGMENT     THEN 'совпало'
+        ELSE                                    'исправлено АФР'
       END AS match_status
-FROM      [personal_tables].[dbo].[RA_NST_segment_AQR2025] AS p
-LEFT JOIN afr AS a ON a.LOAN_ID_KR = p.loan_id_kr
+FROM      [personal_tables].[dbo].[RA_NST_segment_AQR2025]       AS p
+LEFT JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]   AS a
+       ON a.LOAN_ID_KR = p.loan_id_kr
 OPTION (MAXDOP 1);
 ```
 
-**Шаг 3. Сразу — сводка расхождений. Это и есть ответ.**
+**Шаг 3. Перечень правок АФР. Это главный результат контура.**
+
+Каждая ячейка вне диагонали — дефект, который регулятор поймал и исправил
+руками по итогам AQR-2025. Ровно это и надо чинить в скрипте перед подачей
+2026 года.
 
 ```sql
-WITH afr AS (
-    SELECT LOAN_ID_KR, MIN(SEGMENT) AS afr_segment_approved
-    FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
-    WHERE LOAN_ID_KR IS NOT NULL
-    GROUP BY LOAN_ID_KR
-)
 SELECT
-      p.segment_afr                AS nash_segment
-    , a.afr_segment_approved       AS afr_segment
-    , COUNT(*)                     AS contracts
-FROM      [personal_tables].[dbo].[RA_NST_segment_AQR2025] AS p
-LEFT JOIN afr AS a ON a.LOAN_ID_KR = p.loan_id_kr
-GROUP BY p.segment_afr, a.afr_segment_approved
-ORDER BY contracts DESC
+      p.segment_afr   AS bank_do_proverki
+    , a.SEGMENT       AS afr_utverdil
+    , COUNT(*)        AS contracts
+FROM      [personal_tables].[dbo].[RA_NST_segment_AQR2025]       AS p
+LEFT JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]   AS a
+       ON a.LOAN_ID_KR = p.loan_id_kr
+GROUP BY p.segment_afr, a.SEGMENT
+ORDER BY CASE WHEN p.segment_afr = a.SEGMENT THEN 1 ELSE 0 END, contracts DESC
+OPTION (MAXDOP 1);
+```
+
+Сортировка ставит расхождения наверх, совпадения вниз. Строки
+с `afr_utverdil = NULL` — договоры, которых у АФР нет вовсе; их разбирать
+отдельно, это вопрос периметра, а не правил.
+
+Полезно сразу и в разрезе EAD — чтобы понимать вес каждой правки:
+
+```sql
+SELECT
+      p.segment_afr   AS bank_do_proverki
+    , a.SEGMENT       AS afr_utverdil
+    , COUNT(*)        AS contracts
+    , ROUND(SUM(COALESCE(TRY_CAST(b.ead AS float), 0)) / 1000000000.0, 2) AS ead_bln
+FROM       [personal_tables].[dbo].[RA_NST_segment_AQR2025]      AS p
+LEFT JOIN  [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]  AS a
+       ON  a.LOAN_ID_KR = p.loan_id_kr
+LEFT JOIN  [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]            AS b
+       ON  b.loan_id_kr = p.loan_id_kr AND b.is_del = '0'
+WHERE COALESCE(a.SEGMENT, '~') <> COALESCE(p.segment_afr, '~')
+GROUP BY p.segment_afr, a.SEGMENT
+ORDER BY ead_bln DESC
 OPTION (MAXDOP 1);
 ```
 
@@ -1040,12 +1079,9 @@ IF COL_LENGTH('[personal_tables].[dbo].[RA_NST_segment_AQR2025]',
 GO
 
 UPDATE p
-SET    p.afr_segment_approved = a.afr_segment_approved
-FROM   [personal_tables].[dbo].[RA_NST_segment_AQR2025] AS p
-JOIN  (SELECT LOAN_ID_KR, MIN(SEGMENT) AS afr_segment_approved
-       FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
-       WHERE LOAN_ID_KR IS NOT NULL
-       GROUP BY LOAN_ID_KR) AS a
+SET    p.afr_segment_approved = a.SEGMENT
+FROM   [personal_tables].[dbo].[RA_NST_segment_AQR2025]      AS p
+JOIN   [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]  AS a
   ON   a.LOAN_ID_KR = p.loan_id_kr;
 
 -- Контроль: сколько строк осталось без сегмента АФР
@@ -1056,6 +1092,11 @@ FROM [personal_tables].[dbo].[RA_NST_segment_AQR2025];
 
 `JOIN`, а не `LEFT JOIN`: несопоставленные строки остаются `NULL`, и их
 видно контрольным запросом, вместо того чтобы затирать уже проставленное.
+
+**Колонку `segment_afr` при этом не переименовывать.** Имя неудачное —
+оно и запутало разбор на три дня, — но на неё ссылаются
+`_archive/`-скрипты и выгрузка для дерева. Правильное действие: оставить
+как есть, а смысл зафиксировать в разделе 1 этого документа.
 
 После шага 4 запрос Д6 можно упростить — соединяться с одной таблицей
 и брать `afr_segment_approved` напрямую.
