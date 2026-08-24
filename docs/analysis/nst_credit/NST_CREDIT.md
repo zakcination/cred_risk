@@ -199,31 +199,59 @@
 
 ## 6. Шесть типов расхождений с эталоном
 
-| Тип | Причина | Исправимо скриптом | EAD 2025 Q4 |
+| Тип | Причина | EAD 2025 Q4 | Решение |
 |---|---|---|---|
-| **A** | флаг (`Individual loans` / `RELATE` / `DISASS`) выдан вместо продуктового сегмента | да | 31,22 % + 2,03 % |
-| **B** | розница делится по `collateral` / `portfolio`, а эталон — по `loan_obj` | да, но нужен ответ по О1 | до 62,4 % переклассифицируется |
-| **C** | `ent_type` не согласуется с эталоном на 28–43 % | **нет**, нужны внешние данные | 4,59 % |
-| **D** | фильтр `loan_purp IN (1,2,3,4,5,8)` пропускает 99,5 % и ничего не отсекает | да | ~0,01 % |
-| **E** | порог EAD 200 млн — источник в Таблице 5 (ЧПД), не в Таблице 4 | нужен ответ по О5 | измеряется |
-| **F** | 317 415 строк выгрузки без эталона, недостаёт 1 467 договоров против B1A | нет, вопрос к выгрузке | — |
+| **A** | флаг (`Individual loans` / `RELATE` / `DISASS`) выдан вместо продуктового сегмента | 31,22 % + 2,03 % | Р1 — флаги отдельными колонками |
+| **B** | розница делится по `collateral` / `portfolio`, а эталон — по `loan_obj` | до 62,4 % переклассифицируется | Р2 — `loan_obj` |
+| **C** | `ent_type` не согласуется с эталоном на 28–43 % | 4,59 % | Р3 — оставить как есть, писать в записку |
+| **D** | фильтр `loan_purp IN (1,2,3,4,5,8)` пропускает 99,5 % и ничего не отсекает | ~0,01 % | снят |
+| **E** | порог EAD 200 млн — источник в Таблице 5 (ЧПД), не в Таблице 4 | измеряется | Р4 — смотрим по эталону, запрос Д1 |
+| **F** | 317 415 строк выгрузки без эталона, недостаёт 1 467 договоров против B1A | — | считается на SQL, запрос Д3 |
+
+---
+
+## 6а. Принятые решения
+
+**Р1. `Individual loans`, `RELATE`, `DISASS` — колонки-флаги, не значения сегмента.**
+Основание: Таблица 3 («распределены по другим портфелям») и отсутствие этих
+значений в эталоне АФР. Сегмент всегда продуктовый. Флаги сохраняются рядом —
+они нужны для ЧПД, где Таблица 3 требует их анализировать.
+
+**Р2. Розница делится по `loan_obj` — рабочая версия.** Основание: эталон АФР
+воспроизводится на 99–100 %. Таблица 4 критерия не даёт, форма (`PORTF`)
+не получена, поэтому эквивалентность «`loan_obj = 1` ≈ обеспеченные жилой
+недвижимостью» вносится в пояснительную записку как допущение **Г2**.
+Приложение 1 запрашивается параллельно; при его получении правило сверяется.
+
+**Р3. `ent_type` остаётся как есть.** Ни снимка РСП, ни годового дохода,
+ни численности работников у нас нет — проверить статьёй 24 нечем.
+Корпоративная часть считается с известной ошибкой 25–43 % и этот факт идёт
+в пояснительную записку явным пунктом, а не умалчивается.
+
+**Р4. Порог 200 млн решается эталоном, а не документом.** Запрос Д1 показывает,
+куда эталон АФР 2024 Q4 отнёс займы ФЛ свыше 200 млн. Как поступил эталон —
+так поступаем и мы. До прогона порог в правилах не участвует, но признак
+`flag_retail_over_200m` считается всегда.
+
+**Р5. Список Сайлау (66 БИН) неприкосновенен.** 46 ненайденных БИН ищутся
+в других кварталах `AQR2026` и в `B1B` (запрос Д2). Список не сокращается.
 
 ---
 
 ## 7. Открытые вопросы
 
-| № | Вопрос | Кому | Блокирует |
+| № | Вопрос | Кому | Статус |
 |---|---|---|---|
-| **О1** | Какая форма задаёт розничное деление — `PORTF`? Запросить «Приложение 1. Соотнесение сегментации НСТ и статей 700-Н.xlsx» | АФР / БРМ | тип B, 62 % EAD |
-| **О2** | Происхождение `ent_type`: формируется ли по ст. 24 ПК РК; нужен снимок РСП либо численность работников и годовой доход | владелец витрины | тип C, 4,59 % EAD |
-| **О3** | Правило простановки `f_inv` и почему `CORINV` пуст на 731 159 договорах | источник данных | сегмент `CORINV` |
-| **О4** | Справочник БИН госкорпораций: 3 холдинга + 2 уровня дочерности, госучастие > 50 % | БРМ | сегмент `CORGOV` |
-| **О5** | Сегмент «Крупные займы ФЛ (более 200 млн)» есть в Таблице 5 (ЧПД). Применяется ли порог 200 млн в кредитном риске | АФР / БРМ | тип E |
-| **О6** | Основание списка B2A как второго критерия индивидуальности — в Таблице 4 такого нет | БРМ / Сайлау | обоснование в записке |
-| **О7** | МРП на 01.01.2026 по закону о бюджете на 2026 год | открытый источник | пороги ст. 24 |
-| **О8** | Признак господдержки по перечню параграфа 242 | БРМ | контур ЧПД |
-| **О9** | 46 из 66 БИН списка Сайлау не найдены в `AQR2026_B1A_2025_Q4`. Причина: другой период, B1B, `is_del`, иная таблица | Сайлау / данные | валидация индивидуальных |
-| **О10** | Методруководство и Инструкция НСТ-2026: изменилась ли Таблица 4 | АФР | всё |
+| **О1** | Запросить «Приложение 1. Соотнесение сегментации НСТ и статей 700-Н.xlsx» — оно закрывает розничные критерии напрямую | АФР / БРМ | открыт, **не блокирует**: работаем по Р2 |
+| **О2** | Снимок РСП либо численность работников и годовой доход заёмщика | владелец витрины | **закрыт отрицательно** — данных нет, принято Р3 |
+| **О3** | Правило простановки `f_inv` и почему `CORINV` пуст на 731 159 договорах | источник данных | открыт, блокирует `CORINV` |
+| **О4** | Справочник БИН госкорпораций: 3 холдинга + 2 уровня дочерности, госучастие > 50 % | БРМ | открыт, блокирует `CORGOV` |
+| **О5** | Применяется ли порог 200 млн в кредитном риске | эталон 2024 Q4 | **решается запросом Д1** |
+| **О6** | Основание списка B2A как второго критерия индивидуальности — в Таблице 4 такого нет | БРМ / Сайлау | открыт, нужен для записки |
+| **О7** | МРП на 01.01.2026 по закону о бюджете на 2026 год | открытый источник | открыт |
+| **О8** | Признак господдержки по перечню параграфа 242 | БРМ | открыт, контур ЧПД |
+| **О9** | 46 из 66 БИН списка Сайлау не найдены в `AQR2026_B1A_2025_Q4` | данные | **решается запросом Д2** |
+| **О10** | Методруководство и Инструкция НСТ-2026: изменилась ли Таблица 4 | АФР | открыт, сверка до подачи |
 
 ---
 
@@ -250,13 +278,296 @@
 
 ---
 
-## 10. Порядок работ
+## 10. Запросы
 
-1. Запросить Приложение 1 и методруководство НСТ-2026 (О1, О10) — до этого
-   правки розницы не вносить.
-2. Запросить снимок РСП / численность и доход (О2).
-3. Прогнать матрицу ошибок на 2024 Q4 против эталона — измерить фактические
-   доли согласия по каждому типу.
-4. По результатам зафиксировать правила и пересчитать 2025 Q4.
-5. Сверить результат со списком Сайлау — список принимается неизменным,
-   расхождения объясняются на нашей стороне.
+Правило Н15: `TRY_CAST` по каждой колонке отдельно. Правило Н13: калибровка
+только на 2024 Q4.
+
+### Д0. Какие таблицы AQR вообще есть
+
+Нужен до Д2 — имена квартальных таблиц не проверены, они предполагались.
+
+```sql
+SELECT TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME
+FROM [CL_PORTFOLIO].INFORMATION_SCHEMA.TABLES
+WHERE TABLE_NAME LIKE 'AQR%'
+ORDER BY TABLE_NAME;
+```
+
+### Д1. Куда эталон отнёс займы ФЛ свыше 200 млн — решает О5
+
+```sql
+SELECT
+      CASE WHEN COALESCE(TRY_CAST(b.ead AS float), 0) > 200000000
+           THEN 'свыше 200 млн' ELSE 'до 200 млн' END        AS bucket
+    , s.segment_afr
+    , COUNT(*)                                                AS contracts
+    , ROUND(SUM(COALESCE(TRY_CAST(b.ead AS float), 0)) / 1000000.0, 1) AS ead_mln
+FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]         AS b
+LEFT JOIN  [personal_tables].[dbo].[RA_NST_segment_AQR2025]   AS s
+       ON  s.loan_id_kr = b.loan_id_kr
+WHERE b.is_del = '0'
+  AND COALESCE(TRY_CAST(b.debtor_type AS int), 0) = 0
+  AND COALESCE(TRY_CAST(b.debtor_se   AS int), 0) = 0
+  AND s.segment_afr IS NOT NULL
+GROUP BY CASE WHEN COALESCE(TRY_CAST(b.ead AS float), 0) > 200000000
+              THEN 'свыше 200 млн' ELSE 'до 200 млн' END, s.segment_afr
+ORDER BY bucket, contracts DESC
+OPTION (MAXDOP 1);
+```
+
+**Как читать.** Если в бакете «свыше 200 млн» эталон даёт те же
+`RETEST`/`RETCAR`/`RETCON`, что и до порога, — порог в кредитном риске
+не применяется, он только для ЧПД. Если появляется отдельное значение либо
+займы уходят в корпоративные сегменты — порог применяется, и правило надо
+воспроизвести.
+
+### Д2. Где лежат 46 ненайденных БИН — решает О9
+
+БИН не выписываются, соединение идёт по таблице списка (правило
+конфиденциальности контура).
+
+```sql
+-- Подставить реальные имена таблиц из Д0.
+WITH src AS (
+    SELECT 'B1A 2025 Q4' AS tab, iin_bin, is_del,
+           COALESCE(TRY_CAST(ead AS float), 0) AS ead_n
+    FROM [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4]
+    UNION ALL
+    SELECT 'B1B 2025 Q4', iin_bin, is_del,
+           COALESCE(TRY_CAST(ead AS float), 0)
+    FROM [CL_PORTFOLIO].[dbo].[AQR2026_B1B_2025_Q4]
+)
+SELECT
+      src.tab
+    , src.is_del
+    , COUNT(DISTINCT a.bin)                       AS bins_found
+    , COUNT(*)                                    AS contracts
+    , ROUND(SUM(src.ead_n) / 1000000000.0, 2)     AS ead_bln
+FROM      [personal_tables].[dbo].[RA_NST_B2A_2026_04012026] AS a
+LEFT JOIN src ON src.iin_bin = a.bin
+GROUP BY src.tab, src.is_del
+ORDER BY src.tab, src.is_del
+OPTION (MAXDOP 1);
+```
+
+**Как читать.** Строка с `tab IS NULL` — БИН, которых нет нигде. Строка
+с `is_del = '1'` — есть, но отфильтрованы как удалённые. Если сумма найденных
+по всем источникам даёт 66 — вопрос закрыт, дело было в периметре выгрузки.
+
+### Д3. Матрица ошибок и целостность — калибровка на 2024 Q4
+
+```sql
+SET NOCOUNT ON;
+DECLARE @capital float = 461235157000;   -- СК на 01.01.2025, период эталона
+DECLARE @thr_ind float = 0.002;
+
+IF OBJECT_ID('tempdb..#nst_conf') IS NOT NULL DROP TABLE #nst_conf;
+
+WITH nst_base AS (
+    SELECT
+          b.loan_id_kr, b.iin_bin, b.entity, b.lsboo, b.portfolio
+        , TRY_CAST(b.f_inv       AS int) AS f_inv_n
+        , TRY_CAST(b.debtor_type AS int) AS debtor_type_n
+        , TRY_CAST(b.debtor_se   AS int) AS debtor_se_n
+        , TRY_CAST(b.ent_type    AS int) AS ent_type_n
+        , TRY_CAST(b.loan_obj    AS int) AS loan_obj_n
+        , TRY_CAST(b.collateral  AS int) AS collateral_n
+        , COALESCE(TRY_CAST(b.ead AS float), 0) AS ead_n
+        , COALESCE(TRY_CAST(b.od           AS float), 0)
+        + COALESCE(TRY_CAST(b.od_del       AS float), 0)
+        + COALESCE(TRY_CAST(b.interest     AS float), 0)
+        + COALESCE(TRY_CAST(b.interest_del AS float), 0)
+        + COALESCE(TRY_CAST(b.correction   AS float), 0)
+        + COALESCE(TRY_CAST(b.disc_prem    AS float), 0)
+        + COALESCE(TRY_CAST(b.penalty      AS float), 0) AS zadol
+        , s.segment_afr AS afr
+        , CASE WHEN a.bin IS NOT NULL THEN 1 ELSE 0 END AS in_b2a
+    FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]            AS b
+    LEFT JOIN  [personal_tables].[dbo].[RA_NST_segment_AQR2025]      AS s
+           ON  s.loan_id_kr = b.loan_id_kr
+    LEFT JOIN  [personal_tables].[dbo].[RA_NST_B2A_AQR2025_11082025] AS a
+           ON  a.bin = b.iin_bin
+    WHERE b.is_del = '0'
+),
+nst_agg AS (
+    SELECT *, SUM(zadol) OVER (PARTITION BY iin_bin) AS zadol_borrower
+    FROM nst_base
+)
+SELECT *
+    -- действующие правила: залог и метка продукта
+    , CASE
+        WHEN entity = 'EUB1'                      THEN 'DISASS'
+        WHEN lsboo  = 1                           THEN 'RELATE'
+        WHEN COALESCE(f_inv_n, 0) = 1             THEN 'CORINV'
+        WHEN in_b2a = 1
+          OR zadol_borrower > @capital * @thr_ind THEN 'Individual loans'
+        WHEN ent_type_n = 1                       THEN 'CORLAR'
+        WHEN ent_type_n = 2                       THEN 'CORMED'
+        WHEN ent_type_n = 3                       THEN 'RETSML'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND COALESCE(collateral_n,0) = 1 AND portfolio = 'Mortgage'
+                                                  THEN 'RETEST'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND COALESCE(collateral_n,0) = 1     THEN 'RETCAR'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+                                                  THEN 'RETCON'
+        ELSE 'X'
+      END AS cur
+    -- предлагаемые правила: Р1 + Р2
+    , CASE
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+          THEN CASE loan_obj_n WHEN 1 THEN 'RETEST'
+                               WHEN 6 THEN 'RETCAR'
+                               ELSE        'RETCON' END
+        WHEN loan_obj_n IN (1,2,3)                THEN 'COREST'
+        WHEN ent_type_n = 1                       THEN 'CORLAR'
+        WHEN ent_type_n = 2                       THEN 'CORMED'
+        WHEN ent_type_n = 3                       THEN 'RETSML'
+        ELSE 'X'
+      END AS fix
+INTO #nst_conf
+FROM nst_agg
+OPTION (MAXDOP 1);
+
+-- 1. Точность и целостность (закрывает тип F на SQL, без Excel)
+SELECT COUNT(*) AS rows_b1a
+     , SUM(CASE WHEN afr IS NULL THEN 1 ELSE 0 END) AS no_ground_truth
+     , ROUND(100.0*SUM(CASE WHEN afr IS NOT NULL AND cur = afr THEN 1 ELSE 0 END)
+             / NULLIF(SUM(CASE WHEN afr IS NOT NULL THEN 1 ELSE 0 END),0), 2) AS cur_acc_pct
+     , ROUND(100.0*SUM(CASE WHEN afr IS NOT NULL AND fix = afr THEN 1 ELSE 0 END)
+             / NULLIF(SUM(CASE WHEN afr IS NOT NULL THEN 1 ELSE 0 END),0), 2) AS fix_acc_pct
+FROM #nst_conf;
+
+-- 2. Таксономия расхождений действующих правил
+SELECT err_type, COUNT(*) AS contracts
+     , ROUND(SUM(ead_n)/1000000000.0, 2) AS ead_bln
+FROM (
+  SELECT ead_n, CASE
+    WHEN afr IS NULL                                  THEN 'F. без эталона'
+    WHEN cur = afr                                    THEN 'OK'
+    WHEN cur IN ('DISASS','RELATE','CORINV','Individual loans')
+                                                      THEN 'A. флаг вместо продукта'
+    WHEN cur IN ('RETEST','RETCAR','RETCON')
+     AND afr IN ('RETEST','RETCAR','RETCON')          THEN 'B. критерий розницы'
+    WHEN cur IN ('CORLAR','CORMED','RETSML','COREST')
+     AND afr IN ('CORLAR','CORMED','RETSML','COREST') THEN 'C. размер бизнеса'
+    WHEN cur = 'X'                                    THEN 'E. не классифицирован'
+    ELSE                                                   'D. розница ↔ бизнес'
+  END AS err_type FROM #nst_conf
+) t
+GROUP BY err_type ORDER BY ead_bln DESC;
+
+-- 3. Подтверждение Р2 независимо от дерева:
+--    эталон постоянен по loan_obj и «плавает» по collateral
+SELECT loan_obj_n, COALESCE(collateral_n,-1) AS collateral_n, afr
+     , COUNT(*) AS contracts
+FROM #nst_conf
+WHERE COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+  AND afr IS NOT NULL
+GROUP BY loan_obj_n, COALESCE(collateral_n,-1), afr
+HAVING COUNT(*) >= 10
+ORDER BY loan_obj_n, collateral_n, contracts DESC;
+
+-- 4. Фактические доли согласия ent_type — цифра для пояснительной записки (Р3)
+SELECT ent_type_n, afr, COUNT(*) AS contracts
+     , ROUND(100.0*COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY ent_type_n), 1) AS pct
+FROM #nst_conf WHERE afr IS NOT NULL
+GROUP BY ent_type_n, afr ORDER BY ent_type_n, contracts DESC;
+
+DROP TABLE #nst_conf;
+```
+
+### С1. Сегментация 2025 Q4 — итоговый скрипт
+
+Запускается **после** Д1 и Д3. Порог 200 млн в правилах не участвует
+(решение Р4 до прогона Д1), но считается признаком.
+
+```sql
+SET NOCOUNT ON;
+DECLARE @capital float = 503086114000;   -- СК на 01.01.2026
+DECLARE @thr_ind float = 0.002;
+
+WITH b1a AS (
+    SELECT n.*
+        , COALESCE(TRY_CAST(n.ead AS float), 0) AS ead_n
+        -- задолженность по п. 44: без пеней и корректировки
+        , COALESCE(TRY_CAST(n.od           AS float), 0)
+        + COALESCE(TRY_CAST(n.od_del       AS float), 0)
+        + COALESCE(TRY_CAST(n.interest     AS float), 0)
+        + COALESCE(TRY_CAST(n.interest_del AS float), 0)
+        + COALESCE(TRY_CAST(n.disc_prem    AS float), 0) AS amount
+        -- база порога 0,2 %: как считает действующий расчёт AQR
+        , COALESCE(TRY_CAST(n.od           AS float), 0)
+        + COALESCE(TRY_CAST(n.od_del       AS float), 0)
+        + COALESCE(TRY_CAST(n.interest     AS float), 0)
+        + COALESCE(TRY_CAST(n.interest_del AS float), 0)
+        + COALESCE(TRY_CAST(n.correction   AS float), 0)
+        + COALESCE(TRY_CAST(n.disc_prem    AS float), 0)
+        + COALESCE(TRY_CAST(n.penalty      AS float), 0) AS zadol
+        , TRY_CAST(n.debtor_type AS int) AS debtor_type_n
+        , TRY_CAST(n.debtor_se   AS int) AS debtor_se_n
+        , TRY_CAST(n.ent_type    AS int) AS ent_type_n
+        , TRY_CAST(n.loan_obj    AS int) AS loan_obj_n
+        , TRY_CAST(n.f_inv       AS int) AS f_inv_n
+        , CASE WHEN a.bin IS NOT NULL THEN 1 ELSE 0 END AS in_b2a
+    FROM       [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4]         AS n
+    LEFT JOIN  [personal_tables].[dbo].[RA_NST_B2A_2026_04012026] AS a
+           ON  a.bin = n.iin_bin
+    WHERE n.is_del = '0'
+),
+b1a_agg AS (
+    SELECT *, SUM(zadol) OVER (PARTITION BY iin_bin) AS zadol_borrower FROM b1a
+)
+SELECT *
+    , CASE WHEN stage_b = '4'             THEN '3'
+           WHEN stage_b = '1111111111111' THEN '1'
+           ELSE stage_b END AS stage
+
+    -- продуктовый сегмент: единственное значение сегмента (Р1, Р2)
+    , CASE
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+          THEN CASE loan_obj_n WHEN 1 THEN 'RETEST'   -- жилая недвижимость
+                               WHEN 6 THEN 'RETCAR'   -- автотранспорт
+                               ELSE        'RETCON' END
+        WHEN loan_obj_n IN (1,2,3)  THEN 'COREST'     -- недвижимость выше размера
+        WHEN ent_type_n = 1         THEN 'CORLAR'     -- Р3: ошибка 25-43 %
+        WHEN ent_type_n = 2         THEN 'CORMED'
+        WHEN ent_type_n = 3         THEN 'RETSML'
+        ELSE 'X'
+      END AS segment_afr
+
+    -- флаги: сосуществуют с сегментом, не заменяют его (Таблица 3)
+    , CASE WHEN entity = 'EUB1'          THEN 1 ELSE 0 END AS flag_disass
+    , CASE WHEN lsboo  = 1               THEN 1 ELSE 0 END AS flag_relate
+    , CASE WHEN COALESCE(f_inv_n,0) = 1  THEN 1 ELSE 0 END AS flag_corinv
+    , CASE WHEN in_b2a = 1
+             OR zadol_borrower > @capital * @thr_ind THEN 1 ELSE 0 END AS flag_individual
+    , CASE WHEN in_b2a = 1                           THEN 'B2A'
+           WHEN zadol_borrower > @capital * @thr_ind THEN 'threshold'
+           ELSE NULL END                                   AS individual_basis
+    -- признак для ЧПД: сегмент Таблицы 5 «Крупные займы ФЛ (более 200 млн)»
+    , CASE WHEN COALESCE(debtor_type_n,0) = 0 AND ead_n > 200000000
+           THEN 1 ELSE 0 END                               AS flag_retail_over_200m
+FROM b1a_agg
+OPTION (MAXDOP 1);
+```
+
+Для `B1B` тот же блок с двумя отличиями: таблица
+`[CL_PORTFOLIO].[dbo].[AQR2026_B1B_2025_Q4]`, а `amount` и `zadol` считаются
+как `correction + penalty + disc_prem` (переводные — это изменения,
+а не амортизированная стоимость).
+
+---
+
+## 11. Порядок работ
+
+1. Прогнать **Д0** — подтвердить имена таблиц.
+2. Прогнать **Д1** — закрыть О5 (порог 200 млн).
+3. Прогнать **Д2** — закрыть О9 (46 БИН).
+4. Прогнать **Д3** — измерить фактические доли по каждому типу расхождений
+   и зафиксировать цифру согласия `ent_type` для пояснительной записки.
+5. Если `fix_acc_pct` в Д3 не выше `cur_acc_pct` — решения Р1/Р2 неверны,
+   разбирать по таксономии, скрипт С1 не запускать.
+6. Прогнать **С1**, сравнить распределение с разделом 4.
+7. Параллельно и независимо от прогонов: запросить О1, О3, О4, О6, О7, О8, О10.
