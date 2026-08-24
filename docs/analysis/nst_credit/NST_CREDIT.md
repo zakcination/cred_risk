@@ -1223,6 +1223,158 @@ DROP TABLE #nst_afr;
 Запрос **Д4 отменён** — его содержимое вошло в 6.5, и мерить ИП против нашей
 же выгрузки смысла не имело.
 
+### В1. Валидация новых правил на 2024 Q4 — решающий прогон
+
+Те же правила, что в С1, но на периоде, где есть эталон. Прогоняется **до** С1.
+Одним запросом считаются старые и новые правила рядом.
+
+**Прогноз, зафиксированный до прогона.** Если Г7 верна, из 2 237 расхождений
+закрываются: `Individual loans` 1 489, `RELATE` 297, `DISASS` 7, `RETEST` 48 —
+итого **1 841**. Останется около **396**, преимущественно дрейф `ent_type`
+(347) и мелочь. Ожидаемая точность **≈ 99,95 %** против нынешних 99,69 %.
+
+Если прогон даст заметно меньше — Г7 неверна, и снятие веток недостаточно.
+Если больше — часть дрейфа `ent_type` тоже была следствием перехвата.
+
+```sql
+SET NOCOUNT ON;
+DECLARE @capital float = 461235157000;   -- СК на 01.01.2025
+DECLARE @thr_ind float = 0.002;
+
+IF OBJECT_ID('tempdb..#nst_v1') IS NOT NULL DROP TABLE #nst_v1;
+
+WITH v1_base AS (
+    SELECT
+          b.loan_id_kr, b.iin_bin, b.entity, b.lsboo, b.portfolio
+        , TRY_CAST(b.f_inv       AS int) AS f_inv_n
+        , TRY_CAST(b.debtor_type AS int) AS debtor_type_n
+        , TRY_CAST(b.debtor_se   AS int) AS debtor_se_n
+        , TRY_CAST(b.ent_type    AS int) AS ent_type_n
+        , TRY_CAST(b.loan_obj    AS int) AS loan_obj_n
+        , TRY_CAST(b.loan_purp   AS int) AS loan_purp_n
+        , TRY_CAST(b.collateral  AS int) AS collateral_n
+        , COALESCE(TRY_CAST(b.ead AS float), 0) AS ead_n
+        , COALESCE(TRY_CAST(b.od           AS float), 0)
+        + COALESCE(TRY_CAST(b.od_del       AS float), 0)
+        + COALESCE(TRY_CAST(b.interest     AS float), 0)
+        + COALESCE(TRY_CAST(b.interest_del AS float), 0)
+        + COALESCE(TRY_CAST(b.correction   AS float), 0)
+        + COALESCE(TRY_CAST(b.disc_prem    AS float), 0)
+        + COALESCE(TRY_CAST(b.penalty      AS float), 0) AS zadol
+        , s.SEGMENT AS afr
+        , CASE WHEN a.bin IS NOT NULL THEN 1 ELSE 0 END AS in_b2a
+    FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]            AS b
+    INNER JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]  AS s
+           ON  s.LOAN_ID_KR = b.loan_id_kr
+    LEFT JOIN  [personal_tables].[dbo].[RA_NST_B2A_AQR2025_11082025] AS a
+           ON  a.bin = b.iin_bin
+    WHERE b.is_del = '0'
+),
+v1_agg AS (
+    SELECT *, SUM(zadol) OVER (PARTITION BY iin_bin) AS zadol_borrower
+    FROM v1_base
+)
+SELECT *
+    /* ---- СТАРЫЕ правила: с ветками флагов и portfolio ---------------- */
+    , CASE
+        WHEN entity = 'EUB1'                       THEN 'DISASS'
+        WHEN lsboo  = 1                            THEN 'RELATE'
+        WHEN COALESCE(f_inv_n, 0) = 1              THEN 'CORINV'
+        WHEN in_b2a = 1                            THEN 'Individual loans'
+        WHEN zadol_borrower >= @capital * @thr_ind THEN 'Individual loans'
+        WHEN (debtor_type_n = 1 OR (debtor_type_n = 0 AND debtor_se_n = 1))
+             AND ent_type_n  IN (1,2,3)
+             AND loan_obj_n  IN (1,2,3)
+             AND loan_purp_n IN (1,2,3,4,5,8)      THEN 'COREST'
+        WHEN ent_type_n = 1                        THEN 'CORLAR'
+        WHEN ent_type_n = 2                        THEN 'CORMED'
+        WHEN ent_type_n = 3                        THEN 'RETSML'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND ead_n <= 200000000
+             AND portfolio IN ('Mortgage')         THEN 'RETEST'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND ead_n <= 200000000
+             AND COALESCE(collateral_n,0) = 1      THEN 'RETCAR'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND ead_n <= 200000000                THEN 'RETCON'
+        ELSE 'X'
+      END AS seg_old
+
+    /* ---- НОВЫЕ правила: без веток флагов, розница по loan_obj -------- */
+    , CASE
+        WHEN (debtor_type_n = 1 OR (debtor_type_n = 0 AND debtor_se_n = 1))
+             AND ent_type_n IN (1,2,3)
+             AND loan_obj_n IN (1,2,3,11)          THEN 'COREST'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND ead_n <= 200000000
+          THEN CASE
+                 WHEN loan_obj_n = 1               THEN 'RETEST'
+                 WHEN COALESCE(collateral_n,0) = 1 THEN 'RETCAR'
+                 ELSE                                   'RETCON'
+               END
+        WHEN ent_type_n = 1                        THEN 'CORLAR'
+        WHEN ent_type_n = 2                        THEN 'CORMED'
+        WHEN ent_type_n = 3                        THEN 'RETSML'
+        ELSE 'X'
+      END AS seg_new
+INTO #nst_v1
+FROM v1_agg
+OPTION (MAXDOP 1);
+
+-- 1.1. Старые против новых. Главная строка прогона.
+SELECT COUNT(*) AS rows_matched
+     , SUM(CASE WHEN seg_old = afr THEN 1 ELSE 0 END) AS hit_old
+     , SUM(CASE WHEN seg_new = afr THEN 1 ELSE 0 END) AS hit_new
+     , ROUND(100.0*SUM(CASE WHEN seg_old = afr THEN 1 ELSE 0 END)/COUNT(*), 3) AS acc_old_pct
+     , ROUND(100.0*SUM(CASE WHEN seg_new = afr THEN 1 ELSE 0 END)/COUNT(*), 3) AS acc_new_pct
+     , ROUND(100.0*SUM(CASE WHEN seg_old = afr THEN ead_n ELSE 0 END)
+             / NULLIF(SUM(ead_n),0), 2) AS acc_old_ead_pct
+     , ROUND(100.0*SUM(CASE WHEN seg_new = afr THEN ead_n ELSE 0 END)
+             / NULLIF(SUM(ead_n),0), 2) AS acc_new_ead_pct
+FROM #nst_v1;
+
+-- 1.2. Что осталось неверным у новых правил
+SELECT seg_new AS nash, afr, COUNT(*) AS contracts
+     , ROUND(SUM(ead_n)/1000000000.0, 2) AS ead_bln
+FROM #nst_v1
+WHERE seg_new <> afr
+GROUP BY seg_new, afr
+ORDER BY contracts DESC;
+
+-- 1.3. Проверка Г7: куда упали бывшие флаги после снятия веток
+SELECT seg_old AS byl_flag, seg_new AS stal, afr
+     , COUNT(*) AS contracts
+     , SUM(CASE WHEN seg_new = afr THEN 1 ELSE 0 END) AS ugadali
+FROM #nst_v1
+WHERE seg_old IN ('Individual loans','RELATE','DISASS','CORINV')
+GROUP BY seg_old, seg_new, afr
+ORDER BY seg_old, contracts DESC;
+
+-- 1.4. Проверка розничной правки: стало ли лучше в RETEST
+SELECT 'RETEST старое правило' AS rule_name
+     , SUM(CASE WHEN seg_old = 'RETEST' THEN 1 ELSE 0 END) AS nashli
+     , SUM(CASE WHEN seg_old = 'RETEST' AND afr = 'RETEST' THEN 1 ELSE 0 END) AS verno
+FROM #nst_v1
+UNION ALL
+SELECT 'RETEST новое правило'
+     , SUM(CASE WHEN seg_new = 'RETEST' THEN 1 ELSE 0 END)
+     , SUM(CASE WHEN seg_new = 'RETEST' AND afr = 'RETEST' THEN 1 ELSE 0 END)
+FROM #nst_v1;
+
+-- 1.5. Ухудшения: где новые правила сломали то, что старые угадывали
+SELECT seg_old, seg_new, afr, COUNT(*) AS contracts
+     , ROUND(SUM(ead_n)/1000000000.0, 2) AS ead_bln
+FROM #nst_v1
+WHERE seg_old = afr AND seg_new <> afr
+GROUP BY seg_old, seg_new, afr
+ORDER BY contracts DESC;
+
+DROP TABLE #nst_v1;
+```
+
+Запрос 1.5 важнее остальных: он ловит регресс. Если новые правила что-то
+чинят, но что-то и ломают, средняя цифра это скроет, а 1.5 — нет.
+
 ### С1. Сегментация 2025 Q4 — итоговый скрипт
 
 Редакция после Д5–Д7. Правила выведены из эталона АФР, а не из Таблицы 4.
