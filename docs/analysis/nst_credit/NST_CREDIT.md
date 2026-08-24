@@ -1326,21 +1326,31 @@ DROP TABLE #nst_afr;
 
 **`DISASS` — 6 из 7.** Статистики нет, но направление верное.
 
-### В1.5. Что делать — В2
+### В1.5. Что исправлено для В2 — две правки, обе откат
 
-Одна правка, обратная:
+**Правка 1. `COREST` возвращён в исходную редакцию** — `loan_obj IN (1,2,3)`
+и фильтр `loan_purp IN (1,2,3,4,5,8)` на месте. Это причина регресса
+на 1 051 договоре.
 
-```sql
--- вернуть COREST в редакцию, которая работала
-WHEN (debtor_type_n = 1 OR (debtor_type_n = 0 AND debtor_se_n = 1))
-     AND ent_type_n  IN (1, 2, 3)
-     AND loan_obj_n  IN (1, 2, 3)                    -- без 11
-     AND loan_purp_n IN (1, 2, 3, 4, 5, 8)           -- фильтр вернуть
-THEN 'COREST'
-```
+**Правка 2. Порядок веток возвращён к исходному: размер бизнеса ВЫШЕ розницы.**
 
-Остальное в С1 не трогать: розница по `loan_obj` подтверждена, снятие веток
-флагов для `RELATE` подтверждено.
+Найдено при проверке текста запроса после первого прогона. В `seg_new` розница
+стояла перед `ent_type`, в исходном каскаде — наоборот. Ветка розницы требует
+`debtor_se = 0`, ветки размера — только `ent_type`, поэтому перестановка меняет
+исход для физлиц с заполненным `ent_type`. В тест попала правка, которую никто
+не собирался проверять, — та же ошибка, что с `COREST`: два изменения за раз.
+
+**Контроль структуры.** После обеих правок `seg_new` отличается от `seg_old`
+ровно двумя вещами:
+
+| | `seg_old` | `seg_new` |
+|---|---|---|
+| ветки `DISASS` / `RELATE` / `CORINV` / `Individual loans` | 5 веток | **убраны** |
+| розница | `portfolio IN ('Mortgage')` → `RETEST` | **`loan_obj = 1` → `RETEST`** |
+| `COREST` | | идентично |
+| `CORLAR` / `CORMED` / `RETSML` | | идентично, то же место |
+
+Всё остальное совпадает дословно. Теперь прогон меряет именно то, что заявлено.
 
 **Прогноз для В2, записан до прогона:** расхождений ≈ 825 против нынешних
 2 544, точность в договорах **≈ 99,89 %**, в EAD — выше 78,36 %, потому что
@@ -1429,11 +1439,18 @@ SELECT *
         ELSE 'X'
       END AS seg_old
 
-    /* ---- НОВЫЕ правила: без веток флагов, розница по loan_obj -------- */
+    /* ---- НОВЫЕ правила: без веток флагов, розница по loan_obj --------
+       COREST оставлен в исходной редакции. В первом прогоне В1 сюда были
+       внесены loan_obj = 11 и снятие фильтра loan_purp — это дало регресс
+       на 1 051 договоре (В1.1). Правка откачена.                        */
     , CASE
         WHEN (debtor_type_n = 1 OR (debtor_type_n = 0 AND debtor_se_n = 1))
-             AND ent_type_n IN (1,2,3)
-             AND loan_obj_n IN (1,2,3,11)          THEN 'COREST'
+             AND ent_type_n  IN (1,2,3)
+             AND loan_obj_n  IN (1,2,3)
+             AND loan_purp_n IN (1,2,3,4,5,8)      THEN 'COREST'
+        WHEN ent_type_n = 1                        THEN 'CORLAR'
+        WHEN ent_type_n = 2                        THEN 'CORMED'
+        WHEN ent_type_n = 3                        THEN 'RETSML'
         WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
              AND ead_n <= 200000000
           THEN CASE
@@ -1441,9 +1458,6 @@ SELECT *
                  WHEN COALESCE(collateral_n,0) = 1 THEN 'RETCAR'
                  ELSE                                   'RETCON'
                END
-        WHEN ent_type_n = 1                        THEN 'CORLAR'
-        WHEN ent_type_n = 2                        THEN 'CORMED'
-        WHEN ent_type_n = 3                        THEN 'RETSML'
         ELSE 'X'
       END AS seg_new
 INTO #nst_v1
@@ -1575,6 +1589,14 @@ SELECT *
              AND loan_obj_n  IN (1, 2, 3)
              AND loan_purp_n IN (1, 2, 3, 4, 5, 8) THEN 'COREST'
 
+        -- размер бизнеса ВЫШЕ розницы — порядок исходного каскада.
+        -- Ветка розницы требует debtor_se = 0, ветки размера — только
+        -- ent_type, поэтому перестановка меняет исход для физлиц
+        -- с заполненным ent_type. Согласие с АФР 58 / 57 / 72 % (3я.3, О2)
+        WHEN ent_type_n = 1                       THEN 'CORLAR'
+        WHEN ent_type_n = 2                       THEN 'CORMED'
+        WHEN ent_type_n = 3                       THEN 'RETSML'
+
         -- розница: физлицо, не ИП. Правило из 3я.2, сходится до единиц
         WHEN COALESCE(debtor_type_n, 0) = 0
              AND COALESCE(debtor_se_n, 0) = 0
@@ -1584,11 +1606,6 @@ SELECT *
                  WHEN COALESCE(collateral_n,0) = 1 THEN 'RETCAR'
                  ELSE                                  'RETCON'
                END
-
-        -- размер бизнеса. Согласие с АФР 58 / 57 / 72 % — см. 3я.3 и О2
-        WHEN ent_type_n = 1                       THEN 'CORLAR'
-        WHEN ent_type_n = 2                       THEN 'CORMED'
-        WHEN ent_type_n = 3                       THEN 'RETSML'
         ELSE 'X'
       END AS segment_nst
 
