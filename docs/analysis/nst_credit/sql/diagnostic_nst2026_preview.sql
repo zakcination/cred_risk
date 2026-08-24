@@ -3,7 +3,7 @@
 -- Запустить после заполнения основного скрипта segmentation_nst2026.sql
 
 DECLARE @capital_aqr2025 FLOAT = 461235157000;  -- СК на 01.01.2025 (была в AQR2025 скрипте)
-DECLARE @capital_nst2026 FLOAT = 557685150000;  -- СК на 31.12.2025 (новая)
+DECLARE @capital_nst2026 FLOAT = 503086114000;  -- СК на 01.01.2026 (согласован с анализом Sabila)
 DECLARE @mrp_2025 FLOAT = 3932;
 DECLARE @threshold_individual FLOAT = 0.002;
 

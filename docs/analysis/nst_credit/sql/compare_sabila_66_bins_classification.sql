@@ -4,7 +4,7 @@
 --   2. Какой сегмент наша логика назначит?
 --   3. Совпадает ли с ожиданием (все должны быть "Individual loans")?
 
-DECLARE @capital_nst2026 FLOAT = 557685150000;
+DECLARE @capital_nst2026 FLOAT = 503086114000;  -- СК на 01.01.2026 (согласован с анализом Sabila)
 DECLARE @threshold_individual FLOAT = 0.002;
 
 -- ============================================================================
@@ -36,7 +36,10 @@ SELECT
   COUNT(CASE WHEN n.IIN_BIN IS NOT NULL THEN 1 END) as contracts_count,
   SUM(CASE WHEN n.IIN_BIN IS NOT NULL THEN CAST(n.ead AS FLOAT) ELSE 0 END) as total_ead,
   SUM(CASE WHEN n.IIN_BIN IS NOT NULL THEN
-    CAST(n.od + n.od_del + n.interest + n.interest_del + n.correction + n.disc_prem + n.penalty AS FLOAT)
+    COALESCE(CAST(n.od AS FLOAT), 0) + COALESCE(CAST(n.od_del AS FLOAT), 0)
+    + COALESCE(CAST(n.interest AS FLOAT), 0) + COALESCE(CAST(n.interest_del AS FLOAT), 0)
+    + COALESCE(CAST(n.correction AS FLOAT), 0) + COALESCE(CAST(n.disc_prem AS FLOAT), 0)
+    + COALESCE(CAST(n.penalty AS FLOAT), 0)
     ELSE 0 END) as total_debt,
   s.borrower_name,
   s.bank_code
@@ -126,7 +129,10 @@ SELECT
   END as our_result,
   CASE WHEN a.bin IS NOT NULL THEN 'YES' ELSE 'NO' END as in_b2a_list,
   SUM(CAST(n.ead AS FLOAT)) as total_ead,
-  SUM(CAST(n.od + n.od_del + n.interest + n.interest_del + n.correction + n.disc_prem + n.penalty AS FLOAT)) as total_debt
+  SUM(COALESCE(CAST(n.od AS FLOAT), 0) + COALESCE(CAST(n.od_del AS FLOAT), 0)
+    + COALESCE(CAST(n.interest AS FLOAT), 0) + COALESCE(CAST(n.interest_del AS FLOAT), 0)
+    + COALESCE(CAST(n.correction AS FLOAT), 0) + COALESCE(CAST(n.disc_prem AS FLOAT), 0)
+    + COALESCE(CAST(n.penalty AS FLOAT), 0)) as total_debt
 FROM @sabila_bins s
 LEFT JOIN [CL_PORTFOLIO].[dbo].AQR2026_B1A_2025_Q4 n ON s.bin = n.IIN_BIN AND n.is_del = '0'
 LEFT JOIN [personal_tables].[dbo].RA_NST_B2A_2026_04012026 a ON a.bin = s.bin

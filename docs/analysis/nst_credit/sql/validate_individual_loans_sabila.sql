@@ -8,7 +8,7 @@
 -- ============================================================================
 -- ПАРАМЕТРЫ (синхронизировать с segmentation_nst2026.sql)
 -- ============================================================================
-DECLARE @capital_nst2026_regulatory FLOAT = 557685150000;  -- регуляторный (31.12.2025)
+DECLARE @capital_nst2026_regulatory FLOAT = 503086114000;  -- СК на 01.01.2026 (согласован с анализом Sabila)
 DECLARE @capital_aqr2026_actual FLOAT = 503086114000;      -- из анализа Sabila (01.01.26)
 DECLARE @threshold_individual FLOAT = 0.002;
 
@@ -24,15 +24,15 @@ SELECT
   n.IIN_BIN,
   COUNT(DISTINCT contract_id) as contracts,  -- примечание: adjust column name
   SUM(CAST(ead AS FLOAT)) as total_ead,
-  SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT)) as total_debt,
+  SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0)) as total_debt,
   CASE
-    WHEN SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+    WHEN SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
          > @capital_nst2026_regulatory * @threshold_individual
     THEN 'Individual (by NST-2026 capital)'
     ELSE 'Not Individual'
   END as classification_nst2026,
   CASE
-    WHEN SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+    WHEN SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
          > @capital_aqr2026_actual * @threshold_individual
     THEN 'Individual (by Sabila capital)'
     ELSE 'Not Individual'
@@ -43,7 +43,7 @@ FROM [CL_PORTFOLIO].[dbo].AQR2026_B1A_2025_Q4 n
 WHERE is_del = '0'
   AND DEBTOR_TYPE = 0  -- only individuals (ФЛ)
 GROUP BY n.IIN_BIN
-HAVING SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+HAVING SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
        > @capital_aqr2026_actual * @threshold_individual  -- at least above Sabila threshold
 ORDER BY total_debt DESC;
 
@@ -73,7 +73,7 @@ WHERE is_del = '0'
     -- Условие 1: в B2A списке
     IIN_BIN IN (SELECT DISTINCT bin FROM [personal_tables].[dbo].RA_NST_B2A_2026_04012026)
     -- Условие 2: порог 0.2% capital
-    OR SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+    OR SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
        OVER (PARTITION BY IIN_BIN) > @capital_nst2026_regulatory * @threshold_individual
   );
 
@@ -85,17 +85,17 @@ SELECT TOP 50
   n.IIN_BIN,
   COUNT(*) as contracts,
   SUM(CAST(ead AS FLOAT)) as total_ead,
-  SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT)) as total_debt,
-  ROUND(SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+  SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0)) as total_debt,
+  ROUND(SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
         / @capital_aqr2026_actual / @threshold_individual, 4) as pct_of_sabila_capital,
   CASE
-    WHEN SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+    WHEN SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
          > @capital_nst2026_regulatory * @threshold_individual
     THEN 'INDIVIDUAL in NST-2026'
     ELSE 'NOT individual in NST-2026'
   END as nst2026_status,
   CASE
-    WHEN SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+    WHEN SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
          > @capital_aqr2026_actual * @threshold_individual
     THEN 'INDIVIDUAL in Sabila'
     ELSE 'NOT individual in Sabila'
@@ -105,14 +105,14 @@ WHERE is_del = '0'
 GROUP BY n.IIN_BIN
 HAVING (
   -- Show only those where classification differs
-  (SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+  (SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
    > @capital_nst2026_regulatory * @threshold_individual
-   AND SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+   AND SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
    <= @capital_aqr2026_actual * @threshold_individual)
   OR
-  (SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+  (SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
    <= @capital_nst2026_regulatory * @threshold_individual
-   AND SUM(CAST(od + od_del + interest + interest_del + correction + disc_prem + penalty AS FLOAT))
+   AND SUM(COALESCE(CAST(od AS FLOAT), 0) + COALESCE(CAST(od_del AS FLOAT), 0) + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0) + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0) + COALESCE(CAST(penalty AS FLOAT), 0))
    > @capital_aqr2026_actual * @threshold_individual)
 )
 ORDER BY total_debt DESC;
