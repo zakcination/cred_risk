@@ -61,11 +61,11 @@ GROUP BY segment_afr
 ORDER BY ead_pct DESC;
 
 -- ============================================================================
--- ТАБЛИЦА 2: Влияние капитала: сколько借金 переклассифицировалось из-за изменения порога
+-- ТАБЛИЦА 2: Влияние капитала: сколько заёмщиков переклассифицировалось из-за изменения порога
 -- ============================================================================
 SELECT
   'Impact of capital change' as metric,
-  COUNT(*) as borrowers_crossing_old_threshold as borrowers_above_old_threshold,
+  COUNT(*) as borrowers_above_old_threshold,
   COUNT(CASE WHEN zadol > @capital_nst2026 * @threshold_individual
          THEN 1 END) as also_above_new_threshold,
   COUNT(CASE WHEN zadol <= @capital_nst2026 * @threshold_individual
@@ -84,7 +84,7 @@ FROM (
         + COALESCE(CAST(interest AS FLOAT), 0) + COALESCE(CAST(interest_del AS FLOAT), 0)
         + COALESCE(CAST(correction AS FLOAT), 0) + COALESCE(CAST(disc_prem AS FLOAT), 0)
         + COALESCE(CAST(penalty AS FLOAT), 0)) > @capital_aqr2025 * @threshold_individual
-) crossing;
+) AS crossing;
 
 -- ============================================================================
 -- ТАБЛИЦА 3: Проверка пустых сегментов (CORINV, CORGOV, f_inv распределение)
