@@ -931,6 +931,135 @@ ORDER BY rows_cnt DESC;
 остаток «эталон есть, в B1A нет» — соединять надо и с `B1B`, и ключ там может
 быть `CREDIT_LINE_ID`, а не `LOAN_ID_KR`.
 
+### Д7. Присоединить сегмент АФР к нашей выгрузке как `afr_segment_approved`
+
+Цель: рядом с нашим `segment_afr` встаёт утверждённый АФР сегмент, и расхождение
+видно построчно.
+
+**Шаг 1. Предполётная проверка — без неё соединять нельзя.**
+
+В таблице АФР четыре кандидата на ключ. Если по `LOAN_ID_KR` есть дубли,
+`LEFT JOIN` размножит строки нашей выгрузки, и любые доли после этого будут
+неверны — причём тихо, без ошибки.
+
+```sql
+SELECT 'АФР: ключей с дублями' AS check_name, COUNT(*) AS cnt
+FROM (SELECT LOAN_ID_KR
+      FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+      WHERE LOAN_ID_KR IS NOT NULL
+      GROUP BY LOAN_ID_KR HAVING COUNT(*) > 1) t
+UNION ALL
+SELECT 'АФР: дубли с РАЗНЫМ сегментом', COUNT(*)
+FROM (SELECT LOAN_ID_KR
+      FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+      WHERE LOAN_ID_KR IS NOT NULL
+      GROUP BY LOAN_ID_KR HAVING COUNT(DISTINCT SEGMENT) > 1) t
+UNION ALL
+SELECT 'АФР: LOAN_ID_KR пуст', COUNT(*)
+FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+WHERE LOAN_ID_KR IS NULL
+UNION ALL
+SELECT 'наша выгрузка: ключей с дублями', COUNT(*)
+FROM (SELECT loan_id_kr
+      FROM [personal_tables].[dbo].[RA_NST_segment_AQR2025]
+      GROUP BY loan_id_kr HAVING COUNT(*) > 1) t;
+```
+
+Как читать:
+
+| Результат | Что делать |
+|---|---|
+| все нули | соединять по `LOAN_ID_KR`, шаг 2 как есть |
+| дубли есть, но с **одним** сегментом | схлопывание в шаге 2 корректно, идти дальше |
+| дубли с **разными** сегментами | `LOAN_ID_KR` не ключ. Разбираться, что различает строки — вероятно `CREDIT_LINE_ID`, то есть часть строк про кредитные линии (`B1B`), а не про займы |
+| `LOAN_ID_KR` пуст у части строк | для них ключ другой; соединять через `COALESCE(LOAN_ID_KR, CREDIT_LINE_ID)` |
+
+**Шаг 2. Соединение (read-only).**
+
+Схлопывание через `GROUP BY` — защита от размножения строк: даже если дубли
+проскочат, число строк нашей выгрузки не изменится.
+
+```sql
+WITH afr AS (
+    SELECT LOAN_ID_KR
+         , MIN(SEGMENT) AS afr_segment_approved
+         , COUNT(DISTINCT SEGMENT) AS segment_variants   -- контроль: везде 1
+    FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+    WHERE LOAN_ID_KR IS NOT NULL
+    GROUP BY LOAN_ID_KR
+)
+SELECT
+      p.*
+    , a.afr_segment_approved
+    , a.segment_variants
+    , CASE
+        WHEN a.afr_segment_approved IS NULL          THEN 'нет у АФР'
+        WHEN p.segment_afr = a.afr_segment_approved  THEN 'совпало'
+        ELSE                                              'расходится'
+      END AS match_status
+FROM      [personal_tables].[dbo].[RA_NST_segment_AQR2025] AS p
+LEFT JOIN afr AS a ON a.LOAN_ID_KR = p.loan_id_kr
+OPTION (MAXDOP 1);
+```
+
+**Шаг 3. Сразу — сводка расхождений. Это и есть ответ.**
+
+```sql
+WITH afr AS (
+    SELECT LOAN_ID_KR, MIN(SEGMENT) AS afr_segment_approved
+    FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+    WHERE LOAN_ID_KR IS NOT NULL
+    GROUP BY LOAN_ID_KR
+)
+SELECT
+      p.segment_afr                AS nash_segment
+    , a.afr_segment_approved       AS afr_segment
+    , COUNT(*)                     AS contracts
+FROM      [personal_tables].[dbo].[RA_NST_segment_AQR2025] AS p
+LEFT JOIN afr AS a ON a.LOAN_ID_KR = p.loan_id_kr
+GROUP BY p.segment_afr, a.afr_segment_approved
+ORDER BY contracts DESC
+OPTION (MAXDOP 1);
+```
+
+Диагональ этой таблицы — совпадения, всё вне диагонали — наши ошибки.
+Строки с `afr_segment = NULL` — договоры, которых у АФР нет.
+
+**Шаг 4 (по желанию) — закрепить колонку в таблице.**
+
+Правило контура: SQL только на чтение. Ниже — **единственное исключение**,
+и только потому, что `personal_tables` — личная схема автора, а не
+промышленный объект. Выполнять после того, как шаг 1 дал приемлемый результат.
+
+```sql
+-- Проверить, что колонки ещё нет
+IF COL_LENGTH('[personal_tables].[dbo].[RA_NST_segment_AQR2025]',
+              'afr_segment_approved') IS NULL
+    ALTER TABLE [personal_tables].[dbo].[RA_NST_segment_AQR2025]
+        ADD afr_segment_approved nvarchar(100) NULL;
+GO
+
+UPDATE p
+SET    p.afr_segment_approved = a.afr_segment_approved
+FROM   [personal_tables].[dbo].[RA_NST_segment_AQR2025] AS p
+JOIN  (SELECT LOAN_ID_KR, MIN(SEGMENT) AS afr_segment_approved
+       FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+       WHERE LOAN_ID_KR IS NOT NULL
+       GROUP BY LOAN_ID_KR) AS a
+  ON   a.LOAN_ID_KR = p.loan_id_kr;
+
+-- Контроль: сколько строк осталось без сегмента АФР
+SELECT COUNT(*) AS rows_total
+     , SUM(CASE WHEN afr_segment_approved IS NULL THEN 1 ELSE 0 END) AS no_afr
+FROM [personal_tables].[dbo].[RA_NST_segment_AQR2025];
+```
+
+`JOIN`, а не `LEFT JOIN`: несопоставленные строки остаются `NULL`, и их
+видно контрольным запросом, вместо того чтобы затирать уже проставленное.
+
+После шага 4 запрос Д6 можно упростить — соединяться с одной таблицей
+и брать `afr_segment_approved` напрямую.
+
 ### Д6. Матрица ошибок против эталона АФР
 
 Прогонять **после** Д5, подставив ключ, который тот подтвердит. Ниже — редакция
@@ -1183,17 +1312,19 @@ OPTION (MAXDOP 1);
 1. **Д5 — аудит `RA_NST_segment_AQR2025_ot_AFR`.** Ключ соединения,
    уникальность, перечень значений `SEGMENT`. Запрос 5.2 отвечает на главный
    спор трёх дней: есть ли у АФР `Individual loans` / `RELATE` / `DISASS`.
-2. **Д6 — матрица ошибок против АФР.** Перемер 3.0–3.3 плюс проверка Г5 (ИП).
+2. **Д7 — присоединить `afr_segment_approved` к нашей выгрузке.** Шаг 1
+   обязателен: проверка дублей ключа. Шаг 3 сразу даёт сводку расхождений.
+3. **Д6 — матрица ошибок против АФР.** Перемер 3.0–3.3 плюс проверка Г5 (ИП).
    Только после него можно что-то решать по Р1, Р2, Р3.
-3. **О11 — что является списком Sabila**: файл на 66 БИН или таблица
+4. **О11 — что является списком Sabila**: файл на 66 БИН или таблица
    `RA_NST_B2A_AQR2026` на 68+. Блокирует валидацию индивидуальных займов
    и от Д5/Д6 не зависит — спрашивать параллельно.
-4. **Добавить `B1B` в периметр** индивидуальных: 27 БИН и 3,67 млрд EAD
+5. **Добавить `B1B` в периметр** индивидуальных: 27 БИН и 3,67 млрд EAD
    там теряются (вывод Д2, от источника сегментации не зависит).
-5. **О12 — слой 2**, если Д5 покажет, что перераспределение по Таблице 3
+6. **О12 — слой 2**, если Д5 покажет, что перераспределение по Таблице 3
    действительно на нас. Если у АФР в `SEGMENT` этих значений нет —
    перераспределение уже сделано на их стороне, и О12 снимается.
-6. Параллельно: О1, О3, О4, О6, О7, О8, О10.
+7. Параллельно: О1, О3, О4, О6, О7, О8, О10.
 
 **Чего делать нельзя:** запускать С1 и трогать правила до Д6. Действующий
 скрипт совпадает на 99,99 % с нашей же таблицей — это не свидетельство
