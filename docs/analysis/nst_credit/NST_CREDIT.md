@@ -17,7 +17,8 @@
 | Обучающие материалы НСТ 2025 (84 стр.) | есть | разъяснения |
 | Методруководство и Инструкция **НСТ-2026** | **нет** | обязательны к сверке до подачи |
 | «Приложение 1. Соотнесение сегментации НСТ и статей 700-Н.xlsx» | **нет** | соответствие сегментов формам отчётности |
-| `RA_NST_segment_AQR2025` (эталон АФР 2024 Q4) | есть | единственный ground truth сегментации |
+| **`[CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]`** | есть | **сегменты, утверждённые АФР — настоящий эталон.** Колонки `LOAN_ID`, `LOAN_ID_KR`, `ID`, `CREDIT_LINE_ID`, `SEGMENT`. До 24.08.2026 не использовался |
+| `[personal_tables].[dbo].[RA_NST_segment_AQR2025]` | есть | **наша выгрузка, не эталон.** Совпадение с действующим скриптом 99,99 % — сверка с ней тавтологична |
 | Список инд. заёмщиков Sabila, 66 БИН | есть | **менять нельзя, принимается как данность** |
 
 ---
@@ -108,11 +109,32 @@
 
 ## 3. Что доказано на данных
 
-> **Раздел 3 переписан 24.08.2026 по результатам прогона Д0–Д3.**
-> Выводы, полученные ранее деревом решений (`_archive/TREE_RUN_2.md`),
-> прогоном **не подтвердились** и отозваны — см. раздел 3.0.
+> ## ⚠ Раздел 3 измерен против неверной таблицы
+>
+> 24.08.2026 обнаружена таблица **`[CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]`**
+> — сегменты, **утверждённые АФР**. Колонки: `LOAN_ID`, `LOAN_ID_KR`, `ID`,
+> `CREDIT_LINE_ID`, `SEGMENT`.
+>
+> Всё, что измерено в 3.0–3.3, сверялось с `[personal_tables].[dbo].[RA_NST_segment_AQR2025]`,
+> а это **наша собственная выгрузка**, а не эталон. Отсюда и совпадение 99,99 % —
+> скрипт сверялся сам с собой.
+>
+> **Что уцелело независимо от источника сегментации:**
+> - **3.4** (порог 200 млн не связывает) — это факт про EAD, сегмент не участвует;
+> - **раздел 7, Д2** (список B2A ≠ файл на 66 БИН; 27 БИН в `B1B`) — сегмент не участвует;
+> - вывод, что `personal_tables.RA_NST_segment_AQR2025` — выход нашего скрипта:
+>   99,99 % это подтверждают прямо.
+>
+> **Что подлежит перемеру** (запросы Д5–Д6): 3.0, 3.1, 3.2, 3.2а, 3.3 —
+> то есть наличие `Individual loans` в эталоне, роль `collateral` в рознице,
+> согласие `ent_type` и целостность выгрузки. До перемера ни один из этих
+> выводов силы не имеет — **ни в прежней редакции, ни в отозванной**.
+>
+> Возвращать отозванные Р1 и Р2 на основании того, что опровержение оказалось
+> негодным, тоже нельзя: негодное опровержение не делает утверждение верным.
+> Решения Р1, Р2 и Р3 переводятся в статус «не решено, ждёт Д6».
 
-### 3.0. Отзыв: чем на самом деле является `segment_afr`
+### 3.0. Чем является `personal_tables.RA_NST_segment_AQR2025`
 
 **Отзывается утверждение** (`_archive/TREE_RUN_2.md`, раздел 2): «В эталоне
 **нет** `Individual loans`, `RELATE`, `DISASS`… Значит `segment_afr`
@@ -764,6 +786,193 @@ OPTION (MAXDOP 1);
 посмотреть, какие коды у ИП вообще встречаются — иначе оборотка с редким
 кодом уедет в потребительские.
 
+### Д5. Аудит эталона АФР — прогнать первым
+
+`[CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]` до сих пор не
+использовался. Прежде чем на нём что-то мерить, надо понять его структуру:
+по какому ключу соединять, уникален ли он и какие значения принимает `SEGMENT`.
+
+```sql
+-- 5.1. Объём и уникальность ключей
+SELECT COUNT(*)                          AS rows_total
+     , COUNT(DISTINCT LOAN_ID)           AS uq_loan_id
+     , COUNT(DISTINCT LOAN_ID_KR)        AS uq_loan_id_kr
+     , COUNT(DISTINCT ID)                AS uq_id
+     , COUNT(DISTINCT CREDIT_LINE_ID)    AS uq_credit_line_id
+     , SUM(CASE WHEN LOAN_ID_KR     IS NULL THEN 1 ELSE 0 END) AS null_loan_id_kr
+     , SUM(CASE WHEN CREDIT_LINE_ID IS NULL THEN 1 ELSE 0 END) AS null_credit_line_id
+     , SUM(CASE WHEN SEGMENT        IS NULL THEN 1 ELSE 0 END) AS null_segment
+FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR];
+
+-- 5.2. Какие сегменты вообще есть у АФР — ключевой вопрос
+SELECT SEGMENT, COUNT(*) AS rows_cnt
+FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+GROUP BY SEGMENT
+ORDER BY rows_cnt DESC;
+
+-- 5.3. Покрытие B1A эталоном и обратно
+SELECT 'B1A есть, эталона нет' AS case_name, COUNT(*) AS rows_cnt
+FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]              AS b
+LEFT JOIN  [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]    AS s
+       ON  s.LOAN_ID_KR = b.loan_id_kr
+WHERE b.is_del = '0' AND s.LOAN_ID_KR IS NULL
+UNION ALL
+SELECT 'эталон есть, в B1A нет', COUNT(*)
+FROM       [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]    AS s
+LEFT JOIN  [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]              AS b
+       ON  s.LOAN_ID_KR = b.loan_id_kr AND b.is_del = '0'
+WHERE b.loan_id_kr IS NULL
+UNION ALL
+SELECT 'сошлось по LOAN_ID_KR', COUNT(*)
+FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]              AS b
+INNER JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]    AS s
+       ON  s.LOAN_ID_KR = b.loan_id_kr
+WHERE b.is_del = '0';
+
+-- 5.4. Дубли ключа — если есть, матрица ошибок будет врать
+SELECT TOP 20 LOAN_ID_KR, COUNT(*) AS dup_cnt
+     , COUNT(DISTINCT SEGMENT) AS distinct_segments
+FROM [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]
+GROUP BY LOAN_ID_KR
+HAVING COUNT(*) > 1
+ORDER BY dup_cnt DESC;
+
+-- 5.5. Расходится ли эталон АФР с нашей выгрузкой personal_tables
+SELECT p.segment_afr AS nash, s.SEGMENT AS afr, COUNT(*) AS rows_cnt
+FROM       [personal_tables].[dbo].[RA_NST_segment_AQR2025]        AS p
+INNER JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]    AS s
+       ON  s.LOAN_ID_KR = p.loan_id_kr
+GROUP BY p.segment_afr, s.SEGMENT
+ORDER BY rows_cnt DESC;
+```
+
+**Что смотреть в 5.2 — это и есть ответ на главный спор трёх дней.**
+Если в перечне `SEGMENT` **нет** `Individual loans`, `RELATE`, `DISASS` —
+исходное утверждение разбора дерева верно, Таблица 3 применена уже на стороне
+АФР, и решение Р1 надо возвращать. Если **есть** — верна двухслойная модель.
+
+`CREDIT_LINE_ID` в составе колонок означает, что часть строк, вероятно,
+относится к кредитным линиям (`B1B`), а не к займам. Если 5.3 покажет большой
+остаток «эталон есть, в B1A нет» — соединять надо и с `B1B`, и ключ там может
+быть `CREDIT_LINE_ID`, а не `LOAN_ID_KR`.
+
+### Д6. Матрица ошибок против эталона АФР
+
+Прогонять **после** Д5, подставив ключ, который тот подтвердит. Ниже — редакция
+для `LOAN_ID_KR`.
+
+```sql
+SET NOCOUNT ON;
+DECLARE @capital float = 461235157000;   -- СК на 01.01.2025
+DECLARE @thr_ind float = 0.002;
+
+IF OBJECT_ID('tempdb..#nst_afr') IS NOT NULL DROP TABLE #nst_afr;
+
+WITH afr_base AS (
+    SELECT
+          b.loan_id_kr, b.iin_bin, b.entity, b.lsboo, b.portfolio
+        , TRY_CAST(b.f_inv       AS int) AS f_inv_n
+        , TRY_CAST(b.debtor_type AS int) AS debtor_type_n
+        , TRY_CAST(b.debtor_se   AS int) AS debtor_se_n
+        , TRY_CAST(b.ent_type    AS int) AS ent_type_n
+        , TRY_CAST(b.loan_obj    AS int) AS loan_obj_n
+        , TRY_CAST(b.loan_purp   AS int) AS loan_purp_n
+        , TRY_CAST(b.collateral  AS int) AS collateral_n
+        , COALESCE(TRY_CAST(b.ead AS float), 0) AS ead_n
+        , COALESCE(TRY_CAST(b.od           AS float), 0)
+        + COALESCE(TRY_CAST(b.od_del       AS float), 0)
+        + COALESCE(TRY_CAST(b.interest     AS float), 0)
+        + COALESCE(TRY_CAST(b.interest_del AS float), 0)
+        + COALESCE(TRY_CAST(b.correction   AS float), 0)
+        + COALESCE(TRY_CAST(b.disc_prem    AS float), 0)
+        + COALESCE(TRY_CAST(b.penalty      AS float), 0) AS zadol
+        , s.SEGMENT AS afr
+        , CASE WHEN a.bin IS NOT NULL THEN 1 ELSE 0 END AS in_b2a
+    FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]            AS b
+    LEFT JOIN  [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]  AS s
+           ON  s.LOAN_ID_KR = b.loan_id_kr
+    LEFT JOIN  [personal_tables].[dbo].[RA_NST_B2A_AQR2025_11082025] AS a
+           ON  a.bin = b.iin_bin
+    WHERE b.is_del = '0'
+),
+afr_agg AS (
+    SELECT *, SUM(zadol) OVER (PARTITION BY iin_bin) AS zadol_borrower
+    FROM afr_base
+)
+SELECT *
+    -- действующий скрипт, слой 1
+    , CASE
+        WHEN entity = 'EUB1'                       THEN 'DISASS'
+        WHEN lsboo  = 1                            THEN 'RELATE'
+        WHEN COALESCE(f_inv_n, 0) = 1              THEN 'CORINV'
+        WHEN in_b2a = 1                            THEN 'Individual loans'
+        WHEN zadol_borrower >= @capital * @thr_ind THEN 'Individual loans'
+        WHEN (debtor_type_n = 1 OR (debtor_type_n = 0 AND debtor_se_n = 1))
+             AND ent_type_n  IN (1,2,3)
+             AND loan_obj_n  IN (1,2,3)
+             AND loan_purp_n IN (1,2,3,4,5,8)      THEN 'COREST'
+        WHEN ent_type_n = 1                        THEN 'CORLAR'
+        WHEN ent_type_n = 2                        THEN 'CORMED'
+        WHEN ent_type_n = 3                        THEN 'RETSML'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND ead_n <= 200000000
+             AND portfolio IN ('Mortgage')         THEN 'RETEST'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND ead_n <= 200000000
+             AND COALESCE(collateral_n,0) = 1      THEN 'RETCAR'
+        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+             AND ead_n <= 200000000
+             AND COALESCE(collateral_n,0) = 0      THEN 'RETCON'
+        ELSE 'X'
+      END AS cur
+INTO #nst_afr
+FROM afr_agg
+OPTION (MAXDOP 1);
+
+-- 6.1. Совпадение с АФР
+SELECT COUNT(*) AS rows_b1a
+     , SUM(CASE WHEN afr IS NULL THEN 1 ELSE 0 END) AS no_afr_segment
+     , ROUND(100.0*SUM(CASE WHEN afr IS NOT NULL AND cur = afr THEN 1 ELSE 0 END)
+             / NULLIF(SUM(CASE WHEN afr IS NOT NULL THEN 1 ELSE 0 END),0), 2) AS acc_pct
+FROM #nst_afr;
+
+-- 6.2. Матрица расхождений
+SELECT TOP 40 cur AS nash, afr, COUNT(*) AS contracts
+     , ROUND(SUM(ead_n)/1000000.0, 1) AS ead_mln
+FROM #nst_afr
+WHERE afr IS NOT NULL AND cur <> afr
+GROUP BY cur, afr ORDER BY contracts DESC;
+
+-- 6.3. Розница: решает ли collateral (перемер 3.2)
+SELECT loan_obj_n, COALESCE(collateral_n,-1) AS collateral_n, afr
+     , COUNT(*) AS contracts
+FROM #nst_afr
+WHERE COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
+  AND afr IS NOT NULL
+GROUP BY loan_obj_n, COALESCE(collateral_n,-1), afr
+HAVING COUNT(*) >= 10
+ORDER BY loan_obj_n, collateral_n, contracts DESC;
+
+-- 6.4. ent_type против АФР (перемер 3.3)
+SELECT ent_type_n, afr, COUNT(*) AS contracts
+     , ROUND(100.0*COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY ent_type_n), 1) AS pct
+FROM #nst_afr WHERE afr IS NOT NULL
+GROUP BY ent_type_n, afr ORDER BY ent_type_n, contracts DESC;
+
+-- 6.5. ИП и назначение займа (Г5, бывший Д4)
+SELECT loan_obj_n, ent_type_n, afr, COUNT(*) AS contracts
+     , ROUND(SUM(ead_n)/1000000.0, 1) AS ead_mln
+FROM #nst_afr
+WHERE COALESCE(debtor_se_n,0) = 1 AND afr IS NOT NULL
+GROUP BY loan_obj_n, ent_type_n, afr
+ORDER BY loan_obj_n, contracts DESC;
+
+DROP TABLE #nst_afr;
+```
+
+Запрос **Д4 отменён** — его содержимое вошло в 6.5, и мерить ИП против нашей
+же выгрузки смысла не имело.
+
 ### С1. Сегментация 2025 Q4 — итоговый скрипт
 
 Редакция от 24.08.2026 **после** прогона Д0–Д3. Это слой 1 — первичная
@@ -888,28 +1097,26 @@ OPTION (MAXDOP 1);
 
 ## 11. Порядок работ
 
-Д0–Д3 прогнаны 24.08.2026, результаты в разделах 3.0–3.4 и 7.
-Контрольная точка шага 6 **сработала**: `fix_acc_pct` (99,49 %) оказался ниже
-`cur_acc_pct` (99,99 %), решения Р1 и Р2 отозваны, С1 в той редакции
-не запускался. Это ровно тот случай, ради которого точка была поставлена.
+Д0–Д3 прогнаны 24.08.2026, но **против нашей же выгрузки**, а не против
+эталона АФР. Уцелели только Д1 и Д2 (см. врезку в разделе 3).
 
-Дальше:
+**Всё остальное начинается с Д5.**
 
-1. **О11 — что является списком Sabila**, файл на 66 БИН или таблица
-   `RA_NST_B2A_AQR2026` на 68+. Блокирует всю валидацию индивидуальных займов.
-   Спросить у Sabila, ответ зафиксировать в разделе 5.
-2. **Д4** — закрыть Г5 (ИП и назначение займа). Единственный неизмеренный тип
-   расхождений.
-3. **Добавить `B1B` в периметр** индивидуальных займов: 27 БИН и 3,67 млрд EAD
-   лежат там и сейчас теряются.
-4. **Разобрать 95 расхождений поимённо** — 49 по рознице, 46 по размеру
-   бизнеса. Это не правила, а частные случаи; править каскад под них нельзя
-   (Р6).
-5. **О12 — слой 2**: на какой базе перераспределять `Individual loans`
-   (31 % EAD), `DISASS` и господдержку по Таблице 3. Это единственная
-   по-настоящему незакрытая методологическая позиция.
+1. **Д5 — аудит `RA_NST_segment_AQR2025_ot_AFR`.** Ключ соединения,
+   уникальность, перечень значений `SEGMENT`. Запрос 5.2 отвечает на главный
+   спор трёх дней: есть ли у АФР `Individual loans` / `RELATE` / `DISASS`.
+2. **Д6 — матрица ошибок против АФР.** Перемер 3.0–3.3 плюс проверка Г5 (ИП).
+   Только после него можно что-то решать по Р1, Р2, Р3.
+3. **О11 — что является списком Sabila**: файл на 66 БИН или таблица
+   `RA_NST_B2A_AQR2026` на 68+. Блокирует валидацию индивидуальных займов
+   и от Д5/Д6 не зависит — спрашивать параллельно.
+4. **Добавить `B1B` в периметр** индивидуальных: 27 БИН и 3,67 млрд EAD
+   там теряются (вывод Д2, от источника сегментации не зависит).
+5. **О12 — слой 2**, если Д5 покажет, что перераспределение по Таблице 3
+   действительно на нас. Если у АФР в `SEGMENT` этих значений нет —
+   перераспределение уже сделано на их стороне, и О12 снимается.
 6. Параллельно: О1, О3, О4, О6, О7, О8, О10.
 
-**Чего делать не нужно** — и это главный итог дня: переписывать слой 1.
-Он воспроизводит первичную сегментацию AQR на 99,99 %, и три из четырёх
-«крупных дефектов», найденных 21–24.08, в данных отсутствуют.
+**Чего делать нельзя:** запускать С1 и трогать правила до Д6. Действующий
+скрипт совпадает на 99,99 % с нашей же таблицей — это не свидетельство
+о его правильности, а свидетельство о том, что таблица из него и получена.
