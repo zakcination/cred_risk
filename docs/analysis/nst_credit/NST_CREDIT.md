@@ -119,101 +119,157 @@
 
 ## 3я. Сверка с эталоном АФР — действующие выводы
 
-Источник: `_ot_AFR.SEGMENT` против `segment_afr` (подача банка до проверки),
-ключ `LOAN_ID_KR`, соединение 1:1.
+Прогоны Д5, Д6, Д7 от 24.08.2026. Ключ `LOAN_ID_KR`, соединение 1:1.
+
+### 3я.0. Структура эталона
+
+| Показатель | Значение |
+|---|---|
+| строк в `_ot_AFR` | 729 787 |
+| уникальных `LOAN_ID_KR` | 729 787 — **ключ** |
+| уникальных `ID` | 729 787 — тоже ключ |
+| уникальных `LOAN_ID` | 727 854 — **дубли**, ключом не является |
+| уникальных `CREDIT_LINE_ID` | **134** — не ключ, служебное поле |
+| пустых `LOAN_ID_KR`, `SEGMENT` | 0 |
+
+Покрытие: сошлось 729 685, у нас есть — у АФР нет 1 474, у АФР есть —
+у нас нет 102.
 
 | | Договоров | Доля |
 |---|---|---|
-| совпало | 727 448 | 99,69 % |
-| **исправлено АФР** | **2 237** | **0,31 %** |
-| нет у АФР | 1 474 | — |
-| **всего** | **731 159** | |
+| совпало | 727 448 | **99,69 %** |
+| исправлено АФР | 2 237 | 0,31 % |
+| EAD под исправлением | — | **≈ 517 млрд из 1 714, то есть 30 %** |
 
-### 3я.1. Главное: у АФР нет трёх наших сегментов
+Расхождение в договорах ничтожно, в деньгах — треть портфеля. Считать
+качество сегментации в штуках нельзя.
 
-В колонке `afr_segment` **ни разу не встречаются** `Individual loans`,
-`RELATE`, `DISASS`, `CORINV`, `CORGOV`. Перечень значений АФР — семь:
-`RETCON`, `RETCAR`, `RETSML`, `RETEST`, `CORMED`, `CORLAR`, `COREST`.
+### 3я.1. У АФР ровно семь сегментов
 
-**Исходное утверждение разбора дерева верно.** Оно было «опровергнуто»
-24.08 сверкой с `personal_tables`, но та таблица — подача банка, а не эталон.
-Опровержение отозвано, утверждение восстановлено.
-
-**Р1 возвращается в силу:** `Individual loans`, `RELATE`, `DISASS` —
-не значения сегмента. Двухслойная модель подтверждена данными.
-
-### 3я.2. Правила перераспределения — прямо из эталона
-
-Куда АФР девает то, что мы считаем сегментом:
-
-| Наш сегмент | Всего | → `CORMED` | → `CORLAR` | → `RETSML` | → `RETCON` | → `RETCAR` | прочее |
-|---|---|---|---|---|---|---|---|
-| **`Individual loans`** | 1 489 | **665** | **575** | **241** | — | — | 8 нет у АФР |
-| **`RELATE`** | 297 | 3 | 7 | 10 | **177** | **88** | 7 `RETEST`, 1 `COREST`, 4 нет |
-| **`DISASS`** | 7 | — | — | 3 | — | — | 4 `COREST` |
-
-Читается однозначно:
-
-- **`Individual loans` уходят только в бизнес-сегменты** — `CORMED` 45 %,
-  `CORLAR` 39 %, `RETSML` 16 %. В розницу — ни одного. Логично: это крупные
-  заёмщики, и после снятия признака индивидуальности они падают в свой
-  размер бизнеса.
-- **`RELATE` уходят в основном в розницу** — `RETCON` 60 %, `RETCAR` 30 %.
-  ЛСБОО у нас преимущественно физлица.
-- **`DISASS`** — 7 договоров, статистики нет.
-
-**Это и есть слой 2, и он выводится из данных, а не из догадок.** Гипотеза,
-которую надо проверить в Д6: достаточно ли просто **снять признак и пустить
-заём дальше по каскаду** — тогда `Individual loans` сами разложатся
-по `ent_type`, а `RELATE` по рознице. Если да, слой 2 не требует отдельных
-правил вообще: он получается удалением четырёх веток из начала `CASE`.
-
-### 3я.3. Дрейф по размеру бизнеса подтверждён
-
-| Переход | Договоров |
+| `SEGMENT` | Договоров |
 |---|---|
-| `RETSML` → `CORMED` | **227** |
-| `CORMED` → `RETSML` | **89** |
-| `CORLAR` → `CORMED` | 29 |
-| `CORLAR` → `RETSML` | 2 |
-| **итого чистый дрейф размера** | **347** |
+| `RETCON` | 621 462 |
+| `RETCAR` | 103 401 |
+| `RETSML` | 2 227 |
+| `CORMED` | 1 249 |
+| `RETEST` | 794 |
+| `CORLAR` | 605 |
+| `COREST` | 49 |
 
-Цифра 347 совпадает с той, что называл разбор дерева («347 из 455 подлинных
-несовпадений лежат на границе `RETSML` ↔ `CORMED` ↔ `CORLAR`»). То есть дерево
-считалось против эталона АФР, а не против подачи банка, и его вывод о `ent_type`
-**восстанавливается**: поле действительно расходится с эталоном, и снятое
-24.08 требование снимка РСП (О2) надо возвращать.
+`Individual loans`, `RELATE`, `DISASS`, `CORINV`, `CORGOV` **отсутствуют
+полностью**. Таблица 3 применена на стороне АФР.
 
-Плюс переходы бизнес ↔ розница: `RETSML` → `RETCON` 26, `RETSML` → `RETCAR` 15,
-`RETCON` → `CORMED` 8, `RETCAR` → `CORMED` 7, `RETSML` → `COREST` 2.
-Это, вероятно, и есть эффект ИП (тип G, гипотеза Г5) — проверяется запросом 6.5.
+Исходное утверждение разбора дерева верно; его «опровержение» 24.08 мерило
+подачу банка вместо эталона и отозвано. **Р1 в силе.**
 
-### 3я.4. Розница: мы переназначаем `RETEST`
+### 3я.2. Розничное правило вывелось точно
 
-| Переход | Договоров |
-|---|---|
-| `RETEST` → `RETCAR` | **43** |
-| `RETEST` → `RETCON` | 5 |
-| `RETCON` → `RETEST` | 1 |
-| `RETCAR` → `RETEST` | 1 |
-| `COREST` → `RETEST` | 1 |
+Разрез `loan_obj × collateral × SEGMENT`, розница:
 
-Из 833 наших `RETEST` **48 неверны — 5,8 % сегмента**, и почти все уходят
-в `RETCAR`. Наше правило `portfolio IN ('Mortgage')` берёт лишнее.
+| `loan_obj` | `collateral` | АФР | Договоров |
+|---|---|---|---|
+| 1 жильё | 0 | `RETEST` | 45 |
+| 1 жильё | 1 | `RETEST` | 748 |
+| 6 авто | 0 | **`RETCON`** | 1 830 |
+| 6 авто | 1 | `RETCAR` | 103 327 |
+| 8 потреб. | 0 | `RETCON` | 619 630 |
+| 8 потреб. | 1 | **`RETCAR`** | 61 |
+| 11 | 1 | `RETCAR` | 12 |
 
-Именно здесь лежит вопрос про залог, вокруг которого шёл спор: 43 договора
-помечены как ипотека, а АФР считает их обеспеченными **не** жилой
-недвижимостью. Проверяется запросом 6.3 — он покажет, различает ли эти
-48 договоров `collateral` или что-то другое.
+Правило читается однозначно и **сходится до единиц**:
 
-### 3я.5. 1 474 договора у АФР отсутствуют
+```
+если loan_obj = 1        → RETEST
+иначе если collateral = 1 → RETCAR
+иначе                     → RETCON
+```
 
-`RETCON` 1 106, `RETSML` 238, `CORMED` 105, остальные единицы.
+Проверка: `RETEST` 45 + 748 = 793 (у АФР 794); `RETCAR` 103 327 + 61 + 12
+= 103 400 (у АФР 103 401); `RETCON` 1 830 + 619 630 = 621 460 (у АФР 621 462).
+Расхождение в 1–2 договора — нерозничные строки, попавшие в те же сегменты.
 
-Это вопрос **периметра**, а не правил: либо АФР их исключил из выборки,
-либо файл от АФР неполон. 0,2 % портфеля, но выяснить надо — если исключение
-системное (например, погашенные в течение периода), правило надо знать.
-Вопрос **О17**.
+**Спор о залоге разрешён, и обе стороны были правы наполовину:**
+`loan_obj` определяет `RETEST`, `collateral` определяет `RETCAR` против
+`RETCON`. Наше правило берёт `portfolio IN ('Mortgage')` — оно и даёт
+48 ошибок в `RETEST`. Замена на `loan_obj = 1` закрывает розницу полностью.
+**Р2 решена.**
+
+### 3я.3. `ent_type` расходится с эталоном — подтверждено
+
+| `ent_type` | АФР | Договоров | Доля |
+|---|---|---|---|
+| `0` физлицо | `RETCON` | 621 436 | 85,6 % |
+| | `RETCAR` | 103 386 | 14,2 % |
+| | `RETEST` | 793 | 0,1 % |
+| `1` крупный | **`CORLAR`** | 298 | **58,1 %** |
+| | `CORMED` | 210 | 40,9 % |
+| `2` средний | **`CORMED`** | 401 | **57,4 %** |
+| | `CORLAR` | 192 | 27,5 % |
+| | `RETSML` | 106 | 15,2 % |
+| `3` малый | **`RETSML`** | 2 038 | **71,7 %** |
+| | `CORMED` | 603 | 21,2 % |
+| | `CORLAR` | 111 | 3,9 % |
+
+Розница — соответствие полное. Бизнес — **58 / 57 / 72 %**. Цифры совпали
+с разбором дерева до десятых, то есть дерево считалось против эталона АФР.
+
+**О2 возвращён: снимок РСП нужен.** Его снятие 24.08 было ошибкой.
+
+### 3я.4. Гипотеза Г5 про ИП опровергнута
+
+Разрез по `debtor_se = 1` (1 085 договоров):
+
+| `loan_obj` | АФР | Договоров |
+|---|---|---|
+| 11 | `RETSML` | 433 + 8 |
+| 5 | `RETSML` | 302 + 5 |
+| 6 авто | **`RETSML`** | 228 + 4 |
+| 8 потреб. | **`RETSML`** | 23 + 1 |
+| 4 | `RETSML` | 22 |
+| 3 | `COREST` | 34 |
+| 1 | `COREST` | 5 |
+
+**ИП с потребительским займом (`loan_obj = 8`) идёт в `RETSML`, а не
+в `RETCON`.** ИП с автокредитом (`loan_obj = 6`) — тоже в `RETSML`, а не
+в `RETCAR`. Единственное исключение — 1 договор в `RETCAR`.
+
+Для ИП решает **статус заёмщика, а не назначение займа**. Наше текущее
+поведение (розничная ветка требует `debtor_se = 0`) **верно**.
+
+Замечание Sabila было содержательным и проверку заслуживало, но эталон
+отвечает противоположно тому, что предполагала гипотеза. **Тип G закрыт
+как несуществующий, Г5 снята.**
+
+Отдельно: ИП с `loan_obj IN (1, 3, 11)` уходят в `COREST`. Наш фильтр
+берёт `loan_obj IN (1,2,3)` и код `11` пропускает — отсюда часть недобора
+`COREST` (у нас 46, у АФР 49).
+
+### 3я.5. Перераспределение: правила из эталона
+
+| Наш сегмент | Всего | Куда АФР | EAD, млрд |
+|---|---|---|---|
+| **`Individual loans`** | 1 489 | `CORMED` 665, `CORLAR` 575, `RETSML` 241 | **464,6** |
+| **`RELATE`** | 297 | `RETCON` 177, `RETCAR` 88, `RETSML` 10, прочее 22 | 32,1 |
+| **`DISASS`** | 7 | `RETSML` 3, `COREST` 4 | 9,1 |
+
+`Individual loans` уходят **только в бизнес-сегменты**, в розницу ни одного.
+`RELATE` — в основном в розницу. Вес: `Individual loans → CORLAR` — 575
+договоров и **289,5 млрд**, крупнейшая правка регулятора.
+
+Обратите внимание на строки, где мало договоров и много денег:
+`RELATE → RETSML` — 10 договоров, **29,7 млрд**; `DISASS → RETSML` —
+3 договора, **8,9 млрд**. По штукам они незаметны, по EAD весомее, чем
+227 договоров дрейфа размера (6,9 млрд).
+
+**Гипотеза Г7:** достаточно снять четыре ветки из начала каскада, и заём
+сам дойдёт до продуктовой. Проверяется прогоном С1 против `_ot_AFR`.
+
+### 3я.6. 1 474 договора у АФР отсутствуют
+
+`RETCON` 1 106, `RETSML` 238, `CORMED` 105, остальные единицы. По EAD —
+почти ноль (`RETCON` 0,01 млрд, `RETSML` и `CORMED` по нулям), то есть это
+преимущественно погашенные или нулевые остатки. Обратно: 102 договора есть
+у АФР, но нет у нас. Вопрос периметра — **О17**.
 
 ---
 
@@ -750,33 +806,33 @@ ORDER BY create_date;
 Если объёмы совпадают — версии идентичны, вопрос снимается. Если расходятся —
 считать надо по более поздней, и раздел 4 пересчитывается.
 
-### Д1. Куда эталон отнёс займы ФЛ свыше 200 млн — решает О5
+### Д1. Займы ФЛ свыше 200 млн — О5 закрыт
+
+> Первая редакция запроса соединялась с `personal_tables` — подачей банка.
+> Ниже редакция против эталона АФР. Вывод не изменился: бакет пуст.
 
 ```sql
 SELECT
       CASE WHEN COALESCE(TRY_CAST(b.ead AS float), 0) > 200000000
            THEN 'свыше 200 млн' ELSE 'до 200 млн' END        AS bucket
-    , s.segment_afr
-    , COUNT(*)                                                AS contracts
+    , s.SEGMENT
+    , COUNT(*)                                               AS contracts
     , ROUND(SUM(COALESCE(TRY_CAST(b.ead AS float), 0)) / 1000000.0, 1) AS ead_mln
-FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]         AS b
-LEFT JOIN  [personal_tables].[dbo].[RA_NST_segment_AQR2025]   AS s
-       ON  s.loan_id_kr = b.loan_id_kr
+FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]            AS b
+INNER JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR]  AS s
+       ON  s.LOAN_ID_KR = b.loan_id_kr
 WHERE b.is_del = '0'
   AND COALESCE(TRY_CAST(b.debtor_type AS int), 0) = 0
   AND COALESCE(TRY_CAST(b.debtor_se   AS int), 0) = 0
-  AND s.segment_afr IS NOT NULL
 GROUP BY CASE WHEN COALESCE(TRY_CAST(b.ead AS float), 0) > 200000000
-              THEN 'свыше 200 млн' ELSE 'до 200 млн' END, s.segment_afr
+              THEN 'свыше 200 млн' ELSE 'до 200 млн' END, s.SEGMENT
 ORDER BY bucket, contracts DESC
 OPTION (MAXDOP 1);
 ```
 
-**Как читать.** Если в бакете «свыше 200 млн» эталон даёт те же
-`RETEST`/`RETCAR`/`RETCON`, что и до порога, — порог в кредитном риске
-не применяется, он только для ЧПД. Если появляется отдельное значение либо
-займы уходят в корпоративные сегменты — порог применяется, и правило надо
-воспроизвести.
+Розничных договоров свыше 200 млн в портфеле нет. Подтверждается пометкой
+автора исходного скрипта у закомментированной ветки `RETLAR`: «в шаблоне НСТ
+убрали данную сегментацию». Условие безвредно, оставлено.
 
 ### Д2. Где лежат 46 ненайденных БИН — решает О9
 
@@ -828,171 +884,11 @@ OPTION (MAXDOP 1);
 с `is_del = '1'` — есть, но отфильтрованы как удалённые. Если сумма найденных
 по всем источникам даёт 66 — вопрос закрыт, дело было в периметре выгрузки.
 
-### Д3. Матрица ошибок и целостность — калибровка на 2024 Q4
+### ~~Д3~~ ОТМЕНЁН
 
-```sql
-SET NOCOUNT ON;
-DECLARE @capital float = 461235157000;   -- СК на 01.01.2025, период эталона
-DECLARE @thr_ind float = 0.002;
-
-IF OBJECT_ID('tempdb..#nst_conf') IS NOT NULL DROP TABLE #nst_conf;
-
-WITH nst_base AS (
-    SELECT
-          b.loan_id_kr, b.iin_bin, b.entity, b.lsboo, b.portfolio
-        , TRY_CAST(b.f_inv       AS int) AS f_inv_n
-        , TRY_CAST(b.debtor_type AS int) AS debtor_type_n
-        , TRY_CAST(b.debtor_se   AS int) AS debtor_se_n
-        , TRY_CAST(b.ent_type    AS int) AS ent_type_n
-        , TRY_CAST(b.loan_obj    AS int) AS loan_obj_n
-        , TRY_CAST(b.collateral  AS int) AS collateral_n
-        , COALESCE(TRY_CAST(b.ead AS float), 0) AS ead_n
-        , COALESCE(TRY_CAST(b.od           AS float), 0)
-        + COALESCE(TRY_CAST(b.od_del       AS float), 0)
-        + COALESCE(TRY_CAST(b.interest     AS float), 0)
-        + COALESCE(TRY_CAST(b.interest_del AS float), 0)
-        + COALESCE(TRY_CAST(b.correction   AS float), 0)
-        + COALESCE(TRY_CAST(b.disc_prem    AS float), 0)
-        + COALESCE(TRY_CAST(b.penalty      AS float), 0) AS zadol
-        , s.segment_afr AS afr
-        , CASE WHEN a.bin IS NOT NULL THEN 1 ELSE 0 END AS in_b2a
-    FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]            AS b
-    LEFT JOIN  [personal_tables].[dbo].[RA_NST_segment_AQR2025]      AS s
-           ON  s.loan_id_kr = b.loan_id_kr
-    LEFT JOIN  [personal_tables].[dbo].[RA_NST_B2A_AQR2025_11082025] AS a
-           ON  a.bin = b.iin_bin
-    WHERE b.is_del = '0'
-),
-nst_agg AS (
-    SELECT *, SUM(zadol) OVER (PARTITION BY iin_bin) AS zadol_borrower
-    FROM nst_base
-)
-SELECT *
-    -- действующие правила: залог и метка продукта
-    , CASE
-        WHEN entity = 'EUB1'                      THEN 'DISASS'
-        WHEN lsboo  = 1                           THEN 'RELATE'
-        WHEN COALESCE(f_inv_n, 0) = 1             THEN 'CORINV'
-        WHEN in_b2a = 1
-          OR zadol_borrower > @capital * @thr_ind THEN 'Individual loans'
-        WHEN ent_type_n = 1                       THEN 'CORLAR'
-        WHEN ent_type_n = 2                       THEN 'CORMED'
-        WHEN ent_type_n = 3                       THEN 'RETSML'
-        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-             AND COALESCE(collateral_n,0) = 1 AND portfolio = 'Mortgage'
-                                                  THEN 'RETEST'
-        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-             AND COALESCE(collateral_n,0) = 1     THEN 'RETCAR'
-        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-                                                  THEN 'RETCON'
-        ELSE 'X'
-      END AS cur
-    -- предлагаемые правила: Р1 + Р2
-    , CASE
-        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-          THEN CASE loan_obj_n WHEN 1 THEN 'RETEST'
-                               WHEN 6 THEN 'RETCAR'
-                               ELSE        'RETCON' END
-        WHEN loan_obj_n IN (1,2,3)                THEN 'COREST'
-        WHEN ent_type_n = 1                       THEN 'CORLAR'
-        WHEN ent_type_n = 2                       THEN 'CORMED'
-        WHEN ent_type_n = 3                       THEN 'RETSML'
-        ELSE 'X'
-      END AS fix
-INTO #nst_conf
-FROM nst_agg
-OPTION (MAXDOP 1);
-
--- 1. Точность и целостность (закрывает тип F на SQL, без Excel)
-SELECT COUNT(*) AS rows_b1a
-     , SUM(CASE WHEN afr IS NULL THEN 1 ELSE 0 END) AS no_ground_truth
-     , ROUND(100.0*SUM(CASE WHEN afr IS NOT NULL AND cur = afr THEN 1 ELSE 0 END)
-             / NULLIF(SUM(CASE WHEN afr IS NOT NULL THEN 1 ELSE 0 END),0), 2) AS cur_acc_pct
-     , ROUND(100.0*SUM(CASE WHEN afr IS NOT NULL AND fix = afr THEN 1 ELSE 0 END)
-             / NULLIF(SUM(CASE WHEN afr IS NOT NULL THEN 1 ELSE 0 END),0), 2) AS fix_acc_pct
-FROM #nst_conf;
-
--- 2. Таксономия расхождений действующих правил
-SELECT err_type, COUNT(*) AS contracts
-     , ROUND(SUM(ead_n)/1000000000.0, 2) AS ead_bln
-FROM (
-  SELECT ead_n, CASE
-    WHEN afr IS NULL                                  THEN 'F. без эталона'
-    WHEN cur = afr                                    THEN 'OK'
-    WHEN cur IN ('DISASS','RELATE','CORINV','Individual loans')
-                                                      THEN 'A. флаг вместо продукта'
-    WHEN cur IN ('RETEST','RETCAR','RETCON')
-     AND afr IN ('RETEST','RETCAR','RETCON')          THEN 'B. критерий розницы'
-    WHEN cur IN ('CORLAR','CORMED','RETSML','COREST')
-     AND afr IN ('CORLAR','CORMED','RETSML','COREST') THEN 'C. размер бизнеса'
-    WHEN cur = 'X'                                    THEN 'E. не классифицирован'
-    ELSE                                                   'D. розница ↔ бизнес'
-  END AS err_type FROM #nst_conf
-) t
-GROUP BY err_type ORDER BY ead_bln DESC;
-
--- 3. Подтверждение Р2 независимо от дерева:
---    эталон постоянен по loan_obj и «плавает» по collateral
-SELECT loan_obj_n, COALESCE(collateral_n,-1) AS collateral_n, afr
-     , COUNT(*) AS contracts
-FROM #nst_conf
-WHERE COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-  AND afr IS NOT NULL
-GROUP BY loan_obj_n, COALESCE(collateral_n,-1), afr
-HAVING COUNT(*) >= 10
-ORDER BY loan_obj_n, collateral_n, contracts DESC;
-
--- 4. Фактические доли согласия ent_type — цифра для пояснительной записки (Р3)
-SELECT ent_type_n, afr, COUNT(*) AS contracts
-     , ROUND(100.0*COUNT(*) / SUM(COUNT(*)) OVER (PARTITION BY ent_type_n), 1) AS pct
-FROM #nst_conf WHERE afr IS NOT NULL
-GROUP BY ent_type_n, afr ORDER BY ent_type_n, contracts DESC;
-
-DROP TABLE #nst_conf;
-```
-
-### Д4. Куда эталон девает ИП — решает Г5 и тип G
-
-Ключевой разрез: `debtor_se = 1` (ИП) в связке с назначением займа.
-
-```sql
-SELECT
-      CASE WHEN COALESCE(TRY_CAST(b.debtor_se AS int), 0) = 1
-           THEN 'ИП' ELSE 'не ИП' END                        AS ip
-    , TRY_CAST(b.debtor_type AS int)                         AS debtor_type_n
-    , TRY_CAST(b.ent_type    AS int)                         AS ent_type_n
-    , TRY_CAST(b.loan_obj    AS int)                         AS loan_obj_n
-    , s.segment_afr
-    , COUNT(*)                                               AS contracts
-    , ROUND(SUM(COALESCE(TRY_CAST(b.ead AS float), 0)) / 1000000.0, 1) AS ead_mln
-FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]        AS b
-LEFT JOIN  [personal_tables].[dbo].[RA_NST_segment_AQR2025]  AS s
-       ON  s.loan_id_kr = b.loan_id_kr
-WHERE b.is_del = '0'
-  AND s.segment_afr IS NOT NULL
-  AND COALESCE(TRY_CAST(b.debtor_se AS int), 0) = 1          -- только ИП
-GROUP BY CASE WHEN COALESCE(TRY_CAST(b.debtor_se AS int), 0) = 1
-              THEN 'ИП' ELSE 'не ИП' END
-       , TRY_CAST(b.debtor_type AS int)
-       , TRY_CAST(b.ent_type    AS int)
-       , TRY_CAST(b.loan_obj    AS int)
-       , s.segment_afr
-ORDER BY loan_obj_n, contracts DESC
-OPTION (MAXDOP 1);
-```
-
-**Как читать — три исхода, каждый даёт своё правило:**
-
-| Что видно в результате | Вывод | Что делать с С1 |
-|---|---|---|
-| ИП с `loan_obj = 8` → `RETCON`, с `loan_obj = 6` → `RETCAR` | **Г5 верна**: решает назначение | розничная ветка перестаёт требовать `debtor_se = 0`; ИП с розничным назначением идёт в розницу, с прочим — в `RETSML` |
-| ИП при любом `loan_obj` → `RETSML` | **Г5 неверна**: решает статус заёмщика | С1 не менять, текущее поведение верно; тип G закрыть как несуществующий |
-| Разделение есть, но не по `loan_obj` | правило иное | искать признак в разрезе, не пре­допределяя |
-
-Осторожно: `loan_obj` для ИП может использовать коды, которых нет у физлиц
-(в данных заполнено 7 кодов из 11). Прежде чем писать `ELSE 'RETCON'`,
-посмотреть, какие коды у ИП вообще встречаются — иначе оборотка с редким
-кодом уедет в потребительские.
+Сверял скрипт с `personal_tables` — подачей банка до проверки АФР. Дал
+99,99 % и три ложных вывода. Полностью заменён на **Д6**, который меряет
+то же самое против `_ot_AFR`. Текст запроса — в истории git, коммит `0c75c13`.
 
 ### Д5. Аудит эталона АФР — прогнать первым
 
@@ -1329,22 +1225,17 @@ DROP TABLE #nst_afr;
 
 ### С1. Сегментация 2025 Q4 — итоговый скрипт
 
-Редакция от 24.08.2026 **после** прогона Д0–Д3. Это слой 1 — первичная
-сегментация AQR, воспроизводящая `segment_afr` на 99,99 %. Порядок веток
-менять нельзя без повторного прогона Д3 (Р6).
+Редакция после Д5–Д7. Правила выведены из эталона АФР, а не из Таблицы 4.
 
-Три оговорки к скрипту:
+**Что изменилось против прежней версии:**
 
-1. **Порог индивидуальности оставлен как `>=`** — байт в байт с проверенной
-   редакцией. Методруководство говорит «**превышает** 0,2 %», то есть строго
-   больше. Разница затрагивает только заёмщиков с задолженностью ровно
-   в порог; поменять на `>` можно, но через Д3, а не молча (О13).
-2. **ИП в розницу не попадает** — ветки требуют `debtor_se = 0`. Верно это
-   или нет, покажет Д4 (гипотеза Г5), до тех пор поведение сохраняется.
-3. **`B1B` в периметр индивидуальных не включён.** Д2 показал там 27 БИН
-   и 3,67 млрд EAD. Агрегат `zadol_borrower` считается по одной таблице,
-   и чтобы охватить обе, нужен `UNION` до оконной функции. Это изменение
-   слоя 1 — сначала Д3, потом внедрение.
+| Было | Стало | Основание |
+|---|---|---|
+| `RETEST` по `portfolio IN ('Mortgage')` | по `loan_obj = 1` | 3я.2, сходится до единиц |
+| `RETCAR`/`RETCON` по `collateral` | без изменений — **верно** | 3я.2 |
+| `Individual loans`, `RELATE`, `DISASS`, `CORINV` как сегменты | колонки-флаги | 3я.1, у АФР их нет |
+| `ИП` не попадает в розницу | без изменений — **верно** | 3я.4 |
+| `COREST` по `loan_obj IN (1,2,3)` | добавлен код `11` | 3я.4 |
 
 ```sql
 SET NOCOUNT ON;
@@ -1377,77 +1268,83 @@ WITH b1a AS (
         , TRY_CAST(n.f_inv       AS int) AS f_inv_n
         , CASE WHEN a.bin IS NOT NULL THEN 1 ELSE 0 END AS in_b2a
     FROM       [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4]         AS n
-    LEFT JOIN  [personal_tables].[dbo].[RA_NST_B2A_AQR2026] AS a
+    LEFT JOIN  [personal_tables].[dbo].[RA_NST_B2A_AQR2026]       AS a
            ON  a.bin = n.iin_bin
     WHERE n.is_del = '0'
 ),
 b1a_agg AS (
-    SELECT *, SUM(zadol) OVER (PARTITION BY iin_bin) AS zadol_borrower FROM b1a
+    SELECT *, SUM(zadol) OVER (PARTITION BY iin_bin) AS zadol_borrower
+    FROM b1a
 )
 SELECT *
     , CASE WHEN stage_b = '4'             THEN '3'
            WHEN stage_b = '1111111111111' THEN '1'
            ELSE stage_b END AS stage
 
-    -- СЛОЙ 1: первичная сегментация AQR. Порядок веток менять нельзя —
-    -- эта редакция даёт 99,99 % совпадения с segment_afr (Р6).
+    /* ---- СЕГМЕНТ ДЛЯ ШАБЛОНА: только семь значений АФР ----------------
+       Веток Individual loans / RELATE / DISASS / CORINV здесь НЕТ.
+       У АФР таких сегментов не существует (3я.1); признаки вынесены
+       в колонки ниже и на сегмент не влияют.                            */
     , CASE
-        WHEN entity = 'EUB1'                  THEN 'DISASS'
-        WHEN lsboo  = 1                       THEN 'RELATE'
-        -- CORGOV: ветки нет, нужен справочник БИН госхолдингов (О4)
-        WHEN COALESCE(f_inv_n, 0) = 1         THEN 'CORINV'
-
-        -- индивидуальные: список B2A либо порог 0,2 % СК
-        WHEN in_b2a = 1                       THEN 'Individual loans'
-        WHEN zadol_borrower >= @capital * @thr_ind
-                                              THEN 'Individual loans'
-
         -- недвижимость выше размера бизнеса (оговорка Таблицы 4)
         WHEN (debtor_type_n = 1 OR (debtor_type_n = 0 AND debtor_se_n = 1))
-             AND ent_type_n  IN (1, 2, 3)
-             AND loan_obj_n  IN (1, 2, 3)
-             AND loan_purp_n IN (1, 2, 3, 4, 5, 8)
-                                              THEN 'COREST'
+             AND ent_type_n IN (1, 2, 3)
+             AND loan_obj_n IN (1, 2, 3, 11)      THEN 'COREST'
 
-        -- RETLAR (крупные займы ФЛ > 200 млн) НЕ реализуется:
-        -- в шаблоне НСТ сегментация убрана, и договоров свыше порога нет (3.4)
+        -- розница: физлицо, не ИП. Правило из 3я.2, сходится до единиц
+        WHEN COALESCE(debtor_type_n, 0) = 0
+             AND COALESCE(debtor_se_n, 0) = 0
+             AND ead_n <= 200000000
+          THEN CASE
+                 WHEN loan_obj_n = 1              THEN 'RETEST'
+                 WHEN COALESCE(collateral_n,0) = 1 THEN 'RETCAR'
+                 ELSE                                  'RETCON'
+               END
 
-        WHEN ent_type_n = 1                   THEN 'CORLAR'
-        WHEN ent_type_n = 2                   THEN 'CORMED'
-        WHEN ent_type_n = 3                   THEN 'RETSML'
-
-        -- розница: залог участвует в RETCAR/RETCON, но НЕ в RETEST.
-        -- Проверено: loan_obj=1 идёт в RETEST при обоих значениях залога (3.2)
-        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-             AND ead_n <= 200000000
-             AND portfolio IN ('Mortgage')    THEN 'RETEST'
-        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-             AND ead_n <= 200000000
-             AND COALESCE(collateral_n,0) = 1 THEN 'RETCAR'
-        WHEN COALESCE(debtor_type_n,0) = 0 AND COALESCE(debtor_se_n,0) = 0
-             AND ead_n <= 200000000
-             AND COALESCE(collateral_n,0) = 0 THEN 'RETCON'
+        -- размер бизнеса. Согласие с АФР 58 / 57 / 72 % — см. 3я.3 и О2
+        WHEN ent_type_n = 1                       THEN 'CORLAR'
+        WHEN ent_type_n = 2                       THEN 'CORMED'
+        WHEN ent_type_n = 3                       THEN 'RETSML'
         ELSE 'X'
-      END AS segment_afr
+      END AS segment_nst
 
-    -- СЛОЙ 2 (Таблица 3) НЕ реализован: Individual loans, DISASS
-    -- и господдержка должны раскладываться по продуктовым портфелям (О12).
-    -- Признаки ниже нужны, чтобы слой 2 можно было построить поверх,
-    -- не пересчитывая слой 1.
+    /* ---- ПРИЗНАКИ: нужны для ЧПД и для сверки, сегмент не заменяют --- */
+    , CASE WHEN entity = 'EUB1'          THEN 1 ELSE 0 END AS flag_disass
+    , CASE WHEN lsboo  = 1               THEN 1 ELSE 0 END AS flag_relate
+    , CASE WHEN COALESCE(f_inv_n,0) = 1  THEN 1 ELSE 0 END AS flag_corinv
+    , CASE WHEN in_b2a = 1
+             OR zadol_borrower >= @capital * @thr_ind
+           THEN 1 ELSE 0 END                              AS flag_individual
     , CASE WHEN in_b2a = 1                            THEN 'B2A'
            WHEN zadol_borrower >= @capital * @thr_ind THEN 'threshold'
            ELSE NULL END                              AS individual_basis
-    , zadol_borrower                                  AS zadol_borrower_out
+    , zadol_borrower
 FROM b1a_agg
 OPTION (MAXDOP 1);
 ```
 
-Для `B1B` тот же блок с двумя отличиями: таблица
-`[CL_PORTFOLIO].[dbo].[AQR2026_B1B_2025_Q4]`, а `amount` и `zadol` считаются
-как `correction + penalty + disc_prem` (переводные — это изменения,
-а не амортизированная стоимость).
+**Контроль перед подачей — прогнать те же правила на 2024 Q4 против эталона.**
+Ожидание: совпадение выше 99,69 % (нынешний уровень). Если ниже — правки
+неверны, разбирать по матрице Д6.2.
 
----
+```sql
+-- подставить AQR2025_B1A_2024_Q4, capital = 461235157000,
+-- RA_NST_B2A_AQR2025_11082025, соединить с _ot_AFR по LOAN_ID_KR
+-- и посчитать долю segment_nst = SEGMENT
+```
+
+**Чего скрипт ещё не делает:**
+
+- `CORGOV` — нет справочника БИН госхолдингов (О4). У АФР сегмента нет,
+  но это может значить и «нет таких заёмщиков», и «АФР их не выделяет».
+- Признак господдержки (п. 242) — нет перечня (О8), нужен для ЧПД.
+- Размер бизнеса опирается на `ent_type` с известным расхождением
+  28–43 % (3я.3). Пока не получен снимок РСП (О2), это идёт
+  в пояснительную записку явным пунктом.
+- `B1B` не охвачен: 27 БИН и 3,67 млрд EAD индивидуальных лежат там.
+  Для `B1B` тот же блок, но `amount` и `zadol` считаются как
+  `correction + penalty + disc_prem`.
+
 
 ## 11. Порядок работ
 
