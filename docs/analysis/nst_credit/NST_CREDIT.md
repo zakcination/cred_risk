@@ -1799,6 +1799,141 @@ DROP TABLE #nst_v1;
 Запрос 1.5 важнее остальных: он ловит регресс. Если новые правила что-то
 чинят, но что-то и ломают, средняя цифра это скроет, а 1.5 — нет.
 
+### Т1. Выгрузка для дерева: размер бизнеса
+
+**Цель.** Предсказать сегмент АФР среди `CORLAR` / `CORMED` / `RETSML` /
+`COREST` — 4 130 договоров, на которых `ent_type` ошибается в 1 227 случаях.
+
+**Что изменено против прошлой попытки.** Прошлое дерево гоняло признаки
+**договора** и на корпоративных сегментах не выделило ни одного правила
+с чистотой ≥ 80 %. При этом разбор перераспределения в том же прогоне нашёл
+работающие правила на **агрегатах по заёмщику**: «договоров у заёмщика
+> 122,5 → `CORMED`», 274 из 274. Размер предпринимательства — свойство
+заёмщика, и признаки надо строить на его уровне.
+
+**Что исключено и почему:**
+
+| Исключено | Причина |
+|---|---|
+| `lgd`, `pd_*`, `provisions`, `prov_rate`, `rwa_*`, `ccf`, `nps_*` | калиброваны по сегменту — дерево выучит метрику вместо правила |
+| `name`, `contract_number`, `account_no`, `iin_bin` | ПДн; из `name` берутся только производные признаки |
+| `segment_afr`, `segment_eub` | прежние сегментации, прямая утечка |
+
+`kateg_vzveshivania` **оставлен**: в одиночку он не разделяет (Д9),
+но в связке с другими может.
+
+```sql
+SET NOCOUNT ON;
+
+WITH src AS (
+    SELECT
+          b.loan_id_kr, b.iin_bin
+        , TRY_CAST(b.ent_type   AS int)   AS ent_type_n
+        , TRY_CAST(b.loan_obj   AS int)   AS loan_obj_n
+        , TRY_CAST(b.loan_purp  AS int)   AS loan_purp_n
+        , TRY_CAST(b.loan_type  AS int)   AS loan_type_n
+        , TRY_CAST(b.collateral AS int)   AS collateral_n
+        , TRY_CAST(b.debtor_type AS int)  AS debtor_type_n
+        , TRY_CAST(b.debtor_se  AS int)   AS debtor_se_n
+        , TRY_CAST(b.residency  AS int)   AS residency_n
+        , TRY_CAST(b.rate_type  AS int)   AS rate_type_n
+        , TRY_CAST(b.ccf_cat    AS int)   AS ccf_cat_n
+        , TRY_CAST(b.stage_b    AS int)   AS stage_n
+        , TRY_CAST(b.nom_rate   AS float) AS nom_rate_n
+        , TRY_CAST(b.ltv        AS float) AS ltv_n
+        , TRY_CAST(b.dpd        AS float) AS dpd_n
+        , TRY_CAST(b.restr_count AS float) AS restr_count_n
+        , TRY_CAST(b.kdn        AS float) AS kdn_n
+        , COALESCE(TRY_CAST(b.ead AS float), 0)         AS ead_n
+        , COALESCE(TRY_CAST(b.loan_amount AS float), 0) AS loan_amount_n
+        , COALESCE(TRY_CAST(b.offbal AS float), 0)      AS offbal_n
+        , COALESCE(TRY_CAST(b.od AS float), 0)
+        + COALESCE(TRY_CAST(b.od_del AS float), 0)
+        + COALESCE(TRY_CAST(b.interest AS float), 0)
+        + COALESCE(TRY_CAST(b.interest_del AS float), 0)
+        + COALESCE(TRY_CAST(b.correction AS float), 0)
+        + COALESCE(TRY_CAST(b.disc_prem AS float), 0)
+        + COALESCE(TRY_CAST(b.penalty AS float), 0)     AS zadol
+        , b.curr, b.entity, b.fil_code, b.kod_podrazdelenia
+        , b.source_system, b.kateg_vzveshivania, b.f_inv, b.lsboo
+        , LEFT(COALESCE(b.oked, ''), 2)                 AS oked_razdel
+        , TRY_CAST(b.loan_start_date AS date)           AS d_start
+        , TRY_CAST(b.loan_end_date   AS date)           AS d_end
+        -- признаки из наименования: ПДн не выгружаются, только форма и длина
+        , CASE
+            WHEN b.name LIKE '%АО %'  OR b.name LIKE '%"АО"%'  THEN 'AO'
+            WHEN b.name LIKE '%ТОО%'  OR b.name LIKE '%ЖШС%'   THEN 'TOO'
+            WHEN b.name LIKE '%ИП %'  OR b.name LIKE '%ЖК %'   THEN 'IP'
+            WHEN b.name LIKE '%ПК %'  OR b.name LIKE '%КХ %'   THEN 'PK_KH'
+            WHEN b.name LIKE '%ФИЛИАЛ%'                        THEN 'FILIAL'
+            ELSE 'OTHER'
+          END                                           AS org_form
+        , CASE WHEN b.name LIKE '%ХОЛДИНГ%' OR b.name LIKE '%КОРПОРАЦ%'
+                 OR b.name LIKE '%ГРУПП%'   OR b.name LIKE '%GROUP%'
+                 OR b.name LIKE '%НАЦИОНАЛЬН%' THEN 1 ELSE 0 END AS name_big_token
+        , LEN(COALESCE(b.name, ''))                     AS name_len
+        , s.SEGMENT                                     AS target
+    FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]           AS b
+    INNER JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR] AS s
+           ON  s.LOAN_ID_KR = b.loan_id_kr
+    WHERE b.is_del = '0'
+      AND s.SEGMENT IN ('CORLAR','CORMED','RETSML','COREST')
+)
+SELECT
+      DENSE_RANK() OVER (ORDER BY iin_bin)              AS borrower_id
+    , loan_id_kr
+    , target
+    -- признаки договора
+    , ent_type_n, loan_obj_n, loan_purp_n, loan_type_n, collateral_n
+    , debtor_type_n, debtor_se_n, residency_n, rate_type_n, ccf_cat_n, stage_n
+    , nom_rate_n, ltv_n, dpd_n, restr_count_n, kdn_n
+    , ead_n, loan_amount_n, offbal_n, zadol
+    , curr, entity, fil_code, kod_podrazdelenia, source_system
+    , kateg_vzveshivania, f_inv, lsboo, oked_razdel
+    , org_form, name_big_token, name_len
+    , DATEDIFF(month, d_start, d_end) / 12.0            AS srok_let
+    , DATEDIFF(month, d_start, '2024-12-31') / 12.0     AS vozrast_let
+    -- АГРЕГАТЫ ПО ЗАЁМЩИКУ — то, чего не было в прошлой попытке
+    , COUNT(*)          OVER (PARTITION BY iin_bin)     AS b_contracts
+    , SUM(zadol)        OVER (PARTITION BY iin_bin)     AS b_zadol
+    , SUM(ead_n)        OVER (PARTITION BY iin_bin)     AS b_ead
+    , SUM(offbal_n)     OVER (PARTITION BY iin_bin)     AS b_offbal
+    , MAX(loan_amount_n) OVER (PARTITION BY iin_bin)    AS b_max_loan
+    , AVG(nom_rate_n)   OVER (PARTITION BY iin_bin)     AS b_avg_rate
+    , MIN(nom_rate_n)   OVER (PARTITION BY iin_bin)     AS b_min_rate
+    , COUNT(DISTINCT curr)      OVER (PARTITION BY iin_bin) AS b_n_curr
+    , COUNT(DISTINCT fil_code)  OVER (PARTITION BY iin_bin) AS b_n_fil
+    , COUNT(DISTINCT loan_obj_n) OVER (PARTITION BY iin_bin) AS b_n_obj
+    , MAX(CASE WHEN collateral_n = 1 THEN 1 ELSE 0 END)
+        OVER (PARTITION BY iin_bin)                     AS b_has_collateral
+FROM src
+OPTION (MAXDOP 1);
+```
+
+Выгрузить в CSV, разделитель `;`, кодировка UTF-8, имя `size_for_tree.csv`.
+Ожидается **4 130 строк**.
+
+**Контроль перед обучением — одинаков ли сегмент у всех займов заёмщика:**
+
+```sql
+SELECT COUNT(*) AS borrowers_with_mixed_segment
+FROM (
+    SELECT b.iin_bin
+    FROM       [CL_PORTFOLIO].[dbo].[AQR2025_B1A_2024_Q4]           AS b
+    INNER JOIN [CL_PORTFOLIO].[dbo].[RA_NST_segment_AQR2025_ot_AFR] AS s
+           ON  s.LOAN_ID_KR = b.loan_id_kr
+    WHERE b.is_del = '0'
+      AND s.SEGMENT IN ('CORLAR','CORMED','RETSML','COREST')
+    GROUP BY b.iin_bin
+    HAVING COUNT(DISTINCT s.SEGMENT) > 1
+) t;
+```
+
+Если ноль — задача **на уровне заёмщика**, и обучать надо по заёмщикам,
+а не по договорам, иначе крупный заёмщик со 122 договорами перевесит
+122 мелких. Если не ноль — сегмент зависит и от договора, разбираться,
+от чего именно.
+
 ### С1. Сегментация 2025 Q4 — итоговый скрипт
 
 Редакция после Д5–Д7. Правила выведены из эталона АФР, а не из Таблицы 4.
