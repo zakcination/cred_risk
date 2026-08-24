@@ -1883,34 +1883,48 @@ WITH src AS (
       AND (s.SEGMENT IN ('CORLAR','CORMED','RETSML','COREST')
            OR TRY_CAST(b.ent_type AS int) IN (1,2,3))
 )
+/* Агрегаты по заёмщику вынесены в отдельный CTE.
+   COUNT(DISTINCT ...) OVER (...) SQL Server не поддерживает:
+   Msg 10759 «Use of DISTINCT is not allowed with the OVER clause».
+   GROUP BY + соединение делает то же самое и читается лучше.            */
+bagg AS (
+    SELECT
+          iin_bin
+        , COUNT(*)                   AS b_contracts
+        , SUM(zadol)                 AS b_zadol
+        , SUM(ead_n)                 AS b_ead
+        , SUM(offbal_n)              AS b_offbal
+        , MAX(loan_amount_n)         AS b_max_loan
+        , AVG(nom_rate_n)            AS b_avg_rate
+        , MIN(nom_rate_n)            AS b_min_rate
+        , COUNT(DISTINCT curr)       AS b_n_curr
+        , COUNT(DISTINCT fil_code)   AS b_n_fil
+        , COUNT(DISTINCT loan_obj_n) AS b_n_obj
+        , MAX(CASE WHEN collateral_n = 1 THEN 1 ELSE 0 END) AS b_has_collateral
+    FROM src
+    GROUP BY iin_bin
+)
 SELECT
-      DENSE_RANK() OVER (ORDER BY iin_bin)              AS borrower_id
-    , loan_id_kr
-    , target
+      DENSE_RANK() OVER (ORDER BY s.iin_bin)            AS borrower_id
+    , s.loan_id_kr
+    , s.target
     -- признаки договора
-    , ent_type_n, loan_obj_n, loan_purp_n, loan_type_n, collateral_n
-    , debtor_type_n, debtor_se_n, residency_n, rate_type_n, ccf_cat_n, stage_n
-    , nom_rate_n, ltv_n, dpd_n, restr_count_n, kdn_n
-    , ead_n, loan_amount_n, offbal_n, zadol
-    , curr, entity, fil_code, kod_podrazdelenia, source_system
-    , kateg_vzveshivania, f_inv, lsboo, oked_razdel
-    , org_form, name_big_token, name_len
-    , DATEDIFF(month, d_start, d_end) / 12.0            AS srok_let
-    , DATEDIFF(month, d_start, '2024-12-31') / 12.0     AS vozrast_let
+    , s.ent_type_n, s.loan_obj_n, s.loan_purp_n, s.loan_type_n, s.collateral_n
+    , s.debtor_type_n, s.debtor_se_n, s.residency_n, s.rate_type_n
+    , s.ccf_cat_n, s.stage_n
+    , s.nom_rate_n, s.ltv_n, s.dpd_n, s.restr_count_n, s.kdn_n
+    , s.ead_n, s.loan_amount_n, s.offbal_n, s.zadol
+    , s.curr, s.entity, s.fil_code, s.kod_podrazdelenia, s.source_system
+    , s.kateg_vzveshivania, s.f_inv, s.lsboo, s.oked_razdel
+    , s.org_form, s.name_big_token, s.name_len
+    , DATEDIFF(month, s.d_start, s.d_end) / 12.0        AS srok_let
+    , DATEDIFF(month, s.d_start, '2024-12-31') / 12.0   AS vozrast_let
     -- АГРЕГАТЫ ПО ЗАЁМЩИКУ — то, чего не было в прошлой попытке
-    , COUNT(*)          OVER (PARTITION BY iin_bin)     AS b_contracts
-    , SUM(zadol)        OVER (PARTITION BY iin_bin)     AS b_zadol
-    , SUM(ead_n)        OVER (PARTITION BY iin_bin)     AS b_ead
-    , SUM(offbal_n)     OVER (PARTITION BY iin_bin)     AS b_offbal
-    , MAX(loan_amount_n) OVER (PARTITION BY iin_bin)    AS b_max_loan
-    , AVG(nom_rate_n)   OVER (PARTITION BY iin_bin)     AS b_avg_rate
-    , MIN(nom_rate_n)   OVER (PARTITION BY iin_bin)     AS b_min_rate
-    , COUNT(DISTINCT curr)      OVER (PARTITION BY iin_bin) AS b_n_curr
-    , COUNT(DISTINCT fil_code)  OVER (PARTITION BY iin_bin) AS b_n_fil
-    , COUNT(DISTINCT loan_obj_n) OVER (PARTITION BY iin_bin) AS b_n_obj
-    , MAX(CASE WHEN collateral_n = 1 THEN 1 ELSE 0 END)
-        OVER (PARTITION BY iin_bin)                     AS b_has_collateral
-FROM src
+    , g.b_contracts, g.b_zadol, g.b_ead, g.b_offbal, g.b_max_loan
+    , g.b_avg_rate, g.b_min_rate, g.b_n_curr, g.b_n_fil, g.b_n_obj
+    , g.b_has_collateral
+FROM      src  AS s
+JOIN      bagg AS g ON g.iin_bin = s.iin_bin
 OPTION (MAXDOP 1);
 ```
 
