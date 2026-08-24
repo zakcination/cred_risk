@@ -62,8 +62,10 @@ SELECT
     WHEN n.LSBOO = 1 THEN 'RELATE'
     WHEN COALESCE(CAST(n.f_inv AS FLOAT), 0) = 1 THEN 'CORINV'
     WHEN a.bin IS NOT NULL THEN 'Individual loans (B2A)'
-    WHEN SUM(COALESCE(CAST(n.od + n.od_del + n.interest + n.interest_del
-                           + n.correction + n.disc_prem + n.penalty AS FLOAT), 0))
+    WHEN SUM(COALESCE(CAST(n.od AS FLOAT), 0) + COALESCE(CAST(n.od_del AS FLOAT), 0)
+                     + COALESCE(CAST(n.interest AS FLOAT), 0) + COALESCE(CAST(n.interest_del AS FLOAT), 0)
+                     + COALESCE(CAST(n.correction AS FLOAT), 0) + COALESCE(CAST(n.disc_prem AS FLOAT), 0)
+                     + COALESCE(CAST(n.penalty AS FLOAT), 0))
          OVER (PARTITION BY n.iin_bin) > @capital_nst2026 * @threshold_individual
     THEN 'Individual loans (threshold)'
     WHEN (COALESCE(CAST(n.debtor_type AS FLOAT), 0) = 1
@@ -116,8 +118,10 @@ SELECT
     WHEN n.LSBOO = 1 THEN 'RELATE'
     WHEN COALESCE(CAST(n.f_inv AS FLOAT), 0) = 1 THEN 'CORINV'
     WHEN a.bin IS NOT NULL THEN 'Individual loans (B2A)'
-    WHEN SUM(COALESCE(CAST(n.od + n.od_del + n.interest + n.interest_del
-                           + n.correction + n.disc_prem + n.penalty AS FLOAT), 0))
+    WHEN SUM(COALESCE(CAST(n.od AS FLOAT), 0) + COALESCE(CAST(n.od_del AS FLOAT), 0)
+                     + COALESCE(CAST(n.interest AS FLOAT), 0) + COALESCE(CAST(n.interest_del AS FLOAT), 0)
+                     + COALESCE(CAST(n.correction AS FLOAT), 0) + COALESCE(CAST(n.disc_prem AS FLOAT), 0)
+                     + COALESCE(CAST(n.penalty AS FLOAT), 0))
          OVER (PARTITION BY n.iin_bin) > @capital_nst2026 * @threshold_individual
     THEN 'Individual loans (threshold)'
     WHEN (COALESCE(CAST(n.debtor_type AS FLOAT), 0) = 1
@@ -143,8 +147,10 @@ HAVING NOT (
   -- Exclude rows that ARE correctly classified as Individual loans
   n.ENTITY = 'EUB1' OR n.LSBOO = 1 OR COALESCE(CAST(n.f_inv AS FLOAT), 0) = 1
   OR a.bin IS NOT NULL
-  OR (SUM(COALESCE(CAST(n.od + n.od_del + n.interest + n.interest_del
-                       + n.correction + n.disc_prem + n.penalty AS FLOAT), 0)) > @capital_nst2026 * @threshold_individual)
+  OR (SUM(COALESCE(CAST(n.od AS FLOAT), 0) + COALESCE(CAST(n.od_del AS FLOAT), 0)
+                   + COALESCE(CAST(n.interest AS FLOAT), 0) + COALESCE(CAST(n.interest_del AS FLOAT), 0)
+                   + COALESCE(CAST(n.correction AS FLOAT), 0) + COALESCE(CAST(n.disc_prem AS FLOAT), 0)
+                   + COALESCE(CAST(n.penalty AS FLOAT), 0)) > @capital_nst2026 * @threshold_individual)
 )
 ORDER BY s.row_num;
 
