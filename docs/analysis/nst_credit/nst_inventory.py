@@ -28,17 +28,21 @@ r"""
   python nst_inventory.py "R:\!!!!!НСТ2025" --jobs 16    # потоков на шаге 2
   python nst_inventory.py "R:\!!!!!НСТ2025" --quiet      # без живого прогресса
 
-  --probe: прицельно вскрыть файл или папку — полная шапка ВСЕХ листов
-  плюс различные значения узких колонок. Так находится перечень значений
-  измерения «Портфель в шаблоне НСТ»:
+  --probe: прицельно вскрыть файл или папку. Результат — ТРИ CSV в --out:
+    probe_columns.csv      колонка, сколько различных значений, сколько выгружено
+    probe_values.csv       длинный формат: файл; лист; колонка; значение
+    probe_header_grid.csv  сырая сетка верхних строк — читать многоуровневую
+                           и объединённую шапку как есть, без догадок скрипта
+  Так находится перечень значений измерения «Портфель в шаблоне НСТ»:
   python nst_inventory.py --probe "R:\!!!!!НСТ2025\Финальный шаблон и документы по НСТ2024"
   python nst_inventory.py --probe "R:\...\2025_КР расчет провизий_V5 (факт...).xlsx"
 
   --only «подстрока»  — шаг 2 только по файлам, чей путь её содержит
-  --full              — вместе с --probe: печатать значения ПОЛНОСТЬЮ,
-                        по одному в строку. Без него список режется
-                        на 110 символах, и перечень из 31 значения
-                        не виден — ради чего probe и запускался.
+  --out ПАПКА         — куда выгрузить probe (по умолчанию probe_out/).
+                        --probe ВСЕГДА пишет три CSV, на экран идёт
+                        только сводка: терминал такой объём не держит,
+                        перечни режутся, верх уходит за буфер.
+  --full              — дополнительно вывалить все значения на экран
   --col «подстрока»   — вместе с --probe: только колонки с таким именем
   --distinct N        — поднять порог «это ещё измерение» (по умолчанию 50)
   --sheet «подстрока» — вместе с --probe: только листы с таким именем.
@@ -687,12 +691,13 @@ def probe_xlsx(path):
                               for c in row]
                 if i + 1 >= PROBE_HEAD_SCAN:
                     break
-            vals, over, nrows = defaultdict(set), set(), 0
-            # Строку шапки пропускаем ПО ИНДЕКСУ: `row is header` сравнивает
-            # кортеж со списком и всегда ложно, из-за чего сама шапка
-            # попадала в перечень значений и давала 32 вместо 31.
+            vals, over, nrows = defaultdict(Counter), set(), 0
+            # Пропускаем ВСЁ, что выше шапки включительно. Данные начинаются
+            # ниже, а сверху идут технические строки: в шаблоне НСТ это
+            # нумерация «1, 2, 3…», и её значения попадали в перечень
+            # как полноправные — «Портфель» показывал 12 вместо 11.
             for j, row in enumerate(list(head_buf) + list(rows)):
-                if j == head_i:
+                if j <= head_i:
                     continue
                 nrows += 1
                 for i, c in enumerate(row):
@@ -701,70 +706,144 @@ def probe_xlsx(path):
                     s = str(c).strip()
                     if not s:
                         continue
-                    vals[i].add(s)
+                    vals[i][s] += 1
                     if len(vals[i]) > PROBE_DISTINCT:
                         over.add(i)
-                        vals[i] = set()          # не держим ПДн в памяти
+                        vals[i] = Counter()      # не держим ПДн в памяти
             cols = []
             for i, name in enumerate(header or []):
                 if not name and i not in vals and i not in over:
                     continue
                 if i in over:
-                    cols.append({"col": i + 1, "name": name,
-                                 "raznyh": f">{PROBE_DISTINCT}", "znacheniya": ""})
+                    cols.append({"col": i + 1, "name": name, "raznyh": -1,
+                                 "bolshe_poroga": 1, "vals": []})
                 else:
-                    v = sorted(vals.get(i, set()))
+                    cnt = vals.get(i, Counter())
+                    # частота: значение измерения встречается сотни раз,
+                    # затесавшийся мусор из шапки — один. Видно без догадок.
+                    v = sorted(cnt.items(), key=lambda kv: (-kv[1], kv[0]))
                     cols.append({"col": i + 1, "name": name, "raznyh": len(v),
-                                 "znacheniya": " | ".join(v)})
+                                 "bolshe_poroga": 0, "vals": v})
+            # Сырая сетка верхних строк: в шаблоне шапка многоуровневая
+            # и объединённая, и единственный честный способ её прочитать —
+            # посмотреть на клетки как есть, а не на догадку скрипта.
+            grid = []
+            for r, row in enumerate(head_buf):
+                for c, v in enumerate(row):
+                    if v is not None and str(v).strip():
+                        grid.append((r + 1, c + 1, str(v).strip()))
             out.append({"sheet": ws.title, "rows_read": nrows,
-                        "header": header or [], "cols": cols})
+                        "header": header or [], "cols": cols,
+                        "head_grid": grid, "head_row": head_i + 1})
     finally:
         wb.close()
     return out
 
 
-def probe(target, quiet=False, sheet_like=None, col_like=None, full=False):
+def probe(target, quiet=False, sheet_like=None, col_like=None, full=False,
+          out_dir="probe_out"):
+    """Вскрыть файл или папку и ВЫГРУЗИТЬ результат в CSV.
+
+    Печать в терминал не годится: на реальном шаблоне вывод — тысячи строк,
+    перечни режутся, а верх прокручивается за пределы буфера. Поэтому
+    основная выдача — три файла, а на экран идёт только сводка."""
     targets = []
     if os.path.isdir(target):
         for dp, dn, fn in os.walk(target):
             targets += [os.path.join(dp, f) for f in fn
                         if os.path.splitext(f)[1].lower() in
                         (".xlsx", ".xlsm", ".xltx") and not f.startswith("~$")]
+        base = target
     else:
         targets = [target]
-    print(f"--probe: файлов к разбору {len(targets)}\n")
+        base = os.path.dirname(target)
+
+    os.makedirs(out_dir, exist_ok=True)
+    cols_rows, val_rows, head_rows, errors = [], [], [], []
+    prog = Progress("probe", total=len(targets), quiet=quiet)
+
     for t in sorted(targets):
-        print("=" * 78)
-        print(os.path.basename(t))
+        rel = os.path.relpath(t, base) if base else os.path.basename(t)
         try:
             sheets = probe_xlsx(t)
         except Exception as e:
-            print(f"  не открылся: {type(e).__name__}: {e}")
+            errors.append((rel, f"{type(e).__name__}: {e}"))
+            prog.tick(note=os.path.basename(t))
             continue
         for sh in sheets:
             if sheet_like and sheet_like.lower() not in sh["sheet"].lower():
                 continue
-            named = [c for c in sh["cols"] if c["name"]]
-            if col_like:
-                named = [c for c in named
-                         if col_like.lower() in c["name"].lower()]
-                if not named:
+            for r, c, v in sh["head_grid"]:
+                head_rows.append({"file": rel, "sheet": sh["sheet"],
+                                  "row": r, "col": c, "value": v,
+                                  "is_header_row": int(r == sh["head_row"])})
+            for cc in sh["cols"]:
+                if not cc["name"]:
                     continue
-            print(f"\n  лист «{sh['sheet']}» — строк прочитано {sh['rows_read']}, "
-                  f"колонок с именем {len(named)}")
-            for c in named:
-                head = f"    [{c['col']:>2}] {c['name'][:45]:<45}"
-                if not c["znacheniya"]:
-                    print(f"{head} ({c['raznyh']})")
-                elif full:
-                    print(f"{head} ({c['raznyh']} различных)")
-                    for v in c["znacheniya"].split(" | "):
-                        print(f"          {v}")
-                else:
-                    print(f"{head} ({c['raznyh']}) {c['znacheniya'][:110]}")
-    print("=" * 78)
-    print("Колонки с числом различных значений > "
-          f"{PROBE_DISTINCT} печатаются только счётчиком: там ПДн, а не измерение.")
+                if col_like and col_like.lower() not in cc["name"].lower():
+                    continue
+                cols_rows.append({"file": rel, "sheet": sh["sheet"],
+                                  "col": cc["col"], "name": cc["name"],
+                                  "rows_read": sh["rows_read"],
+                                  "raznyh": cc["raznyh"],
+                                  "bolshe_poroga": cc["bolshe_poroga"],
+                                  "znacheniy_vygruzheno": len(cc["vals"])})
+                for v, n in cc["vals"]:
+                    val_rows.append({"file": rel, "sheet": sh["sheet"],
+                                     "col": cc["col"], "name": cc["name"],
+                                     "value": v, "vstrechaetsya": n})
+        prog.tick(note=os.path.basename(t))
+    prog.close(f"листов разобрано, колонок {len(cols_rows)}")
+
+    def w(name, rows, cols):
+        path = os.path.join(out_dir, name)
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            wr = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore",
+                                delimiter=";")
+            wr.writeheader()
+            wr.writerows(rows)
+        print(f"  {path}  ({len(rows)} строк)")
+        return path
+
+    print(f"\n--probe: файлов {len(targets)}, выгрузка в {out_dir}/")
+    w("probe_columns.csv", cols_rows,
+      ["file", "sheet", "col", "name", "rows_read", "raznyh",
+       "bolshe_poroga", "znacheniy_vygruzheno"])
+    w("probe_values.csv", val_rows,
+      ["file", "sheet", "col", "name", "value", "vstrechaetsya"])
+    w("probe_header_grid.csv", head_rows,
+      ["file", "sheet", "row", "col", "value", "is_header_row"])
+    if errors:
+        w("probe_errors.csv", [{"file": a, "error": b} for a, b in errors],
+          ["file", "error"])
+
+    print("\nСВОДКА — колонки, похожие на измерение (значений 2..50):")
+    dims = [c for c in cols_rows
+            if not c["bolshe_poroga"] and 2 <= c["raznyh"] <= PROBE_DISTINCT]
+    for c in sorted(dims, key=lambda r: (-r["raznyh"]))[:40]:
+        print(f"  {c['raznyh']:>4} знач.  «{c['sheet'][:22]:<22}» "
+              f"[{c['col']:>3}] {c['name'][:60]}")
+    if not dims:
+        print("  таких нет — либо лист пуст, либо --distinct задан слишком низко")
+
+    print(f"\nВ probe_values.csv у каждого значения стоит vstrechaetsya —")
+    print("  сколько раз оно встретилось. Значение измерения встречается")
+    print("  сотни раз, случайный мусор из шапки — один; видно без догадок.")
+    print(f"\nКолонки с числом различных значений больше {PROBE_DISTINCT} "
+          "выгружены без значений (raznyh = -1, bolshe_poroga = 1):")
+    print("  это признак «не измерение» и одновременно защита ПДн —")
+    print("  колонка с БИН или наименованием в probe_values.csv не попадает.")
+
+    if full:
+        for c in cols_rows:
+            vs = [f'{v["value"]}  ({v["vstrechaetsya"]})' for v in val_rows
+                  if (v["file"], v["sheet"], v["col"]) ==
+                     (c["file"], c["sheet"], c["col"])]
+            if vs:
+                print(f"\n  «{c['sheet']}» [{c['col']}] {c['name']} "
+                      f"({c['raznyh']}):")
+                for v in vs:
+                    print(f"      {v}")
 
 
 def main():
@@ -780,8 +859,12 @@ def main():
         if "--distinct" in sys.argv:
             globals()["PROBE_DISTINCT"] = int(
                 sys.argv[sys.argv.index("--distinct") + 1])
+        out_dir = "probe_out"
+        if "--out" in sys.argv:
+            out_dir = sys.argv[sys.argv.index("--out") + 1]
         probe(sys.argv[sys.argv.index("--probe") + 1], sheet_like=sheet_like,
-              col_like=col_like, full="--full" in sys.argv)
+              col_like=col_like, full="--full" in sys.argv, out_dir=out_dir,
+              quiet="--quiet" in sys.argv or not sys.stderr.isatty())
         return
     root = os.path.abspath(sys.argv[1])
     fast = "--fast" in sys.argv
