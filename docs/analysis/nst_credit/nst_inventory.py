@@ -34,24 +34,32 @@ r"""
   python nst_inventory.py --probe "R:\!!!!!НСТ2025\Финальный шаблон и документы по НСТ2024"
   python nst_inventory.py --probe "R:\...\2025_КР расчет провизий_V5 (факт...).xlsx"
 
+  --only «подстрока» — шаг 2 только по файлам, чей путь её содержит
+
 СКОРОСТЬ — где она берётся и где её нет
   шаг 1  os.scandir вместо os.walk + os.stat. На Windows DirEntry.stat()
          берётся из листинга каталога и НЕ делает отдельного обращения
          к SMB. Это убирает половину сетевых round-trip'ов без потоков.
-  шаг 2  пул потоков. Сетевое чтение GIL отпускает, разбор XML — нет.
-         Замер на 221 файле с имитацией 25 мс латентности на открытие:
+  шаг 2  ГЛАВНОЕ — не потоки, а то, что шапка читается без разбора файла.
+         .xlsx открывается как zip: из листа берутся первые строки,
+         из таблицы общих строк — только те, на которые они ссылаются,
+         размер листа — из <dimension>. Стоимость перестаёт зависеть
+         от размера файла:
 
-             потоков   1      4      8     16     32
-             секунд  6,74   1,83   1,45   1,21   1,17
-             к базе  1,0x   3,7x   4,6x   5,6x   5,8x
+             файл 20,8 МБ, 120 000 строк
+             openpyxl read_only  19,300 с
+             zip-читатель         0,005 с      в 3 500 раз быстрее
 
-         Насыщение к 16 потокам. На реальных файлах выигрыш МЕНЬШЕ:
-         в замере задержка синтетическая и GIL отпускает целиком,
-         а настоящий разбор XML идёт под GIL. По той же причине
-         на локальном диске потоки не ускоряют, а замедляют
-         (0,8 с в один поток против 1,1 с в восемь) — прятать нечего,
-         остаются накладные расходы. Отсюда: --jobs 1 для локальной
-         папки, 8-16 для сетевого диска.
+         Проверено на всём тестовом дереве: 281 строка выдачи,
+         0 расхождений с openpyxl. openpyxl остаётся запасным путём.
+
+         Потоки — второстепенны, и на реальной папке НСТ они НЕ помогли:
+         прогон 16 потоками давал ~1 файл в секунду, потому что время
+         уходило в разбор XML под GIL, а не в сеть. Прежний замер
+         с имитацией задержки (4,6x на восьми потоках) был оптимистичен
+         именно поэтому: sleep отпускает GIL целиком, а разбор — нет.
+         Вывод: правильный ответ на «медленно» здесь был не «больше
+         потоков», а «не делать эту работу».
   чего НЕТ: жёсткого таймаута на файл. Потоки в Python не убиваются,
          а зависший SMB-хэндл ждёт до конца. Смягчение — --max-mb
          и имя текущего файла в строке прогресса: видно, на чём встали.
@@ -68,6 +76,7 @@ r"""
 """
 
 import csv
+import logging
 import os
 import warnings
 import re
@@ -110,6 +119,10 @@ PROBE_DISTINCT = 50      # больше этого различных значе
 # «Data Validation extension is not supported» и подобное: файл читается,
 # предупреждение только засоряет вывод
 warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
+# pypdf пишет «Multiple definitions in dictionary…» через logging в тот же
+# поток, что и строка прогресса, и рвёт её посередине
+logging.getLogger("pypdf").setLevel(logging.ERROR)
+logging.getLogger("pypdf._reader").setLevel(logging.ERROR)
 
 
 def human(n):
@@ -170,7 +183,7 @@ class Progress:
             eta = (self.total - self.n) / rate if rate > 0 else 0
             head = (f"{self.label}: {self.n}/{self.total} "
                     f"({100 * self.n / self.total:4.1f} %) "
-                    f"{rate:.0f}/с, осталось ~{eta:.0f} с")
+                    f"{rate:.1f}/с, осталось ~{eta / 60:.0f} мин")
         else:
             head = f"{self.label}: {self.n} за {el:.0f} с ({rate:.0f}/с)"
         line = head + (f"  {note[-58:]}" if note else "")
@@ -257,7 +270,132 @@ def walk(root, quiet=False):
 
 
 # ====================== ШАГ 2. Структура офисных файлов ====================
+# ---- быстрый читатель .xlsx: шапка без разбора всего файла ----------------
+# openpyxl даже в read_only разбирает поток целиком и тянет таблицу общих
+# строк. На файлах расчёта по 100-500 МБ это давало ~1 файл в секунду,
+# и потоки не помогали: время уходит в разбор XML под GIL, а не в сеть.
+# Здесь .xlsx открывается как zip, и читаются ровно первые строки листа
+# плюс те общие строки, на которые они ссылаются. Стоимость перестаёт
+# зависеть от размера файла.
+NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+NSR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+
+
+def _xlsx_sheet_head(zf, part, max_rows):
+    """Первые строки листа + ссылки на общие строки + размер из <dimension>."""
+    import xml.etree.ElementTree as ET
+    rows, dim, need = [], None, set()
+    with zf.open(part) as fh:
+        for _, el in ET.iterparse(fh, events=("end",)):
+            if el.tag == NS + "dimension":
+                dim = el.get("ref")
+            elif el.tag == NS + "row":
+                cells = []
+                for c in el:
+                    t, v = c.get("t"), c.find(NS + "v")
+                    if t == "inlineStr":
+                        is_ = c.find(NS + "is")
+                        cells.append(("lit", "".join(
+                            x.text or "" for x in is_.iter(NS + "t"))
+                            if is_ is not None else ""))
+                    elif v is None:
+                        cells.append(("lit", ""))
+                    elif t == "s":
+                        i = int(v.text)
+                        need.add(i)
+                        cells.append(("s", i))
+                    else:
+                        cells.append(("lit", v.text or ""))
+                rows.append(cells)
+                el.clear()
+                if len(rows) >= max_rows:
+                    break
+    return rows, dim, need
+
+
+def _xlsx_shared(zf, need):
+    """Только те общие строки, которые встретились в шапке. Ранний выход
+    по максимальному индексу — полный проход по таблице на 500 МБ не нужен."""
+    import xml.etree.ElementTree as ET
+    out = {}
+    if not need:
+        return out
+    try:
+        fh = zf.open("xl/sharedStrings.xml")
+    except KeyError:
+        return out
+    hi, i = max(need), 0
+    with fh:
+        for _, el in ET.iterparse(fh, events=("end",)):
+            if el.tag != NS + "si":
+                continue
+            if i in need:
+                out[i] = "".join(t.text or "" for t in el.iter(NS + "t"))
+            el.clear()
+            if i >= hi:
+                break
+            i += 1
+    return out
+
+
+def _dim_size(ref):
+    """'A1:T77' -> (77, 20). Размер листа без чтения данных."""
+    if not ref or ":" not in ref:
+        return -1, 0
+    end = ref.split(":")[1]
+    letters = "".join(ch for ch in end if ch.isalpha())
+    digits = "".join(ch for ch in end if ch.isdigit())
+    col = 0
+    for ch in letters:
+        col = col * 26 + (ord(ch.upper()) - 64)
+    return (int(digits) if digits else -1), col
+
+
+def sheets_xlsx_fast(path):
+    import xml.etree.ElementTree as ET
+    with zipfile.ZipFile(long_path(path)) as zf:
+        wb = ET.fromstring(zf.read("xl/workbook.xml"))
+        rels = {r.get("Id"): r.get("Target") for r in
+                ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))}
+        out, pending = [], []
+        need_all = set()
+        for sh in wb.iter(NS + "sheet"):
+            tgt = rels.get(sh.get(NSR + "id"), "")
+            part = ("xl/" + tgt.lstrip("/")) if not tgt.startswith("xl/") else tgt
+            part = part.replace("xl/xl/", "xl/")
+            try:
+                rows, dim, need = _xlsx_sheet_head(zf, part, MAX_HEADER_ROWS)
+            except KeyError:
+                continue
+            need_all |= need
+            pending.append((sh.get("name"), rows, dim))
+        shared = _xlsx_shared(zf, need_all)
+        for name, rows, dim in pending:
+            head = []
+            for cells in rows:
+                vals = [shared.get(v, "") if kind == "s" else str(v)
+                        for kind, v in cells[:MAX_SHEET_COLS]]
+                vals = [v.strip() for v in vals if v and v.strip()]
+                if vals:
+                    head.append(" | ".join(vals))
+            nrows, ncols = _dim_size(dim)
+            out.append({"sheet": name, "rows": nrows, "cols": ncols,
+                        "header": " // ".join(head)[:2000]})
+        return out
+
+
 def sheets_xlsx(path):
+    """Быстрый путь через zip, при любой неожиданности — openpyxl."""
+    try:
+        res = sheets_xlsx_fast(path)
+        if res:
+            return res
+    except Exception:
+        pass
+    return sheets_xlsx_openpyxl(path)
+
+
+def sheets_xlsx_openpyxl(path):
     import openpyxl
     wb = openpyxl.load_workbook(long_path(path), read_only=True,
                                 data_only=True, keep_links=False)
@@ -396,11 +534,13 @@ def _one(f):
                  "header": f"(не открылся: {type(e).__name__}: {e})"[:300]}], None
 
 
-def inspect(files, max_mb, jobs, quiet=False):
+def inspect(files, max_mb, jobs, quiet=False, only=None):
     rows, skipped = [], Counter()
     todo = []
     for f in files:
         ext = f["ext"]
+        if only and only.lower() not in f["rel"].lower():
+            continue
         if ext not in READERS:
             if ext in OFFICE:
                 skipped[f"{ext}: читателя нет"] += 1
@@ -608,6 +748,9 @@ def main():
     jobs = min(8, (os.cpu_count() or 4) * 2)
     if "--jobs" in sys.argv:
         jobs = max(1, int(sys.argv[sys.argv.index("--jobs") + 1]))
+    only = None
+    if "--only" in sys.argv:
+        only = sys.argv[sys.argv.index("--only") + 1]
     if not os.path.isdir(root):
         print(f"нет такой папки: {root}")
         sys.exit(2)
@@ -616,15 +759,6 @@ def main():
     print(f"шаг 1: обход {root} …")
     files, errors = walk(root, quiet=quiet)
     print(f"       найдено {len(files)} файлов")
-
-    struct, skipped = [], Counter()
-    if not fast:
-        print(f"шаг 2: чтение структуры офисных файлов, потоков {jobs} …")
-        struct, skipped = inspect(files, max_mb, jobs, quiet=quiet)
-        print(f"       разобрано листов/документов: {len(struct)}")
-
-    print("шаг 3: поиск шаблона НСТ …")
-    tmpl = find_template(struct)
 
     def dump(name, rows, cols):
         if not rows:
@@ -636,8 +770,22 @@ def main():
             w.writerows(rows)
         print(f"       записан {name} ({len(rows)} строк)")
 
+    # Опись пишется СРАЗУ, а не в конце: шаг 1 занимает полсекунды, шаг 2 —
+    # десятки минут, и прерывание шага 2 не должно стоить описи.
     dump("nst2025_inventory.csv", files,
-         ["rel", "dir", "name", "ext", "size", "size_h", "mtime", "depth", "interest"])
+         ["rel", "dir", "name", "ext", "size", "size_h", "mtime", "depth",
+          "interest"])
+
+    struct, skipped = [], Counter()
+    if not fast:
+        print(f"шаг 2: чтение структуры офисных файлов, потоков {jobs}"
+              + (f", только «{only}»" if only else "") + " …")
+        struct, skipped = inspect(files, max_mb, jobs, quiet=quiet, only=only)
+        print(f"       разобрано листов/документов: {len(struct)}")
+
+    print("шаг 3: поиск шаблона НСТ …")
+    tmpl = find_template(struct)
+
     dump("nst2025_structure.csv", struct,
          ["rel", "dir", "name", "ext", "size_h", "mtime", "sheet", "rows", "cols", "header"])
     dump("nst2025_template.csv", tmpl,
