@@ -35,6 +35,12 @@ r"""
   python nst_inventory.py --probe "R:\...\2025_КР расчет провизий_V5 (факт...).xlsx"
 
   --only «подстрока»  — шаг 2 только по файлам, чей путь её содержит
+  --full              — вместе с --probe: печатать значения ПОЛНОСТЬЮ,
+                        по одному в строку. Без него список режется
+                        на 110 символах, и перечень из 31 значения
+                        не виден — ради чего probe и запускался.
+  --col «подстрока»   — вместе с --probe: только колонки с таким именем
+  --distinct N        — поднять порог «это ещё измерение» (по умолчанию 50)
   --sheet «подстрока» — вместе с --probe: только листы с таким именем.
                         Нужно для шаблона: в нём 34 листа, часть по 16 384
                         колонки, и читать их все незачем.
@@ -116,8 +122,9 @@ OFFICE = {".xlsx", ".xlsm", ".xltx", ".xls", ".xlsb", ".docx", ".doc",
 MAX_HEADER_ROWS = 6      # сколько строк шапки читаем с листа
 MAX_SHEET_COLS  = 40     # сколько колонок шапки записываем
 
-PROBE_ROWS     = 5000    # --probe: сколько строк читаем ради значений
-PROBE_DISTINCT = 50      # больше этого различных значений — колонка не измерение
+PROBE_ROWS       = 5000  # --probe: сколько строк читаем ради значений
+PROBE_DISTINCT   = 50    # больше этого различных значений — колонка не измерение
+PROBE_HEAD_SCAN  = 15    # среди скольких верхних строк ищем настоящую шапку
 
 # «Data Validation extension is not supported» и подобное: файл читается,
 # предупреждение только засоряет вывод
@@ -665,13 +672,27 @@ def probe_xlsx(path):
     out = []
     try:
         for ws in wb.worksheets:
-            header, vals, over, nrows = None, defaultdict(set), set(), 0
-            for row in ws.iter_rows(max_row=PROBE_ROWS, values_only=True):
-                filled = [c for c in row if c is not None and str(c).strip()]
-                if header is None:
-                    if len(filled) >= 2:
-                        header = [str(c).strip() if c is not None else ""
-                                  for c in row]
+            rows = ws.iter_rows(max_row=PROBE_ROWS, values_only=True)
+            # Шапкой берём не первую заполненную строку, а ЛУЧШУЮ из верхних:
+            # в шаблоне НСТ сверху идут технические строки («1», «2», «3»),
+            # и прежняя редакция подписывала колонки ими.
+            head_buf, header, best, head_i = [], None, -1, -1
+            for i, row in enumerate(rows):
+                head_buf.append(row)
+                score = sum(1 for c in row if isinstance(c, str) and c.strip()
+                            and not c.strip().isdigit())
+                if score > best:
+                    best, head_i = score, i
+                    header = [str(c).strip() if c is not None else ""
+                              for c in row]
+                if i + 1 >= PROBE_HEAD_SCAN:
+                    break
+            vals, over, nrows = defaultdict(set), set(), 0
+            # Строку шапки пропускаем ПО ИНДЕКСУ: `row is header` сравнивает
+            # кортеж со списком и всегда ложно, из-за чего сама шапка
+            # попадала в перечень значений и давала 32 вместо 31.
+            for j, row in enumerate(list(head_buf) + list(rows)):
+                if j == head_i:
                     continue
                 nrows += 1
                 for i, c in enumerate(row):
@@ -694,7 +715,7 @@ def probe_xlsx(path):
                 else:
                     v = sorted(vals.get(i, set()))
                     cols.append({"col": i + 1, "name": name, "raznyh": len(v),
-                                 "znacheniya": " | ".join(v[:25])[:1500]})
+                                 "znacheniya": " | ".join(v)})
             out.append({"sheet": ws.title, "rows_read": nrows,
                         "header": header or [], "cols": cols})
     finally:
@@ -702,7 +723,7 @@ def probe_xlsx(path):
     return out
 
 
-def probe(target, quiet=False, sheet_like=None):
+def probe(target, quiet=False, sheet_like=None, col_like=None, full=False):
     targets = []
     if os.path.isdir(target):
         for dp, dn, fn in os.walk(target):
@@ -724,14 +745,23 @@ def probe(target, quiet=False, sheet_like=None):
             if sheet_like and sheet_like.lower() not in sh["sheet"].lower():
                 continue
             named = [c for c in sh["cols"] if c["name"]]
+            if col_like:
+                named = [c for c in named
+                         if col_like.lower() in c["name"].lower()]
+                if not named:
+                    continue
             print(f"\n  лист «{sh['sheet']}» — строк прочитано {sh['rows_read']}, "
                   f"колонок с именем {len(named)}")
             for c in named:
                 head = f"    [{c['col']:>2}] {c['name'][:45]:<45}"
-                if c["znacheniya"]:
-                    print(f"{head} ({c['raznyh']}) {c['znacheniya'][:110]}")
-                else:
+                if not c["znacheniya"]:
                     print(f"{head} ({c['raznyh']})")
+                elif full:
+                    print(f"{head} ({c['raznyh']} различных)")
+                    for v in c["znacheniya"].split(" | "):
+                        print(f"          {v}")
+                else:
+                    print(f"{head} ({c['raznyh']}) {c['znacheniya'][:110]}")
     print("=" * 78)
     print("Колонки с числом различных значений > "
           f"{PROBE_DISTINCT} печатаются только счётчиком: там ПДн, а не измерение.")
@@ -742,10 +772,16 @@ def main():
         print(__doc__)
         sys.exit(1)
     if "--probe" in sys.argv:
-        sheet_like = None
+        sheet_like = col_like = None
         if "--sheet" in sys.argv:
             sheet_like = sys.argv[sys.argv.index("--sheet") + 1]
-        probe(sys.argv[sys.argv.index("--probe") + 1], sheet_like=sheet_like)
+        if "--col" in sys.argv:
+            col_like = sys.argv[sys.argv.index("--col") + 1]
+        if "--distinct" in sys.argv:
+            globals()["PROBE_DISTINCT"] = int(
+                sys.argv[sys.argv.index("--distinct") + 1])
+        probe(sys.argv[sys.argv.index("--probe") + 1], sheet_like=sheet_like,
+              col_like=col_like, full="--full" in sys.argv)
         return
     root = os.path.abspath(sys.argv[1])
     fast = "--fast" in sys.argv
