@@ -757,17 +757,166 @@ OPTION (MAXDOP 1);
 из списка с нулевыми остатками может под него не подойти и выпасть
 из проверки, хотя именно он в списке индивидуально значимых.
 
+> ⚠ Шаг 3 выводит БИН и наименования. **В репозиторий не попадает** —
+> здесь только скрипт. Шаги 1–2 дают чистые агрегаты.
+
+Каскад С1 воспроизведён строка в строку, включая порядок веток (Н18).
+Заёмщик материализуется в `#k44b_borrower`, чтобы не повторять
+восьмидесятистрочный блок трижды; временные таблицы разрешены, постоянные
+объекты не трогаются.
+
 ```sql
--- заёмщики списка B2A, НЕ попавшие в лист С2
-SELECT COUNT(*) AS ne_v_liste
-FROM ( SELECT DISTINCT iin_bin FROM c1 WHERE individual_basis = 'B2A' ) AS b
-WHERE NOT EXISTS ( SELECT 1 FROM ( /* запрос С2 */ ) AS l
-                   WHERE l.iin_bin = b.iin_bin );
+SET NOCOUNT ON;
+
+IF OBJECT_ID('tempdb..#k44b_borrower') IS NOT NULL DROP TABLE #k44b_borrower;
+
+/* ============ ШАГ 1. Заёмщик по данным текущего цикла ============ */
+WITH cur AS (
+    SELECT
+          b.iin_bin
+        , TRY_CAST(b.ent_type    AS int)  AS ent_type_n
+        , TRY_CAST(b.loan_obj    AS int)  AS loan_obj_n
+        , TRY_CAST(b.loan_purp   AS int)  AS loan_purp_n
+        , TRY_CAST(b.collateral  AS int)  AS collateral_n
+        , TRY_CAST(b.debtor_type AS int)  AS debtor_type_n
+        , TRY_CAST(b.debtor_se   AS int)  AS debtor_se_n
+        , COALESCE(TRY_CAST(b.ead    AS float), 0) AS ead_n
+        , COALESCE(TRY_CAST(b.offbal AS float), 0) AS offbal_n
+    FROM  [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4] AS b
+    WHERE b.is_del = '0'
+),
+cur_seg AS (
+    SELECT c.*
+         , CASE
+             WHEN (debtor_type_n = 1 OR (debtor_type_n = 0 AND debtor_se_n = 1))
+                  AND ent_type_n  IN (1, 2, 3)
+                  AND loan_obj_n  IN (1, 2, 3)
+                  AND loan_purp_n IN (1, 2, 3, 4, 5, 8) THEN 'COREST'
+             WHEN ent_type_n = 1                        THEN 'CORLAR'
+             WHEN ent_type_n = 2                        THEN 'CORMED'
+             WHEN ent_type_n = 3                        THEN 'RETSML'
+             WHEN COALESCE(debtor_type_n, 0) = 0
+                  AND COALESCE(debtor_se_n, 0) = 0
+                  AND ead_n <= 200000000
+               THEN CASE
+                      WHEN loan_obj_n = 1               THEN 'RETEST'
+                      WHEN COALESCE(collateral_n, 0) = 1 THEN 'RETCAR'
+                      ELSE                                   'RETCON'
+                    END
+             ELSE 'X'
+           END AS seg_nst
+    FROM cur AS c
+),
+seg_rank AS (
+    SELECT iin_bin, seg_nst
+         , ROW_NUMBER() OVER (PARTITION BY iin_bin ORDER BY SUM(ead_n) DESC) AS rn
+    FROM cur_seg
+    GROUP BY iin_bin, seg_nst
+),
+bagg AS (
+    SELECT
+          iin_bin
+        , COUNT(*)      AS contracts
+        , SUM(ead_n)    AS ead_borrower
+        , SUM(offbal_n) AS offbal_borrower
+        , CASE WHEN SUM(offbal_n) > SUM(ead_n)
+               THEN SUM(offbal_n) ELSE SUM(ead_n) END AS otbor_borrower
+        , MAX(ent_type_n) AS ent_type_n
+    FROM cur_seg
+    GROUP BY iin_bin
+)
+SELECT
+      g.iin_bin, g.contracts, g.ead_borrower, g.offbal_borrower
+    , g.otbor_borrower, g.ent_type_n
+    , r.seg_nst
+    /* попадает ли заёмщик в лист С2 — условие фильтра слово в слово */
+    , CASE WHEN r.seg_nst IN ('CORLAR', 'CORMED', 'RETSML', 'COREST')
+                AND (   g.otbor_borrower > 100000000
+                     OR ( r.seg_nst IN ('CORMED', 'CORLAR')
+                          AND g.otbor_borrower > 0 )
+                     OR COALESCE(g.ent_type_n, 0) = 0 )
+           THEN 1 ELSE 0 END AS v_liste
+INTO  #k44b_borrower
+FROM      bagg     AS g
+JOIN      seg_rank AS r ON r.iin_bin = g.iin_bin AND r.rn = 1
+OPTION (MAXDOP 1);
+
+/* ============ ШАГ 2. Сводка: где заёмщики списка B2A ============ */
+WITH b2a AS (
+    SELECT DISTINCT a.bin
+    FROM  [personal_tables].[dbo].[RA_NST_B2A_AQR2026] AS a
+    WHERE a.bin IS NOT NULL
+),
+b2a_pos AS (
+    SELECT
+          b.bin
+        , CASE WHEN EXISTS (SELECT 1 FROM [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4] x
+                            WHERE x.iin_bin = b.bin AND x.is_del =  '0') THEN 1 ELSE 0 END AS b1a_aktiv
+        , CASE WHEN EXISTS (SELECT 1 FROM [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4] x
+                            WHERE x.iin_bin = b.bin AND x.is_del <> '0') THEN 1 ELSE 0 END AS b1a_udal
+        , CASE WHEN EXISTS (SELECT 1 FROM [CL_PORTFOLIO].[dbo].[AQR2026_B1B_2025_Q4] x
+                            WHERE x.iin_bin = b.bin AND x.is_del =  '0') THEN 1 ELSE 0 END AS b1b_aktiv
+        , COALESCE(k.v_liste, 0) AS v_liste
+    FROM      b2a            AS b
+    LEFT JOIN #k44b_borrower AS k ON k.iin_bin = b.bin
+)
+SELECT 'БИН в списке B2A всего'                    AS pokazatel, COUNT(*) AS bin FROM b2a_pos
+UNION ALL SELECT 'из них: есть в активном B1A',    COUNT(*) FROM b2a_pos WHERE b1a_aktiv = 1
+UNION ALL SELECT '  из них: ПОПАЛИ в лист С2',     COUNT(*) FROM b2a_pos WHERE b1a_aktiv = 1 AND v_liste = 1
+UNION ALL SELECT '  из них: НЕ попали в лист С2',  COUNT(*) FROM b2a_pos WHERE b1a_aktiv = 1 AND v_liste = 0
+UNION ALL SELECT 'нет в активном B1A: есть в B1B', COUNT(*) FROM b2a_pos WHERE b1a_aktiv = 0 AND b1b_aktiv = 1
+UNION ALL SELECT 'нет в активном B1A: только удалённые', COUNT(*) FROM b2a_pos WHERE b1a_aktiv = 0 AND b1b_aktiv = 0 AND b1a_udal = 1
+UNION ALL SELECT 'не найдены нигде',               COUNT(*) FROM b2a_pos WHERE b1a_aktiv = 0 AND b1b_aktiv = 0 AND b1a_udal = 0
+OPTION (MAXDOP 1);
+
+/* ====== ШАГ 3. Детализация непопавших с причиной (БИН и ФИО!) ====== */
+SELECT
+      k.iin_bin
+    , n.name
+    , k.seg_nst        AS segment_raschet
+    , k.contracts
+    , k.ead_borrower, k.offbal_borrower, k.otbor_borrower
+    , k.ent_type_n
+    , CASE
+        WHEN k.seg_nst NOT IN ('CORLAR','CORMED','RETSML','COREST')
+             THEN 'сегмент не корпоративный: ' + k.seg_nst
+        WHEN k.otbor_borrower = 0
+             THEN 'нулевая подверженность'
+        ELSE 'подверженность <= 100 млн'
+      END AS prichina
+FROM       #k44b_borrower AS k
+INNER JOIN ( SELECT DISTINCT a.bin
+             FROM [personal_tables].[dbo].[RA_NST_B2A_AQR2026] AS a
+             WHERE a.bin IS NOT NULL ) AS b ON b.bin = k.iin_bin
+LEFT  JOIN ( SELECT iin_bin, MAX(name) AS name
+             FROM   [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4]
+             WHERE  is_del = '0' AND NULLIF(LTRIM(RTRIM(name)), '') IS NOT NULL
+             GROUP BY iin_bin ) AS n ON n.iin_bin = k.iin_bin
+WHERE k.v_liste = 0
+ORDER BY k.otbor_borrower DESC
+OPTION (MAXDOP 1);
+
+DROP TABLE #k44b_borrower;
 ```
 
-Ноль — лист полон. Не ноль — в фильтр С2 добавляется четвёртое условие
-`ИЛИ заёмщик в списке B2A`, безусловно и без порога: список Sabila
-не фильтруется нашей логикой (Н7).
+**Как читать.** Ожидание по шагу 2: «БИН в списке всего» — 66 либо
+больше (О11 не закрыт), «есть в активном B1A» — 68 (Д2 и разрез 4.4
+дали это дважды). Строка «**НЕ попали в лист С2**» — искомая.
+
+Ноль — лист полон, рассылать как есть.
+
+Не ноль — в фильтр С2 добавляется четвёртое условие, безусловно
+и без порога, потому что список Sabila нашей логикой не фильтруется (Н7):
+
+```sql
+       OR EXISTS ( SELECT 1
+                   FROM  [personal_tables].[dbo].[RA_NST_B2A_AQR2026] AS z
+                   WHERE z.bin = b.iin_bin )      -- Н7: список не фильтруем
+```
+
+Строки «есть в B1B» и «не найдены нигде» лист не меняют — они относятся
+к периметру (Д2, пункт 5 порядка работ), но посчитать их здесь дешевле,
+чем отдельным прогоном.
 
 #### 4.5. `flag_disass` не сработал ни разу — О20
 
