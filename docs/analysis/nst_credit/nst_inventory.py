@@ -9,17 +9,33 @@ r"""
   шаг 2  открывает офисные файлы и читает ТОЛЬКО структуру:
          имена листов, размеры, первые строки шапки
   шаг 3  ищет прошлогодний шаблон НСТ по колонкам заголовка
-  шаг 4  печатает сводку и пишет три CSV
+  шаг 4  печатает сводку и пишет CSV
 
 ЧЕГО СКРИПТ НЕ ДЕЛАЕТ
   не читает данные строк — только шапки; не копирует файлы;
   не открывает то, что не распознал; ничего никуда не отправляет.
 
+ВЫДАЧА — ОДНА ПАПКА, ПЯТЬ ФАЙЛОВ
+  nst_out/inventory.csv         опись дерева (шаг 1)
+  nst_out/structure.csv         листы и шапки + совпадения с шаблоном (шаг 2-3)
+  nst_out/probe_columns.csv     --probe: колонки и число различных значений
+  nst_out/probe_values.csv      --probe: значения и сколько раз встретились
+  nst_out/probe_header_grid.csv --probe: сырая сетка верхних строк
+
+  Больше файлов не создаётся никогда. Повторный --probe по другому файлу
+  НЕ плодит вторую папку: строки сливаются в те же три файла по ключу
+  (file, sheet) — прежние прогоны сохраняются, тот же файл перезаписывается.
+  --fresh очищает вместо слияния.
+
+  Ошибки открытия — строкой в probe_columns.csv с sheet = «(не открылся)»,
+  а не отдельным файлом: шестой файл того не стоит, а потеряться не должна.
+
 КОНФИДЕНЦИАЛЬНОСТЬ
   Выдача содержит ИМЕНА ФАЙЛОВ и ЗАГОЛОВКИ КОЛОНОК. В именах папок ВНД
-  и выгрузок может стоять что угодно, вплоть до БИН. Файлы `nst2025_*.csv`
-  остаются на рабочей машине; в репозиторий и вовне уходит только сводка
-  шага 4 (счётчики, расширения, листы) — она безымянная.
+  и выгрузок может стоять что угодно, вплоть до БИН. Папка `nst_out/`
+  остаётся на рабочей машине; вовне уходит сводка шага 4 и выборка
+  из probe_values.csv — колонки с числом различных значений выше порога
+  туда не попадают по построению.
 
 ЗАПУСК
   python nst_inventory.py "R:\!!!!!НСТ2025"
@@ -28,20 +44,15 @@ r"""
   python nst_inventory.py "R:\!!!!!НСТ2025" --jobs 16    # потоков на шаге 2
   python nst_inventory.py "R:\!!!!!НСТ2025" --quiet      # без живого прогресса
 
-  --probe: прицельно вскрыть файл или папку. Результат — ТРИ CSV в --out:
-    probe_columns.csv      колонка, сколько различных значений, сколько выгружено
-    probe_values.csv       длинный формат: файл; лист; колонка; значение
-    probe_header_grid.csv  сырая сетка верхних строк — читать многоуровневую
-                           и объединённую шапку как есть, без догадок скрипта
-  Так находится перечень значений измерения «Портфель в шаблоне НСТ»:
+  --probe: прицельно вскрыть файл или папку. Пишет в те же три probe_*.csv
+  в nst_out/, накапливая прогоны. Так находится перечень значений
+  измерения «Портфель в шаблоне НСТ»:
   python nst_inventory.py --probe "R:\!!!!!НСТ2025\Финальный шаблон и документы по НСТ2024"
   python nst_inventory.py --probe "R:\...\2025_КР расчет провизий_V5 (факт...).xlsx"
 
   --only «подстрока»  — шаг 2 только по файлам, чей путь её содержит
-  --out ПАПКА         — куда выгрузить probe (по умолчанию probe_out/).
-                        --probe ВСЕГДА пишет три CSV, на экран идёт
-                        только сводка: терминал такой объём не держит,
-                        перечни режутся, верх уходит за буфер.
+  --out ПАПКА         — единая папка выдачи (по умолчанию nst_out/)
+  --fresh             — очистить probe_*.csv вместо слияния с прошлым
   --full              — дополнительно вывалить все значения на экран
   --col «подстрока»   — вместе с --probe: только колонки с таким именем
   --distinct N        — поднять порог «это ещё измерение» (по умолчанию 50)
@@ -137,6 +148,38 @@ warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 # поток, что и строка прогресса, и рвёт её посередине
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 logging.getLogger("pypdf._reader").setLevel(logging.ERROR)
+
+
+OUT_DIR = "nst_out"      # одна папка на всё; файлов внутри ровно пять
+
+
+def dump(name, rows, cols, out_dir=OUT_DIR, key=None, fresh=False):
+    """Записать CSV. Если задан `key` — СЛИТЬ с тем, что уже лежит:
+    строки прежних прогонов с теми же ключами заменяются, остальные
+    сохраняются.
+
+    Так повторный --probe по другому файлу не плодит вторую папку
+    и не затирает первый: накопление идёт в тот же файл, а колонки
+    file/sheet разделяют прогоны."""
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, name)
+    n_old = 0
+    if key and not fresh and os.path.exists(path):
+        fresh_keys = {tuple(str(r.get(k, "")) for k in key) for r in rows}
+        keep = []
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f, delimiter=";"):
+                if tuple(str(r.get(k, "")) for k in key) not in fresh_keys:
+                    keep.append(r)
+        n_old = len(keep)
+        rows = keep + rows
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        wr = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore",
+                            delimiter=";")
+        wr.writeheader()
+        wr.writerows(rows)
+    print(f"  {path}  ({len(rows)} строк"
+          + (f", из них {n_old} от прежних прогонов)" if n_old else ")"))
 
 
 def human(n):
@@ -594,14 +637,17 @@ def inspect(files, max_mb, jobs, quiet=False, only=None):
 
 # ==================== ШАГ 3. Поиск прошлогоднего шаблона ===================
 def find_template(struct):
+    """Проставляет совпадения ПРЯМО в строках структуры и возвращает
+    попадания. Отдельного CSV нет: это две колонки, а не третий файл."""
     hits = []
     for r in struct:
         h = (r.get("header") or "").lower()
         matched = [k for k, variants in TEMPLATE_KEYS.items()
                    if any(v in h for v in variants)]
+        r["sovpalo"] = len(matched)
+        r["kakie"] = "; ".join(matched)
         if len(matched) >= 3:
-            hits.append({**r, "sovpalo": len(matched),
-                         "kakie": "; ".join(matched)})
+            hits.append(r)
     return sorted(hits, key=lambda r: (-r["sovpalo"], r["rel"]))
 
 
@@ -741,7 +787,7 @@ def probe_xlsx(path):
 
 
 def probe(target, quiet=False, sheet_like=None, col_like=None, full=False,
-          out_dir="probe_out"):
+          out_dir=OUT_DIR, fresh=False):
     """Вскрыть файл или папку и ВЫГРУЗИТЬ результат в CSV.
 
     Печать в терминал не годится: на реальном шаблоне вывод — тысячи строк,
@@ -758,8 +804,7 @@ def probe(target, quiet=False, sheet_like=None, col_like=None, full=False,
         targets = [target]
         base = os.path.dirname(target)
 
-    os.makedirs(out_dir, exist_ok=True)
-    cols_rows, val_rows, head_rows, errors = [], [], [], []
+    cols_rows, val_rows, head_rows = [], [], []
     prog = Progress("probe", total=len(targets), quiet=quiet)
 
     for t in sorted(targets):
@@ -767,7 +812,12 @@ def probe(target, quiet=False, sheet_like=None, col_like=None, full=False,
         try:
             sheets = probe_xlsx(t)
         except Exception as e:
-            errors.append((rel, f"{type(e).__name__}: {e}"))
+            # Ошибка — строка в probe_columns.csv, а не отдельный файл:
+            # пятый файл в папке того не стоит, а потеряться она не должна.
+            cols_rows.append({"file": rel, "sheet": "(не открылся)", "col": 0,
+                              "name": f"{type(e).__name__}: {e}"[:300],
+                              "rows_read": -1, "raznyh": -1,
+                              "bolshe_poroga": 0, "znacheniy_vygruzheno": 0})
             prog.tick(note=os.path.basename(t))
             continue
         for sh in sheets:
@@ -795,27 +845,17 @@ def probe(target, quiet=False, sheet_like=None, col_like=None, full=False,
         prog.tick(note=os.path.basename(t))
     prog.close(f"листов разобрано, колонок {len(cols_rows)}")
 
-    def w(name, rows, cols):
-        path = os.path.join(out_dir, name)
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            wr = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore",
-                                delimiter=";")
-            wr.writeheader()
-            wr.writerows(rows)
-        print(f"  {path}  ({len(rows)} строк)")
-        return path
-
     print(f"\n--probe: файлов {len(targets)}, выгрузка в {out_dir}/")
-    w("probe_columns.csv", cols_rows,
-      ["file", "sheet", "col", "name", "rows_read", "raznyh",
-       "bolshe_poroga", "znacheniy_vygruzheno"])
-    w("probe_values.csv", val_rows,
-      ["file", "sheet", "col", "name", "value", "vstrechaetsya"])
-    w("probe_header_grid.csv", head_rows,
-      ["file", "sheet", "row", "col", "value", "is_header_row"])
-    if errors:
-        w("probe_errors.csv", [{"file": a, "error": b} for a, b in errors],
-          ["file", "error"])
+    dump("probe_columns.csv", cols_rows,
+         ["file", "sheet", "col", "name", "rows_read", "raznyh",
+          "bolshe_poroga", "znacheniy_vygruzheno"],
+         out_dir, key=("file", "sheet"), fresh=fresh)
+    dump("probe_values.csv", val_rows,
+         ["file", "sheet", "col", "name", "value", "vstrechaetsya"],
+         out_dir, key=("file", "sheet"), fresh=fresh)
+    dump("probe_header_grid.csv", head_rows,
+         ["file", "sheet", "row", "col", "value", "is_header_row"],
+         out_dir, key=("file", "sheet"), fresh=fresh)
 
     print("\nСВОДКА — колонки, похожие на измерение (значений 2..50):")
     dims = [c for c in cols_rows
@@ -859,14 +899,18 @@ def main():
         if "--distinct" in sys.argv:
             globals()["PROBE_DISTINCT"] = int(
                 sys.argv[sys.argv.index("--distinct") + 1])
-        out_dir = "probe_out"
+        out_dir = OUT_DIR
         if "--out" in sys.argv:
             out_dir = sys.argv[sys.argv.index("--out") + 1]
         probe(sys.argv[sys.argv.index("--probe") + 1], sheet_like=sheet_like,
               col_like=col_like, full="--full" in sys.argv, out_dir=out_dir,
+              fresh="--fresh" in sys.argv,
               quiet="--quiet" in sys.argv or not sys.stderr.isatty())
         return
     root = os.path.abspath(sys.argv[1])
+    out_dir = OUT_DIR
+    if "--out" in sys.argv:
+        out_dir = sys.argv[sys.argv.index("--out") + 1]
     fast = "--fast" in sys.argv
     quiet = "--quiet" in sys.argv or not sys.stderr.isatty()
     max_mb = 100
@@ -887,21 +931,11 @@ def main():
     files, errors = walk(root, quiet=quiet)
     print(f"       найдено {len(files)} файлов")
 
-    def dump(name, rows, cols):
-        if not rows:
-            return
-        with open(name, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore",
-                               delimiter=";")
-            w.writeheader()
-            w.writerows(rows)
-        print(f"       записан {name} ({len(rows)} строк)")
-
     # Опись пишется СРАЗУ, а не в конце: шаг 1 занимает полсекунды, шаг 2 —
     # десятки минут, и прерывание шага 2 не должно стоить описи.
-    dump("nst2025_inventory.csv", files,
+    dump("inventory.csv", files,
          ["rel", "dir", "name", "ext", "size", "size_h", "mtime", "depth",
-          "interest"])
+          "interest"], out_dir)
 
     struct, skipped = [], Counter()
     if not fast:
@@ -913,10 +947,9 @@ def main():
     print("шаг 3: поиск шаблона НСТ …")
     tmpl = find_template(struct)
 
-    dump("nst2025_structure.csv", struct,
-         ["rel", "dir", "name", "ext", "size_h", "mtime", "sheet", "rows", "cols", "header"])
-    dump("nst2025_template.csv", tmpl,
-         ["rel", "sheet", "rows", "cols", "sovpalo", "kakie", "header"])
+    dump("structure.csv", struct,
+         ["rel", "dir", "name", "ext", "size_h", "mtime", "sheet", "rows",
+          "cols", "sovpalo", "kakie", "header"], out_dir)
 
     report(root, files, struct, tmpl, errors, skipped)
     print(f"\nвсего {time.time() - t0:.1f} с"
