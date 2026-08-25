@@ -34,7 +34,10 @@ r"""
   python nst_inventory.py --probe "R:\!!!!!НСТ2025\Финальный шаблон и документы по НСТ2024"
   python nst_inventory.py --probe "R:\...\2025_КР расчет провизий_V5 (факт...).xlsx"
 
-  --only «подстрока» — шаг 2 только по файлам, чей путь её содержит
+  --only «подстрока»  — шаг 2 только по файлам, чей путь её содержит
+  --sheet «подстрока» — вместе с --probe: только листы с таким именем.
+                        Нужно для шаблона: в нём 34 листа, часть по 16 384
+                        колонки, и читать их все незачем.
 
 СКОРОСТЬ — где она берётся и где её нет
   шаг 1  os.scandir вместо os.walk + os.stat. На Windows DirEntry.stat()
@@ -699,7 +702,7 @@ def probe_xlsx(path):
     return out
 
 
-def probe(target, quiet=False):
+def probe(target, quiet=False, sheet_like=None):
     targets = []
     if os.path.isdir(target):
         for dp, dn, fn in os.walk(target):
@@ -718,6 +721,8 @@ def probe(target, quiet=False):
             print(f"  не открылся: {type(e).__name__}: {e}")
             continue
         for sh in sheets:
+            if sheet_like and sheet_like.lower() not in sh["sheet"].lower():
+                continue
             named = [c for c in sh["cols"] if c["name"]]
             print(f"\n  лист «{sh['sheet']}» — строк прочитано {sh['rows_read']}, "
                   f"колонок с именем {len(named)}")
@@ -737,7 +742,10 @@ def main():
         print(__doc__)
         sys.exit(1)
     if "--probe" in sys.argv:
-        probe(sys.argv[sys.argv.index("--probe") + 1])
+        sheet_like = None
+        if "--sheet" in sys.argv:
+            sheet_like = sys.argv[sys.argv.index("--sheet") + 1]
+        probe(sys.argv[sys.argv.index("--probe") + 1], sheet_like=sheet_like)
         return
     root = os.path.abspath(sys.argv[1])
     fast = "--fast" in sys.argv
