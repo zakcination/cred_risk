@@ -2235,7 +2235,11 @@ SELECT *
     , CASE WHEN in_b2a = 1                            THEN 'B2A'
            WHEN zadol_borrower >= @capital * @thr_ind THEN 'threshold'
            ELSE NULL END                              AS individual_basis
-    , zadol_borrower
+    /* zadol_borrower здесь НЕ повторяется: он уже пришёл через SELECT *
+       из b1a_agg. Верхнеуровневый SELECT дубль имени терпит, CTE и
+       производная таблица — нет: Msg 8156 «The column 'zadol_borrower'
+       was specified multiple times». В выгрузке дубль давал две
+       одинаковые колонки, и читатели CSV молча их переименовывают.     */
 FROM b1a_agg
 OPTION (MAXDOP 1);
 ```
