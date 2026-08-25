@@ -1,5 +1,5 @@
-"""
-Инвентаризация папки материалов НСТ (R:\\!!!!!НСТ2025) — что там вообще есть.
+r"""
+Инвентаризация папки материалов НСТ (R:\!!!!!НСТ2025) — что там вообще есть.
 
 Исключение из Н1 по основанию Н3: скрипт передаётся человеку на прогон
 на машине, где смонтирован сетевой диск. В контейнере сессии этого диска нет.
@@ -22,17 +22,17 @@
   шага 4 (счётчики, расширения, листы) — она безымянная.
 
 ЗАПУСК
-  python nst_inventory.py "R:\\!!!!!НСТ2025"
-  python nst_inventory.py "R:\\!!!!!НСТ2025" --fast       # без шага 2
-  python nst_inventory.py "R:\\!!!!!НСТ2025" --max-mb 50  # не открывать больше
-  python nst_inventory.py "R:\\!!!!!НСТ2025" --jobs 16    # потоков на шаге 2
-  python nst_inventory.py "R:\\!!!!!НСТ2025" --quiet      # без живого прогресса
+  python nst_inventory.py "R:\!!!!!НСТ2025"
+  python nst_inventory.py "R:\!!!!!НСТ2025" --fast       # без шага 2
+  python nst_inventory.py "R:\!!!!!НСТ2025" --max-mb 50  # не открывать больше
+  python nst_inventory.py "R:\!!!!!НСТ2025" --jobs 16    # потоков на шаге 2
+  python nst_inventory.py "R:\!!!!!НСТ2025" --quiet      # без живого прогресса
 
   --probe: прицельно вскрыть файл или папку — полная шапка ВСЕХ листов
   плюс различные значения узких колонок. Так находится перечень значений
   измерения «Портфель в шаблоне НСТ»:
-  python nst_inventory.py --probe "R:\\!!!!!НСТ2025\\Финальный шаблон и документы по НСТ2024"
-  python nst_inventory.py --probe "R:\\...\\2025_КР расчет провизий_V5 (факт...).xlsx"
+  python nst_inventory.py --probe "R:\!!!!!НСТ2025\Финальный шаблон и документы по НСТ2024"
+  python nst_inventory.py --probe "R:\...\2025_КР расчет провизий_V5 (факт...).xlsx"
 
 СКОРОСТЬ — где она берётся и где её нет
   шаг 1  os.scandir вместо os.walk + os.stat. На Windows DirEntry.stat()
@@ -120,6 +120,24 @@ def human(n):
     return f"{n:.1f} ТБ"
 
 
+def short_path(p):
+    r"""Снять префикс \\?\ — обратная операция к long_path().
+
+    Без неё os.scandir(long_path(d)) отдаёт entry.path С префиксом,
+    а root остаётся без него, и os.path.relpath падает:
+    ValueError: path is on mount '\\?\R:', start on mount 'R:'.
+    Ошибка воспроизводится ТОЛЬКО на Windows — на Linux long_path()
+    не делает ничего, поэтому тесты её не поймали.
+
+    Правило: длинный путь живёт ровно на время системного вызова,
+    в структурах данных лежит обычный."""
+    if p.startswith("\\\\?\\UNC\\"):          # \\?\UNC\server\share
+        return "\\\\" + p[8:]
+    if p.startswith("\\\\?\\"):                 # \\?\R:\...
+        return p[4:]
+    return p
+
+
 def long_path(p):
     """Windows: обход ограничения в 260 символов."""
     if os.name == "nt" and not p.startswith("\\\\?\\"):
@@ -204,14 +222,14 @@ def walk(root, quiet=False):
                     continue
                 try:
                     if entry.is_dir(follow_symlinks=False):
-                        stack.append(entry.path)
+                        stack.append(short_path(entry.path))
                         continue
                     st = entry.stat(follow_symlinks=False)
                     size, mtime = st.st_size, st.st_mtime
                 except OSError as e:
                     errors.append(e)
                     size, mtime = -1, 0
-                full = entry.path
+                full = short_path(entry.path)
                 dirp = os.path.dirname(full)
                 files.append({
                     "path": full,
