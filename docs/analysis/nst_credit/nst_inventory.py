@@ -23,8 +23,32 @@
 
 ЗАПУСК
   python nst_inventory.py "R:\\!!!!!НСТ2025"
-  python nst_inventory.py "R:\\!!!!!НСТ2025" --fast      # без шага 2
-  python nst_inventory.py "R:\\!!!!!НСТ2025" --max-mb 50 # не открывать больше
+  python nst_inventory.py "R:\\!!!!!НСТ2025" --fast       # без шага 2
+  python nst_inventory.py "R:\\!!!!!НСТ2025" --max-mb 50  # не открывать больше
+  python nst_inventory.py "R:\\!!!!!НСТ2025" --jobs 16    # потоков на шаге 2
+  python nst_inventory.py "R:\\!!!!!НСТ2025" --quiet      # без живого прогресса
+
+СКОРОСТЬ — где она берётся и где её нет
+  шаг 1  os.scandir вместо os.walk + os.stat. На Windows DirEntry.stat()
+         берётся из листинга каталога и НЕ делает отдельного обращения
+         к SMB. Это убирает половину сетевых round-trip'ов без потоков.
+  шаг 2  пул потоков. Сетевое чтение GIL отпускает, разбор XML — нет.
+         Замер на 221 файле с имитацией 25 мс латентности на открытие:
+
+             потоков   1      4      8     16     32
+             секунд  6,74   1,83   1,45   1,21   1,17
+             к базе  1,0x   3,7x   4,6x   5,6x   5,8x
+
+         Насыщение к 16 потокам. На реальных файлах выигрыш МЕНЬШЕ:
+         в замере задержка синтетическая и GIL отпускает целиком,
+         а настоящий разбор XML идёт под GIL. По той же причине
+         на локальном диске потоки не ускоряют, а замедляют
+         (0,8 с в один поток против 1,1 с в восемь) — прятать нечего,
+         остаются накладные расходы. Отсюда: --jobs 1 для локальной
+         папки, 8-16 для сетевого диска.
+  чего НЕТ: жёсткого таймаута на файл. Потоки в Python не убиваются,
+         а зависший SMB-хэндл ждёт до конца. Смягчение — --max-mb
+         и имя текущего файла в строке прогресса: видно, на чём встали.
 
 ЗАВИСИМОСТИ
   обязательных нет. Больше видно, если стоят: openpyxl (.xlsx/.xlsm),
@@ -36,8 +60,10 @@ import csv
 import os
 import re
 import sys
+import time
 import zipfile
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 # --- шапка прошлогоднего шаблона: по ней ищем сам шаблон -------------------
@@ -81,37 +107,108 @@ def long_path(p):
     return p
 
 
+# ============================ Живой прогресс ==============================
+class Progress:
+    """Строка в stderr, перерисовываемая на месте. Не украшение: прогон
+    по сетевому диску без вывода неотличим от зависания, а имя текущего
+    файла — единственный способ понять, на чём встали."""
+
+    def __init__(self, label, total=None, quiet=False):
+        self.label, self.total, self.quiet = label, total, quiet
+        self.n, self.t0, self.last = 0, time.time(), 0.0
+        self.width = 0
+
+    def tick(self, n=1, note=""):
+        self.n += n
+        now = time.time()
+        if self.quiet or (now - self.last < 0.1 and self.n != self.total):
+            return
+        self.last = now
+        el = now - self.t0
+        rate = self.n / el if el > 0 else 0
+        if self.total:
+            eta = (self.total - self.n) / rate if rate > 0 else 0
+            head = (f"{self.label}: {self.n}/{self.total} "
+                    f"({100 * self.n / self.total:4.1f} %) "
+                    f"{rate:.0f}/с, осталось ~{eta:.0f} с")
+        else:
+            head = f"{self.label}: {self.n} за {el:.0f} с ({rate:.0f}/с)"
+        line = head + (f"  {note[-58:]}" if note else "")
+        pad = " " * max(0, self.width - len(line))
+        self.width = len(line)
+        sys.stderr.write("\r" + line + pad)
+        sys.stderr.flush()
+
+    def close(self, note=""):
+        if self.quiet:
+            return
+        el = time.time() - self.t0
+        sys.stderr.write("\r" + " " * self.width + "\r")
+        sys.stderr.write(f"{self.label}: {self.n} за {el:.1f} с"
+                         + (f" — {note}" if note else "") + "\n")
+        sys.stderr.flush()
+
+
 # =========================== ШАГ 1. Обход дерева ===========================
-def walk(root):
+def walk(root, quiet=False):
+    """os.scandir, а не os.walk + os.stat.
+
+    На Windows DirEntry.stat() берётся из листинга каталога и отдельного
+    обращения к серверу НЕ делает — на сетевом диске это половина
+    round-trip'ов. Потоки здесь не нужны: они бы боролись за то, что
+    уже не тратится."""
     files, errors = [], []
-    for dirpath, dirnames, filenames in os.walk(root, onerror=errors.append):
-        dirnames[:] = [d for d in dirnames
-                       if not d.startswith("~$") and d.lower() != "$recycle.bin"]
-        depth = dirpath[len(root):].count(os.sep)
-        for fn in filenames:
-            if fn.startswith("~$"):          # временные файлы Office
-                continue
-            full = os.path.join(dirpath, fn)
-            try:
-                st = os.stat(long_path(full))
-                size, mtime = st.st_size, st.st_mtime
-            except OSError as e:
-                errors.append(e)
-                size, mtime = -1, 0
-            files.append({
-                "path": full,
-                "rel": os.path.relpath(full, root),
-                "dir": os.path.relpath(dirpath, root),
-                "name": fn,
-                "ext": os.path.splitext(fn)[1].lower(),
-                "size": size,
-                "size_h": human(size) if size >= 0 else "?",
-                "mtime": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
-                         if mtime else "",
-                "depth": depth,
-                "interest": int(any(w in fn.lower() or w in dirpath.lower()
-                                    for w in INTEREST)),
-            })
+    stack, ndirs = [root], 0
+    prog = Progress("шаг 1, обход", quiet=quiet)
+    while stack:
+        d = stack.pop()
+        ndirs += 1
+        try:
+            it = os.scandir(long_path(d))
+        except OSError as e:
+            errors.append(e)
+            continue
+        with it:
+            while True:
+                try:
+                    entry = next(it)
+                except StopIteration:
+                    break
+                except OSError as e:            # каталог пропал/нет прав
+                    errors.append(e)
+                    break
+                nm = entry.name
+                if nm.startswith("~$") or nm.lower() == "$recycle.bin":
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(entry.path)
+                        continue
+                    st = entry.stat(follow_symlinks=False)
+                    size, mtime = st.st_size, st.st_mtime
+                except OSError as e:
+                    errors.append(e)
+                    size, mtime = -1, 0
+                full = entry.path
+                dirp = os.path.dirname(full)
+                files.append({
+                    "path": full,
+                    "rel": os.path.relpath(full, root),
+                    "dir": os.path.relpath(dirp, root),
+                    "name": nm,
+                    "ext": os.path.splitext(nm)[1].lower(),
+                    "size": size,
+                    "size_h": human(size) if size >= 0 else "?",
+                    "mtime": datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+                             if mtime else "",
+                    "depth": os.path.relpath(dirp, root).count(os.sep)
+                             if dirp != root else 0,
+                    "interest": int(any(w in nm.lower() or w in dirp.lower()
+                                        for w in INTEREST)),
+                })
+                prog.tick(note=nm)
+    prog.close(f"каталогов {ndirs}"
+               + (f", ошибок доступа {len(errors)}" if errors else ""))
     return files, errors
 
 
@@ -218,8 +315,23 @@ READERS = {
 }
 
 
-def inspect(files, max_mb):
+def _one(f):
+    """Разбор одного файла. Возвращает (строки, пропуск) и НИЧЕГО общего
+    не трогает: счётчики сливаются в главном потоке, замок не нужен."""
+    meta = {k: f[k] for k in ("rel", "dir", "name", "ext", "size_h", "mtime")}
+    ext = f["ext"]
+    try:
+        return [{**meta, **s} for s in READERS[ext](f["path"])], None
+    except ImportError as e:
+        return [], f"{ext}: нет библиотеки ({e.name})"
+    except Exception as e:                           # битый, защищённый, занят
+        return [{**meta, "sheet": "", "rows": -1, "cols": 0,
+                 "header": f"(не открылся: {type(e).__name__}: {e})"[:300]}], None
+
+
+def inspect(files, max_mb, jobs, quiet=False):
     rows, skipped = [], Counter()
+    todo = []
     for f in files:
         ext = f["ext"]
         if ext not in READERS:
@@ -229,17 +341,33 @@ def inspect(files, max_mb):
         if f["size"] > max_mb * 1024 * 1024:
             skipped[f"{ext}: больше {max_mb} МБ"] += 1
             continue
-        try:
-            for s in READERS[ext](f["path"]):
-                rows.append({**{k: f[k] for k in ("rel", "dir", "name", "ext",
-                                                  "size_h", "mtime")}, **s})
-        except ImportError as e:
-            skipped[f"{ext}: нет библиотеки ({e.name})"] += 1
-        except Exception as e:                       # файл битый/защищённый
-            rows.append({**{k: f[k] for k in ("rel", "dir", "name", "ext",
-                                              "size_h", "mtime")},
-                         "sheet": "", "rows": -1, "cols": 0,
-                         "header": f"(не открылся: {type(e).__name__}: {e})"[:300]})
+        todo.append(f)
+
+    prog = Progress("шаг 2, чтение", total=len(todo), quiet=quiet)
+    if jobs <= 1:
+        for f in todo:
+            r, sk = _one(f)
+            rows += r
+            if sk:
+                skipped[sk] += 1
+            prog.tick(note=f["name"])
+    else:
+        # Потоки, а не процессы: время уходит в сетевое чтение, а оно GIL
+        # отпускает (замер в шапке: 4,6x на восьми потоках). Разбор XML
+        # под GIL остаётся, поэтому на реальных файлах выигрыш меньше
+        # замеренного. Процессы дали бы больше, но платят сериализацией
+        # и на SMB съедают выигрыш обратно.
+        with ThreadPoolExecutor(max_workers=jobs) as ex:
+            fut = {ex.submit(_one, f): f for f in todo}
+            for fu in as_completed(fut):
+                r, sk = fu.result()
+                rows += r
+                if sk:
+                    skipped[sk] += 1
+                prog.tick(note=fut[fu]["name"])
+    prog.close(f"листов и документов {len(rows)}")
+    # порядок из пула недетерминирован — сортируем, чтобы CSV диффился
+    rows.sort(key=lambda r: (r["rel"], str(r.get("sheet", ""))))
     return rows, skipped
 
 
@@ -315,21 +443,26 @@ def main():
         sys.exit(1)
     root = os.path.abspath(sys.argv[1])
     fast = "--fast" in sys.argv
+    quiet = "--quiet" in sys.argv or not sys.stderr.isatty()
     max_mb = 100
     if "--max-mb" in sys.argv:
         max_mb = int(sys.argv[sys.argv.index("--max-mb") + 1])
+    jobs = min(8, (os.cpu_count() or 4) * 2)
+    if "--jobs" in sys.argv:
+        jobs = max(1, int(sys.argv[sys.argv.index("--jobs") + 1]))
     if not os.path.isdir(root):
         print(f"нет такой папки: {root}")
         sys.exit(2)
 
+    t0 = time.time()
     print(f"шаг 1: обход {root} …")
-    files, errors = walk(root)
+    files, errors = walk(root, quiet=quiet)
     print(f"       найдено {len(files)} файлов")
 
     struct, skipped = [], Counter()
     if not fast:
-        print("шаг 2: чтение структуры офисных файлов …")
-        struct, skipped = inspect(files, max_mb)
+        print(f"шаг 2: чтение структуры офисных файлов, потоков {jobs} …")
+        struct, skipped = inspect(files, max_mb, jobs, quiet=quiet)
         print(f"       разобрано листов/документов: {len(struct)}")
 
     print("шаг 3: поиск шаблона НСТ …")
@@ -353,7 +486,9 @@ def main():
          ["rel", "sheet", "rows", "cols", "sovpalo", "kakie", "header"])
 
     report(root, files, struct, tmpl, errors, skipped)
-    print("\nCSV остаются на этой машине. Наружу — только текст сводки выше.")
+    print(f"\nвсего {time.time() - t0:.1f} с"
+          + ("" if fast else f", шаг 2 в {jobs} поток(ов)"))
+    print("CSV остаются на этой машине. Наружу — только текст сводки выше.")
 
 
 if __name__ == "__main__":
