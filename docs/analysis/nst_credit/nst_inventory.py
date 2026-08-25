@@ -28,6 +28,12 @@
   python nst_inventory.py "R:\\!!!!!НСТ2025" --jobs 16    # потоков на шаге 2
   python nst_inventory.py "R:\\!!!!!НСТ2025" --quiet      # без живого прогресса
 
+  --probe: прицельно вскрыть файл или папку — полная шапка ВСЕХ листов
+  плюс различные значения узких колонок. Так находится перечень значений
+  измерения «Портфель в шаблоне НСТ»:
+  python nst_inventory.py --probe "R:\\!!!!!НСТ2025\\Финальный шаблон и документы по НСТ2024"
+  python nst_inventory.py --probe "R:\\...\\2025_КР расчет провизий_V5 (факт...).xlsx"
+
 СКОРОСТЬ — где она берётся и где её нет
   шаг 1  os.scandir вместо os.walk + os.stat. На Windows DirEntry.stat()
          берётся из листинга каталога и НЕ делает отдельного обращения
@@ -52,12 +58,18 @@
 
 ЗАВИСИМОСТИ
   обязательных нет. Больше видно, если стоят: openpyxl (.xlsx/.xlsm),
-  xlrd (.xls), pypdf (.pdf). .docx читается стандартным zipfile.
-  Чего нет — попадёт в CSV как строка с пометкой, а не пропадёт молча.
+  pyxlsb (.xlsb), xlrd (.xls), pypdf (.pdf). .docx читается стандартным
+  zipfile. Чего нет — попадёт в CSV строкой с пометкой, а не пропадёт молча.
+
+  По итогам первого прогона на R:\!!!!!НСТ2025 не прочитано:
+    23 файла .xlsb — 2 ГБ, ПОЛОВИНА объёма папки  ->  pip install pyxlsb
+    10 файлов .pdf                                ->  pip install pypdf
+     6 файлов .xlsx больше 100 МБ                 ->  --max-mb 500
 """
 
 import csv
 import os
+import warnings
 import re
 import sys
 import time
@@ -67,14 +79,17 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 # --- шапка прошлогоднего шаблона: по ней ищем сам шаблон -------------------
-TEMPLATE_KEYS = [
-    "SEGMENT",
-    "Портфель в шаблоне НСТ",
-    "Стадия кредитного обесценения",
-    "Объем задолженности",
-    "Объем внебалансовых обязательств",
-    "Объем провизий",
-]
+# Ключ — что ищем, значение — варианты написания. Первый прогон искал
+# точные подстроки и на 15 попаданиях не нашёл ни SEGMENT, ни «Портфель
+# в шаблоне НСТ»: колонки в файлах названы иначе. Ищем по синонимам.
+TEMPLATE_KEYS = {
+    "сегмент":      ("segment", "сегмент"),
+    "портфель":     ("портфель", "portf", "portfolio"),
+    "стадия":       ("стадия", "stage", "обесценен"),
+    "задолженность": ("задолженност", "объем задолж"),
+    "внебаланс":    ("внебаланс", "offbal", "условны"),
+    "провизии":     ("провизи", "резерв", "provision"),
+}
 
 # слова, по которым файл интересен независимо от расширения
 INTEREST = [
@@ -88,6 +103,13 @@ OFFICE = {".xlsx", ".xlsm", ".xltx", ".xls", ".xlsb", ".docx", ".doc",
 
 MAX_HEADER_ROWS = 6      # сколько строк шапки читаем с листа
 MAX_SHEET_COLS  = 40     # сколько колонок шапки записываем
+
+PROBE_ROWS     = 5000    # --probe: сколько строк читаем ради значений
+PROBE_DISTINCT = 50      # больше этого различных значений — колонка не измерение
+
+# «Data Validation extension is not supported» и подобное: файл читается,
+# предупреждение только засоряет вывод
+warnings.filterwarnings("ignore", category=UserWarning, module="openpyxl")
 
 
 def human(n):
@@ -203,8 +225,12 @@ def walk(root, quiet=False):
                              if mtime else "",
                     "depth": os.path.relpath(dirp, root).count(os.sep)
                              if dirp != root else 0,
-                    "interest": int(any(w in nm.lower() or w in dirp.lower()
-                                        for w in INTEREST)),
+                    # Корень исключён: путь R:\!!!!!НСТ2025 содержит «нст»,
+                    # и без этого признак срабатывал на 486 файлах из 486.
+                    "interest": int(any(
+                        w in nm.lower()
+                        or w in os.path.relpath(dirp, root).lower()
+                        for w in INTEREST)),
                 })
                 prog.tick(note=nm)
     prog.close(f"каталогов {ndirs}"
@@ -254,6 +280,28 @@ def sheets_xls(path):
         out.append({"sheet": name, "rows": sh.nrows, "cols": sh.ncols,
                     "header": " // ".join(head)[:2000]})
         bk.unload_sheet(name)
+    return out
+
+
+def sheets_xlsb(path):
+    """.xlsb — двоичный формат, openpyxl его не открывает. Это половина
+    объёма папки НСТ (23 файла, 2 ГБ), поэтому pyxlsb стоит поставить."""
+    from pyxlsb import open_workbook
+    out = []
+    with open_workbook(long_path(path)) as wb:
+        for name in wb.sheets:
+            with wb.get_sheet(name) as sh:
+                head, ncols = [], 0
+                for i, row in enumerate(sh.rows()):
+                    if i >= MAX_HEADER_ROWS:
+                        break
+                    cells = [str(c.v).strip() for c in row[:MAX_SHEET_COLS]
+                             if c.v is not None and str(c.v).strip()]
+                    ncols = max(ncols, len(row))
+                    if cells:
+                        head.append(" | ".join(cells))
+                out.append({"sheet": name, "rows": -1, "cols": ncols,
+                            "header": " // ".join(head)[:2000]})
     return out
 
 
@@ -310,7 +358,8 @@ def head_csv(path, lines=3):
 
 READERS = {
     ".xlsx": sheets_xlsx, ".xlsm": sheets_xlsx, ".xltx": sheets_xlsx,
-    ".xls": sheets_xls, ".docx": text_docx, ".pdf": text_pdf,
+    ".xls": sheets_xls, ".xlsb": sheets_xlsb,
+    ".docx": text_docx, ".pdf": text_pdf,
     ".csv": head_csv, ".txt": head_csv,
 }
 
@@ -376,11 +425,12 @@ def find_template(struct):
     hits = []
     for r in struct:
         h = (r.get("header") or "").lower()
-        matched = [k for k in TEMPLATE_KEYS if k.lower() in h]
-        if len(matched) >= 2:
+        matched = [k for k, variants in TEMPLATE_KEYS.items()
+                   if any(v in h for v in variants)]
+        if len(matched) >= 3:
             hits.append({**r, "sovpalo": len(matched),
                          "kakie": "; ".join(matched)})
-    return sorted(hits, key=lambda r: -r["sovpalo"])
+    return sorted(hits, key=lambda r: (-r["sovpalo"], r["rel"]))
 
 
 # ============================ ШАГ 4. Сводка ===============================
@@ -431,16 +481,106 @@ def report(root, files, struct, tmpl, errors, skipped):
         P("  либо шапка на другом языке/в объединённых ячейках ниже 6-й строки.")
         P("  Поднять MAX_HEADER_ROWS и прогнать снова по подпапке с шаблонами.")
     for r in tmpl[:15]:
-        P(f"  [{r['sovpalo']}/6] {r['rel']}  лист «{r['sheet']}» "
+        P(f"  [{r['sovpalo']}/{len(TEMPLATE_KEYS)}] {r['rel']}  лист «{r['sheet']}» "
           f"({r['rows']}x{r['cols']})")
         P(f"        совпало: {r['kakie']}")
     P("=" * 78)
+
+
+# ================ РЕЖИМ --probe: прицельное чтение одного файла ============
+def probe_xlsx(path):
+    """Полная шапка + РАЗЛИЧНЫЕ ЗНАЧЕНИЯ узких колонок.
+
+    Так находится перечень значений измерения «Портфель в шаблоне НСТ»:
+    измерение — это колонка с десятком повторяющихся значений, а не
+    с тысячей уникальных.
+
+    Отсечка PROBE_DISTINCT работает и как защита ПДн: колонка с БИН или
+    наименованием даёт тысячи различных значений и в выдачу не попадает
+    вовсе — печатается только счётчик."""
+    import openpyxl
+    wb = openpyxl.load_workbook(long_path(path), read_only=True,
+                                data_only=True, keep_links=False)
+    out = []
+    try:
+        for ws in wb.worksheets:
+            header, vals, over, nrows = None, defaultdict(set), set(), 0
+            for row in ws.iter_rows(max_row=PROBE_ROWS, values_only=True):
+                filled = [c for c in row if c is not None and str(c).strip()]
+                if header is None:
+                    if len(filled) >= 2:
+                        header = [str(c).strip() if c is not None else ""
+                                  for c in row]
+                    continue
+                nrows += 1
+                for i, c in enumerate(row):
+                    if c is None or i in over:
+                        continue
+                    s = str(c).strip()
+                    if not s:
+                        continue
+                    vals[i].add(s)
+                    if len(vals[i]) > PROBE_DISTINCT:
+                        over.add(i)
+                        vals[i] = set()          # не держим ПДн в памяти
+            cols = []
+            for i, name in enumerate(header or []):
+                if not name and i not in vals and i not in over:
+                    continue
+                if i in over:
+                    cols.append({"col": i + 1, "name": name,
+                                 "raznyh": f">{PROBE_DISTINCT}", "znacheniya": ""})
+                else:
+                    v = sorted(vals.get(i, set()))
+                    cols.append({"col": i + 1, "name": name, "raznyh": len(v),
+                                 "znacheniya": " | ".join(v[:25])[:1500]})
+            out.append({"sheet": ws.title, "rows_read": nrows,
+                        "header": header or [], "cols": cols})
+    finally:
+        wb.close()
+    return out
+
+
+def probe(target, quiet=False):
+    targets = []
+    if os.path.isdir(target):
+        for dp, dn, fn in os.walk(target):
+            targets += [os.path.join(dp, f) for f in fn
+                        if os.path.splitext(f)[1].lower() in
+                        (".xlsx", ".xlsm", ".xltx") and not f.startswith("~$")]
+    else:
+        targets = [target]
+    print(f"--probe: файлов к разбору {len(targets)}\n")
+    for t in sorted(targets):
+        print("=" * 78)
+        print(os.path.basename(t))
+        try:
+            sheets = probe_xlsx(t)
+        except Exception as e:
+            print(f"  не открылся: {type(e).__name__}: {e}")
+            continue
+        for sh in sheets:
+            named = [c for c in sh["cols"] if c["name"]]
+            print(f"\n  лист «{sh['sheet']}» — строк прочитано {sh['rows_read']}, "
+                  f"колонок с именем {len(named)}")
+            for c in named:
+                head = f"    [{c['col']:>2}] {c['name'][:45]:<45}"
+                if c["znacheniya"]:
+                    print(f"{head} ({c['raznyh']}) {c['znacheniya'][:110]}")
+                else:
+                    print(f"{head} ({c['raznyh']})")
+    print("=" * 78)
+    print("Колонки с числом различных значений > "
+          f"{PROBE_DISTINCT} печатаются только счётчиком: там ПДн, а не измерение.")
 
 
 def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
+    if "--probe" in sys.argv:
+        probe(sys.argv[sys.argv.index("--probe") + 1])
+        return
     root = os.path.abspath(sys.argv[1])
     fast = "--fast" in sys.argv
     quiet = "--quiet" in sys.argv or not sys.stderr.isatty()
