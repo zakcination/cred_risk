@@ -353,15 +353,23 @@ def long_path(p: str) -> str:
 
 
 def say(*a):
-    print(*a, file=sys.stderr, flush=True)
+    """Прогресс идёт в stdout, а не в stderr.
+
+    PowerShell красит любой вывод нативной программы в stderr красным
+    и заворачивает в NativeCommandError — прогресс выглядит как авария.
+    Stderr берут, чтобы не смешивать сообщения с данными на stdout,
+    но этот скрипт на stdout данных не выдаёт: результат всегда файл.
+    Значит stderr не даёт ничего, а стоит ложной тревоги у пользователя.
+    """
+    print(*a, flush=True)
 
 
 # Вывод не должен падать из-за кодировки консоли: сообщение о проблеме
 # ценнее одного нечитаемого символа. Русский текст от этого не исправится —
 # кодовая страница консоли не наша забота, — но прогон не оборвётся.
-if hasattr(sys.stderr, "reconfigure"):
+if hasattr(sys.stdout, "reconfigure"):
     try:
-        sys.stderr.reconfigure(errors="replace")
+        sys.stdout.reconfigure(errors="replace")
     except (ValueError, OSError):
         pass
 
