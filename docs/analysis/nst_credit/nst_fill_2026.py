@@ -356,6 +356,16 @@ def say(*a):
     print(*a, file=sys.stderr, flush=True)
 
 
+# Вывод не должен падать из-за кодировки консоли: сообщение о проблеме
+# ценнее одного нечитаемого символа. Русский текст от этого не исправится —
+# кодовая страница консоли не наша забота, — но прогон не оборвётся.
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
 class Tick:
     """Прогресс по строкам: на 566 тысячах молчание неотличимо от зависания."""
 
@@ -481,11 +491,21 @@ class Plan:
 
 # --------------------------------------------------------- списки Sabila
 
-def read_bins(paths):
+def read_bins(paths, only_col: str | None = None, detail: bool = False):
     """БИН из файлов Sabila. Union без фильтрации (Н7).
 
-    Колонку не ищем по имени — берём любую ячейку, похожую на БИН.
+    Колонку по умолчанию не ищем по имени — берём любую ячейку из 12 цифр.
     Имя колонки в присланных файлах непредсказуемо, 12 цифр — предсказуемы.
+
+    У приёма есть цена, и она обнаружилась на перечне 2026: **12 цифр
+    бывают не только у БИН.** Сумма в тенге (100 000 000 000), номер
+    договора, внутренний идентификатор — всё это пройдёт тем же фильтром
+    и попадёт в перечень, который по Н7 менять нельзя, то есть ошибка
+    не будет отловлена ни одной последующей проверкой.
+
+    Поэтому `--inspect-b2a` печатает разбивку по колонкам (`detail`),
+    а `--b2a-col` сужает чтение до одной колонки (`only_col`). Разбивка
+    показывает не значения, а их количество: ПДн наружу не идут.
     """
     from openpyxl import load_workbook
 
@@ -499,32 +519,60 @@ def read_bins(paths):
         else:
             files.append(p)
 
-    bins, per_file = set(), []
+    want = norm(only_col) if only_col else None
+    bins, per_file, where = set(), [], defaultdict(set)
+
+    def take(src, head, j, c):
+        """src — «файл / лист», head — шапка колонки, j — её номер."""
+        b = as_bin(c)
+        if not b:
+            return
+        name = head.get(j) or f"колонка {j}"
+        if want and norm(name) != want:
+            return
+        where[(src, name)].add(b)
+        found.add(b)
+
     for f in files:
         found = set()
         ext = os.path.splitext(f)[1].lower()
         try:
             if ext in (".csv", ".txt"):
                 with open(long_path(f), encoding="utf-8-sig", newline="") as fh:
-                    for row in csv.reader(fh, delimiter=";"):
-                        for c in row:
-                            b = as_bin(c)
-                            if b:
-                                found.add(b)
+                    rows = list(csv.reader(fh, delimiter=";"))
+                head = {j: norm(v) for j, v in enumerate(rows[0], 1)} if rows else {}
+                for row in rows[1:]:
+                    for j, c in enumerate(row, 1):
+                        take(os.path.basename(f), head, j, c)
             else:
                 wb = load_workbook(long_path(f), read_only=True, data_only=True)
                 for ws in wb.worksheets:
-                    for row in ws.iter_rows(values_only=True):
-                        for c in row:
-                            b = as_bin(c)
-                            if b:
-                                found.add(b)
+                    src = f"{os.path.basename(f)} / {ws.title}"
+                    head = {}
+                    for i, row in enumerate(ws.iter_rows(values_only=True), 1):
+                        if i == 1:               # шапка — из первой строки
+                            head = {j: norm(v) for j, v in enumerate(row, 1) if norm(v)}
+                            continue
+                        for j, c in enumerate(row, 1):
+                            take(src, head, j, c)
                 wb.close()
         except Exception as exc:                       # noqa: BLE001
             say(f"  ! {os.path.basename(f)}: {type(exc).__name__}: {exc}")
             continue
         per_file.append((os.path.basename(f), len(found)))
         bins |= found
+
+    if detail:
+        say("")
+        say("=== откуда взяты 12-значные значения ===")
+        say(f"  {'файл / лист':<44} {'колонка':<28} {'разных':>7}")
+        for (src, name), vals in sorted(where.items(), key=lambda kv: -len(kv[1])):
+            say(f"  {src[:42]:<44} {str(name)[:26]:<28} {len(vals):>7}")
+        say("")
+        say("  Значения не печатаются: это ПДн (раздел 6 CLAUDE.md контура).")
+        say("  Колонка с суммами или номерами договоров даст здесь свои")
+        say("  12-значные числа наравне с БИН. Если строка ниже — не перечень,")
+        say("  сузьте чтение: --b2a-col \"<имя колонки>\".")
 
     return bins, per_file
 
@@ -603,7 +651,7 @@ def fill(args):
     b2a, per_file = set(), []
     if args.b2a:
         say("читаю списки Sabila…")
-        b2a, per_file = read_bins(args.b2a)
+        b2a, per_file = read_bins(args.b2a, args.b2a_col)
         for name, n in per_file:
             say(f"  {name}: {n} БИН")
         say(f"  union: {len(b2a)} БИН")
@@ -615,7 +663,9 @@ def fill(args):
     porog = None
     if args.capital:
         porog = args.capital * DOLYA_INDIVID
-        say(f"порог: {porog:,.0f} ₸ ({DOLYA_INDIVID:.1%} от {args.capital:,.0f} ₸), "
+        # «тг», а не «₸»: консоль Windows знак тенге не кодирует и печатает
+        # ₸ вместо него. В xlsx и CSV символ остаётся — там UTF-8.
+        say(f"порог: {porog:,.0f} тг ({DOLYA_INDIVID:.1%} от {args.capital:,.0f} тг), "
             f"строго больше (О13)")
     else:
         say("! --capital не задан: флаг порога НЕ считается, метка только по B2A")
@@ -1142,6 +1192,9 @@ def main():
 """)
     p.add_argument("--template", default=TEMPLATE_DEFAULT)
     p.add_argument("--inspect", action="store_true", help="показать структуру, ничего не писать")
+    p.add_argument("--inspect-b2a", action="store_true",
+                   help="прочитать только перечень Sabila и показать, из каких "
+                        "колонок взяты БИН. Шаблон не открывается")
     p.add_argument("--fill", action="store_true", help="заполнить (в новый файл)")
     p.add_argument("--out", help="куда сохранить; по умолчанию рядом с суффиксом")
     p.add_argument("--force", action="store_true",
@@ -1155,8 +1208,13 @@ def main():
     p.add_argument("--head-scan", type=int, default=HEAD_SCAN)
 
     p.add_argument("--b2a", nargs="+", help="файлы/папки списков Sabila (xlsx, csv)")
+    p.add_argument("--b2a-col",
+                   help="читать БИН только из этой колонки перечня. По умолчанию "
+                        "берётся любая ячейка из 12 цифр — а 12 цифр бывают "
+                        "и у суммы в тенге. Проверить: --inspect-b2a")
     p.add_argument("--capital", type=float,
-                   help="собственный капитал на отчётную дату, ₸. Без него порог не считается")
+                   help="собственный капитал на отчётную дату, тенге. "
+                        "Без него порог не считается")
     p.add_argument("--seg", help="CSV выгрузки С1: ключ займа → сегмент СЛОЯ 2")
     p.add_argument("--seg-col-key")
     p.add_argument("--seg-col-segment")
@@ -1169,12 +1227,24 @@ def main():
     p.add_argument("--col-zadol", help="имя колонки задолженности, если она одна")
 
     a = p.parse_args()
-    if a.inspect == a.fill:
-        p.error("укажите ровно одно: --inspect или --fill")
+    if sum((a.inspect, a.fill, a.inspect_b2a)) != 1:
+        p.error("укажите ровно одно: --inspect, --inspect-b2a или --fill")
     try:
         import openpyxl  # noqa: F401
     except ImportError:
         raise SystemExit("нужен openpyxl:  pip install openpyxl")
+    if a.inspect_b2a:
+        if not a.b2a:
+            p.error("--inspect-b2a требует --b2a")
+        bins, per_file = read_bins(a.b2a, a.b2a_col, detail=True)
+        say("")
+        for name, n in per_file:
+            say(f"  файл {name}: {n}")
+        say(f"  ИТОГО различных: {len(bins)}")
+        say("")
+        say("  Для сверки: в прошлом цикле файл давал 66 БИН, таблица")
+        say("  RA_NST_B2A_AQR2026 — 77, в расчёте участвовало 68 (О11).")
+        return
     (inspect if a.inspect else fill)(a)
 
 
