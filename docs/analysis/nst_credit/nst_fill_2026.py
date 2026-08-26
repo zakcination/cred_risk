@@ -144,6 +144,8 @@ COL_INDIVID = "Индивидуальный заём"
 COL_BASIS = "Основание индивидуальности"
 COL_SEGMENT = "SEGMENT"
 COL_PORTF = "Портфель в шаблоне НСТ"
+COL_WHY = "Основание сегмента"
+SHEET_METOD = "Методология"
 
 CAND = {
     "bin": ["iin_bin", "бин", "иин", "бин/иин", "иин/бин", "bin", "iin",
@@ -154,6 +156,85 @@ CAND = {
     "zadol": ["zadol", "задолженность", "объем задолженности",
               "объём задолженности", "общая задолженность"],
 }
+
+# Поля каскада. Все присутствуют и в B1A, и в B1B — проверено --inspect 26.08.2026.
+CASCADE_FIELDS = ["entity", "lsboo", "f_inv", "debtor_type", "debtor_se",
+                  "ent_type", "loan_obj", "loan_purp", "collateral", "ead"]
+
+# =====================================================================
+#  МЕТОДОЛОГИЯ РАСПРЕДЕЛЕНИЯ СЕГМЕНТОВ
+#
+#  Единственный источник и для расчёта, и для методички, которая уходит
+#  вместе с файлом. Разъехаться они не могут: cascade() возвращает номер,
+#  metodologiya() печатает эту же таблицу. Править — только здесь.
+#
+#  Порядок ветвления воспроизводит С1 строка в строку, включая приоритет
+#  (Н18): доля «неверных» отнесений поля меряется внутри его собственной
+#  ветки, и переставленное условие меняет результат, а не только вид.
+#
+#  № : (сегмент, условие дословно, что это значит, основание)
+# =====================================================================
+RULES = {
+    1:  ("DISASS", "entity = 'EUB1'",
+         "Заём на балансе организации по управлению стрессовыми активами",
+         "Таблица 4: «все займы на балансе ОУСА по амортизированной стоимости»"),
+    2:  ("RELATE", "lsboo = 1",
+         "Заём лицу, связанному с банком особыми отношениями",
+         "Таблица 4: «согласно требованиям регуляторной отчётности»"),
+    3:  ("CORINV", "f_inv = 1",
+         "Инвестиционный заём",
+         "Таблица 4: срок ≥ 5 лет, запрет полного досрочного погашения, ЮЛ, "
+         "бизнес-план. Флаг проставляет источник — см. О3"),
+    4:  ("Individual loans", "БИН заёмщика в перечне индивидуальных",
+         "Заёмщик признан индивидуально значимым",
+         "Перечень Sabila (Н7: принимается неизменным). Основания в Таблице 4 "
+         "для этого критерия нет — О6"),
+    5:  ("Individual loans", "задолженность заёмщика > 0,2 % собственного капитала",
+         "Порог индивидуальности",
+         "Таблица 4: «все займы, общая задолженность которых превышает 0,2 % "
+         "от собственного капитала Банка». Строго больше (О13). Считается "
+         "на сумму по БИН, а не по договору (Г8)"),
+    6:  ("COREST",
+         "(debtor_type = 1 ИЛИ (debtor_type = 0 И debtor_se = 1)) "
+         "И ent_type ∈ {1,2,3} И loan_obj ∈ {1,2,3} И loan_purp ∈ {1,2,3,4,5,8}",
+         "Заём на приобретение или строительство недвижимости",
+         "Таблица 4: «согласно требованиям регуляторной отчётности» (Н12)"),
+    7:  ("CORLAR", "ent_type = 1",
+         "Субъект крупного предпринимательства",
+         "ст. 24 п. 6 ПК РК: > 250 работников и/или доход > 3 000 000 МРП. "
+         "Численность и доход в витрине отсутствуют — О2"),
+    8:  ("CORMED", "ent_type = 2",
+         "Субъект среднего предпринимательства",
+         "ст. 24 п. 5 ПК РК: не малое и не крупное"),
+    9:  ("RETSML", "ent_type = 3",
+         "Субъект малого предпринимательства",
+         "ст. 24 п. 3 ПК РК: ≤ 100 работников и доход ≤ 300 000 МРП"),
+    10: ("RETEST",
+         "debtor_type = 0 И debtor_se = 0 И ead ≤ 200 млн И loan_obj = 1",
+         "Заём физлицу, обеспеченный жилой недвижимостью",
+         "Таблица 4: «согласно требованиям регуляторной отчётности» (Н12)"),
+    11: ("RETCAR",
+         "debtor_type = 0 И debtor_se = 0 И ead ≤ 200 млн И collateral = 1",
+         "Автокредит либо иной обеспеченный заём физлицу",
+         "Таблица 4: «согласно требованиям регуляторной отчётности» (Н12)"),
+    12: ("RETCON",
+         "debtor_type = 0 И debtor_se = 0 И ead ≤ 200 млн, прочее",
+         "Потребительский кредит, кредитная карта, прочий заём физлицу",
+         "Остаток розничной ветки"),
+    13: ("X", "ни одно условие выше не выполнено",
+         "ТРЕБУЕТ РУЧНОГО РАЗБОРА",
+         "Чаще всего — отсутствует ent_type у юрлица либо ead > 200 млн "
+         "у физлица. Строку разбирает ответственное подразделение"),
+}
+
+# Слой 2 — распределение по Таблице 3, колонка «кредитный риск»:
+# «Индивидуальные займы» и «займы, переданные в ОУСА» распределены
+# по другим портфелям. Значит на слое 2 эти правила пропускаются,
+# и заём доходит до продуктовой ветки (Г7, доказана на 1 470 договорах).
+# RELATE (правило 2) в ключевых строках Таблицы 3 не перечислен —
+# по умолчанию остаётся своей строкой формы. Это О28.
+SKIP_L2 = {1, 4, 5}
+NO_PORTFOLIO = "требует ручного разбора"
 
 
 # ------------------------------------------------------------------ утилиты
@@ -191,6 +272,60 @@ def as_float(v) -> float:
         return float(s)
     except ValueError:
         return 0.0
+
+
+def as_int(v):
+    """TRY_CAST, а не CAST (Н15): коды приходят nvarchar с нечисловым содержимым."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip().replace("\xa0", "").replace(" ", "").replace(",", ".")
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
+
+
+def cascade(v: dict, skip: frozenset) -> int:
+    """Каскад С1, строка в строку, включая порядок ветвления (Н18).
+
+    v — приведённые значения строки; skip — номера пропускаемых правил
+    (слой 2 по Таблице 3). Возвращает номер сработавшего правила из RULES.
+    """
+    if 1 not in skip and str(v.get("entity") or "").strip() == "EUB1":
+        return 1
+    if 2 not in skip and v.get("lsboo") == 1:
+        return 2
+    if 3 not in skip and (v.get("f_inv") or 0) == 1:
+        return 3
+    if 4 not in skip and v.get("in_b2a"):
+        return 4
+    if 5 not in skip and v.get("over_porog"):
+        return 5
+
+    dt, dse = v.get("debtor_type"), v.get("debtor_se")
+    et, lo = v.get("ent_type"), v.get("loan_obj")
+    lp, col = v.get("loan_purp"), v.get("collateral")
+
+    if (dt == 1 or (dt == 0 and dse == 1)) and et in (1, 2, 3) \
+            and lo in (1, 2, 3) and lp in (1, 2, 3, 4, 5, 8):
+        return 6
+    if et == 1:
+        return 7
+    if et == 2:
+        return 8
+    if et == 3:
+        return 9
+    if (dt or 0) == 0 and (dse or 0) == 0 and (v.get("ead") or 0.0) <= 200_000_000:
+        if lo == 1:
+            return 10
+        if (col or 0) == 1:
+            return 11
+        return 12
+    return 13
 
 
 def is_active(v) -> bool:
@@ -295,6 +430,7 @@ class Plan:
         self.j_isdel = self.cmap.get("is_del")
         self.j_indsign = self.cmap.get("ind_sign")
         self.ncol = ws.max_column or max(self.cmap.values(), default=0)
+        self.maxrow = ws.max_row or 0          # в read_only бывает None
 
         j_one, n_one = resolve(self.cmap, "zadol", args.col_zadol)
         self.zadol_one = j_one
@@ -304,10 +440,23 @@ class Plan:
         self.zadol_names = ([n_one] if j_one
                             else [p for p in ZADOL_PARTS if p in self.cmap])
 
+        # Поля каскада. Отсутствующее поле — не повод «считать как получится»:
+        # каскад без ent_type отправит юрлиц в розницу и промолчит.
+        self.casc = {f: self.cmap.get(f) for f in CASCADE_FIELDS}
+        self.casc_missing = [f for f, j in self.casc.items() if not j]
+
     def zadol(self, row) -> float:
         if self.zadol_one:
             return as_float(cell(row, self.zadol_one))
         return sum(as_float(cell(row, j)) for j in self.zadol_parts)
+
+    def vals(self, row) -> dict:
+        """Приведённые значения полей каскада для одной строки."""
+        v = {f: as_int(cell(row, self.casc[f])) if self.casc[f] else None
+             for f in CASCADE_FIELDS}
+        v["entity"] = cell(row, self.casc["entity"]) if self.casc["entity"] else None
+        v["ead"] = as_float(cell(row, self.casc["ead"])) if self.casc["ead"] else 0.0
+        return v
 
     def describe(self):
         say(f"  лист «{self.title}»: шапка {self.hrow}, {self.ncol} колонок")
@@ -323,6 +472,11 @@ class Plan:
             say(f"    is_del → колонка {self.j_isdel}, неактивные в порог не идут")
         if self.j_indsign:
             say(f"    ind_sign → колонка {self.j_indsign}, будет сверка с нашей меткой")
+        if self.casc_missing:
+            say(f"    ! полей каскада нет: {', '.join(self.casc_missing)} — "
+                f"сегмент на этом листе не считается")
+        else:
+            say("    все поля каскада на месте, сегмент считается")
 
 
 # --------------------------------------------------------- списки Sabila
@@ -472,8 +626,14 @@ def fill(args):
         say(f"выгрузка С1: {len(seg)} ключей, «{hk}» → «{hs}»")
 
     # --- проход 1: задолженность по заёмщику ------------------------------
-    # Единица — заёмщик (Г8, Н19): порог считается на сумму по БИН.
-    say("проход 1 из 2 — сумма задолженности по заёмщику")
+    # Нужен ровно для порога: правило П5 меряется на сумму по БИН (Г8, Н19),
+    # а сумму нельзя узнать, не дочитав файл до конца. Без --capital правило
+    # не применяется — тогда и прохода нет, работа вдвое короче.
+    #
+    # Цена прохода реальна: openpyxl на 200 тыс. строк × 115 колонок тратит
+    # ~23 с на открытие (таблица общих строк) и ~40 с на чтение. Молчать
+    # об этом нельзя, поэтому Tick печатает прогресс каждые 50 тыс. строк.
+    need_pass1 = porog is not None
     wb = load_workbook(long_path(args.template), read_only=True, data_only=True)
     sheets = pick_sheets(wb, args)
     plans = {}
@@ -486,58 +646,39 @@ def fill(args):
         if not pl.j_bin:
             raise SystemExit(f"лист «{ws.title}»: колонка БИН не опознана, задайте --col-bin")
         plans[ws.title] = pl
-        t = Tick(ws.title)
-        for row in ws.iter_rows(min_row=pl.hrow + 1, values_only=True):
-            b = as_bin(cell(row, pl.j_bin))
-            if not b and not cell(row, pl.j_key):
-                continue
-            rowcnt[ws.title] += 1
-            t()
-            if pl.j_isdel and not is_active(cell(row, pl.j_isdel)):
-                delcnt[ws.title] += 1
-                continue                       # С1 фильтрует is_del = '0'
-            if b and pl.has_zadol:
-                zadol_bin[b] += pl.zadol(row)
-        t.done()
+
+    if need_pass1:
+        say("проход 1 из 2 — сумма задолженности по заёмщику")
+        for ws in sheets:
+            pl = plans[ws.title]
+            t = Tick(ws.title)
+            for row in ws.iter_rows(min_row=pl.hrow + 1, values_only=True):
+                b = as_bin(cell(row, pl.j_bin))
+                if not b and not cell(row, pl.j_key):
+                    continue
+                rowcnt[ws.title] += 1
+                t()
+                if pl.j_isdel and not is_active(cell(row, pl.j_isdel)):
+                    delcnt[ws.title] += 1
+                    continue                   # С1 фильтрует is_del = '0'
+                if b and pl.has_zadol:
+                    zadol_bin[b] += pl.zadol(row)
+            t.done()
+        say(f"строк: {sum(rowcnt.values()):,}, из них неактивных "
+            f"{sum(delcnt.values()):,}; заёмщиков с задолженностью: {len(zadol_bin):,}")
+        if not zadol_bin:
+            raise SystemExit("порог задан, но ни на одном листе нет задолженности")
+    else:
+        say("проход 1 пропущен: без --capital правило П5 (порог) не применяется")
     wb.close()
 
-    say(f"строк: {sum(rowcnt.values()):,}, из них неактивных "
-        f"{sum(delcnt.values()):,}; заёмщиков с задолженностью: {len(zadol_bin):,}")
-    if porog is not None and not zadol_bin:
-        raise SystemExit("порог задан, но ни на одном листе нет задолженности")
-
     # --- проход 2: запись --------------------------------------------------
-    pseudo_set = PSEUDO | ({"RELATE"} if args.relate == "distribute" else set())
-    stat, seg_stat, warn, cross = Counter(), Counter(), Counter(), Counter()
-    miss_key = Counter()
-
-    def mark(b: str):
-        f_b2a = 1 if (b and b in b2a) else 0
-        f_por = 1 if (porog is not None and b and zadol_bin.get(b, 0.0) > porog) else 0
-        return {(1, 1): "B2A+порог", (1, 0): "B2A", (0, 1): "порог"}.get((f_b2a, f_por), "")
-
-    def seg_portf(pl: Plan, k: str):
-        if not seg:
-            return None, None
-        s = seg.get(k, "")
-        if not s:
-            miss_key[pl.title] += 1
-            p = ""
-        elif s in pseudo_set:
-            p = ""                             # слой 1 в слой 2 не переводим молча
-            warn[f"псевдосегмент слоя 1: {s}"] += 1
-        else:
-            p = PORTFOLIO.get(s, "")
-            if not p:
-                warn[f"портфель не задан для сегмента {s}"] += 1
-        seg_stat[s or "ключ не найден в выгрузке"] += 1
-        return s, p
+    ctx = Ctx(args, b2a, porog, zadol_bin, seg or None)
 
     def new_cols(pl: Plan):
         """Куда писать. Существующие имена перезаписываются, прочие в хвост."""
-        want = [COL_INDIVID, COL_BASIS] + ([COL_SEGMENT, COL_PORTF] if seg else [])
         at, free = {}, pl.ncol
-        for name in want:
+        for name in OUT_COLS:
             j = pl.cmap.get(norm(name))
             if not j:
                 free += 1
@@ -545,14 +686,17 @@ def fill(args):
             at[name] = j
         return at, free
 
-    say(f"проход 2 из 2 — запись, режим {args.write}")
+    say(f"проход {'2 из 2' if need_pass1 else '1 из 1'} — запись, "
+        f"режим {args.write}")
 
     if args.write == "sidecar":
-        sidecar(args, out, sheets_ro(args), plans, mark, seg_portf, stat, cross)
+        sidecar(args, out, sheets_ro(args), plans, ctx)
     elif args.write == "stream":
         src = load_workbook(long_path(args.template), read_only=True, data_only=True)
         dst = Workbook(write_only=True)
         for ws in src.worksheets:
+            if ws.title == SHEET_METOD:        # старая методичка перегенерируется
+                continue
             ows = dst.create_sheet(title=ws.title)
             pl = plans.get(ws.title)
             if pl is None:                     # лист не наш — переносим как есть
@@ -567,20 +711,38 @@ def fill(args):
                     for name, j in at.items():
                         vals[j - 1] = name
                 elif i > pl.hrow:
-                    apply_row(pl, row, vals, at, mark, seg_portf, stat, cross, seg)
+                    for name, v in (ctx.row(pl, row) or {}).items():
+                        vals[at[name] - 1] = v
                     t()
                 ows.append(vals)
             t.done()
+        metodologiya(dst.create_sheet(title=SHEET_METOD), args, porog, b2a, per_file)
         say(f"сохраняю {out} …")
         dst.save(long_path(out))
         src.close()
         say("! форматирование и формулы шаблона в потоковом режиме не переносятся")
     else:                                       # inplace
-        big = [t for t, c in rowcnt.items() if c > BIG_SHEET]
-        if big and not args.force:
+        # Размер листа известен либо из прохода 1, либо из <dimension> файла.
+        # Если не известен ни оттуда, ни оттуда — отказываем, а не «пробуем»:
+        # inplace на неизвестном объёме кончается тем, что машина уходит
+        # в своп, а не сообщением об ошибке.
+        big, unknown = [], []
+        for t, pl in plans.items():
+            known = max(rowcnt.get(t, 0), pl.maxrow)
+            if not known:
+                unknown.append(t)
+            elif known > BIG_SHEET:
+                big.append(t)
+        if (big or unknown) and not args.force:
+            why = []
+            if big:
+                why.append(f"листы {', '.join(big)} больше {BIG_SHEET:,} строк")
+            if unknown:
+                why.append(f"размер листов {', '.join(unknown)} неизвестен "
+                           f"(нет <dimension>, проход 1 не выполнялся)")
             raise SystemExit(
-                f"листы {', '.join(big)} больше {BIG_SHEET:,} строк — inplace "
-                f"съест гигабайты. Используйте --write stream либо --force")
+                "; ".join(why) + ". inplace грузит книгу целиком — используйте "
+                "--write stream либо --force")
         wb = load_workbook(long_path(args.template), data_only=False)
         for ws in sheets_by_title(wb, plans):
             pl = plans[ws.title]
@@ -590,46 +752,104 @@ def fill(args):
             t = Tick(ws.title)
             for i, row in enumerate(
                     ws.iter_rows(min_row=pl.hrow + 1, values_only=True), pl.hrow + 1):
-                vals = {}
-                apply_row(pl, row, vals, at, mark, seg_portf, stat, cross, seg, sparse=True)
-                for j, v in vals.items():
-                    ws.cell(row=i, column=j, value=v)
+                for name, v in (ctx.row(pl, row) or {}).items():
+                    ws.cell(row=i, column=at[name], value=v)
                 t()
             t.done()
+        if SHEET_METOD in wb.sheetnames:
+            del wb[SHEET_METOD]
+        metodologiya(wb.create_sheet(title=SHEET_METOD), args, porog, b2a, per_file)
         say(f"сохраняю {out} …")
         wb.save(long_path(out))
         wb.close()
 
     say("готово")
-    report(args, out, stat, seg_stat, warn, cross, b2a, zadol_bin, porog,
-           per_file, miss_key, rowcnt, delcnt, plans)
+    report(args, out, ctx, b2a, zadol_bin, porog, per_file, rowcnt, delcnt, plans)
 
 
-def apply_row(pl, row, vals, at, mark, seg_portf, stat, cross, seg, sparse=False):
-    """Проставить метку и сегмент в одну строку. vals — список или словарь."""
-    b = as_bin(cell(row, pl.j_bin))
-    k = cell(row, pl.j_key)
-    k = str(k).strip() if k is not None else ""
-    if not b and not k:
-        return
-    basis = mark(b)
-    put(vals, at[COL_INDIVID], 1 if basis else 0, sparse)
-    put(vals, at[COL_BASIS], basis, sparse)
-    stat[basis or "—"] += 1
-    if pl.j_indsign:
-        src = cell(row, pl.j_indsign)
-        cross[(basis or "—", "" if src is None else str(src).strip())] += 1
-    if seg:
-        s, p = seg_portf(pl, k)
-        put(vals, at[COL_SEGMENT], s, sparse)
-        put(vals, at[COL_PORTF], p, sparse)
+OUT_COLS = [COL_SEGMENT, COL_PORTF, COL_WHY, COL_INDIVID, COL_BASIS]
 
 
-def put(vals, j, v, sparse):
-    if sparse:
-        vals[j] = v
-    else:
-        vals[j - 1] = v
+class Ctx:
+    """Расчёт одной строки плюс накопление статистики.
+
+    Здесь сходятся оба слоя: слой 1 — каскад целиком, слой 2 — он же
+    с пропуском правил, которые Таблица 3 велит распределять (SKIP_L2).
+    Номер сработавшего правила пишется в строку, чтобы ответственное
+    подразделение видело, почему сегмент такой, и спорило с условием,
+    а не с результатом.
+    """
+
+    def __init__(self, args, b2a, porog, zadol_bin, seg_csv):
+        self.args, self.b2a, self.porog = args, b2a, porog
+        self.zadol_bin, self.seg_csv = zadol_bin, seg_csv
+        self.skip2 = frozenset(SKIP_L2 | ({2} if args.relate == "distribute" else set()))
+        self.rows = Counter()          # строк с данными по листам
+        self.stat = Counter()          # метка индивидуальности
+        self.seg1 = Counter()          # сегмент слоя 1
+        self.seg2 = Counter()          # строка формы, слой 2
+        self.rule1 = Counter()         # какое правило сработало
+        self.cross = Counter()         # наша метка × ind_sign
+        self.miss_key = Counter()
+        self.no_casc = Counter()
+
+    def row(self, pl: Plan, row):
+        b = as_bin(cell(row, pl.j_bin))
+        k = cell(row, pl.j_key)
+        k = str(k).strip() if k is not None else ""
+        if not b and not k:
+            return None
+        self.rows[pl.title] += 1
+
+        f_b2a = bool(b and b in self.b2a)
+        f_por = bool(self.porog is not None and b
+                     and self.zadol_bin.get(b, 0.0) > self.porog)
+        basis = {(1, 1): "B2A+порог", (1, 0): "B2A",
+                 (0, 1): "порог"}.get((int(f_b2a), int(f_por)), "")
+        self.stat[basis or "—"] += 1
+        out = {COL_INDIVID: 1 if basis else 0, COL_BASIS: basis}
+
+        if pl.j_indsign:
+            src = cell(row, pl.j_indsign)
+            self.cross[(basis or "—", "" if src is None else str(src).strip())] += 1
+
+        if pl.casc_missing:
+            self.no_casc[pl.title] += 1
+            return out
+
+        v = pl.vals(row)
+        v["in_b2a"], v["over_porog"] = f_b2a, f_por
+
+        if self.seg_csv is not None:           # выгрузка С1 перекрывает расчёт
+            s1 = self.seg_csv.get(k, "")
+            if not s1:
+                self.miss_key[pl.title] += 1
+            why = "сегмент из выгрузки С1" if s1 else "ключ не найден в выгрузке С1"
+            p = "" if (s1 in PSEUDO or not s1) else PORTFOLIO.get(s1, NO_PORTFOLIO)
+        else:
+            r1 = cascade(v, frozenset())
+            s1 = RULES[r1][0]
+            self.rule1[r1] += 1
+            why = f"П{r1}: {RULES[r1][1]} → {s1}"
+            if s1 == "X":
+                p = NO_PORTFOLIO
+            elif r1 in self.skip2:
+                r2 = cascade(v, self.skip2)
+                s2 = RULES[r2][0]
+                p = PORTFOLIO.get(s2, NO_PORTFOLIO)
+                why += f"; слой 2 (Таблица 3) П{r2}: {RULES[r2][1]} → {s2}"
+            else:
+                p = PORTFOLIO.get(s1, NO_PORTFOLIO)
+
+        self.seg1[s1 or "не определён"] += 1
+        self.seg2[p or "не проставлен"] += 1
+        if pl.j_isdel and not is_active(cell(row, pl.j_isdel)):
+            why += " [is_del = 1: в сумму порога не входит]"
+
+        out[COL_SEGMENT] = s1
+        out[COL_PORTF] = p
+        out[COL_WHY] = why
+        return out
 
 
 def sheets_ro(args):
@@ -652,34 +872,128 @@ def sheets_by_title(wb, plans):
     return [wb[t] for t in plans if t in wb.sheetnames]
 
 
-def sidecar(args, out, wb, plans, mark, seg_portf, stat, cross):
-    """CSV с ключом и метками — шаблон не трогается вовсе."""
+def sidecar(args, out, wb, plans, ctx):
+    """CSV с ключом и результатом — шаблон не трогается вовсе."""
     path = os.path.splitext(out)[0] + ".csv"
     with open(long_path(path), "w", encoding="utf-8-sig", newline="") as fh:
         w = csv.writer(fh, delimiter=";")
-        w.writerow(["лист", "ключ", COL_INDIVID, COL_BASIS, COL_SEGMENT, COL_PORTF])
+        w.writerow(["лист", "ключ"] + OUT_COLS)
         for ws in wb.worksheets:
             pl = plans.get(ws.title)
             if pl is None:
                 continue
             t = Tick(ws.title)
             for row in ws.iter_rows(min_row=pl.hrow + 1, values_only=True):
-                b = as_bin(cell(row, pl.j_bin))
-                k = cell(row, pl.j_key)
-                k = str(k).strip() if k is not None else ""
-                if not b and not k:
+                r = ctx.row(pl, row)
+                if r is None:
                     continue
-                basis = mark(b)
-                stat[basis or "—"] += 1
-                if pl.j_indsign:
-                    src = cell(row, pl.j_indsign)
-                    cross[(basis or "—", "" if src is None else str(src).strip())] += 1
-                s, p = seg_portf(pl, k)
-                w.writerow([ws.title, k, 1 if basis else 0, basis, s or "", p or ""])
+                k = cell(row, pl.j_key)
+                w.writerow([ws.title, "" if k is None else str(k).strip()]
+                           + [r.get(c, "") for c in OUT_COLS])
                 t()
             t.done()
     wb.close()
     say(f"sidecar: {path} — соединять по ключу займа, шаблон не изменён")
+
+    mp = os.path.splitext(out)[0] + "_методология.csv"
+    with open(long_path(mp), "w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh, delimiter=";")
+        for r in metod_rows(args, ctx.porog, ctx.b2a, []):
+            w.writerow(r)
+    say(f"методология: {mp}")
+
+
+# -------------------------------------------------------------- методология
+
+def metod_rows(args, porog, b2a, per_file):
+    """Методичка распределения сегментов — из той же таблицы RULES.
+
+    Уходит адресатам вместе с файлом, поэтому объясняет не только «что»,
+    но и «почему»: два слоя, чем они отличаются и где у нас открытые вопросы.
+    Ответственное подразделение должно уметь оспорить условие, а не догадаться
+    о нём по результату.
+    """
+    rows = [
+        ["МЕТОДОЛОГИЯ РАСПРЕДЕЛЕНИЯ СЕГМЕНТОВ НСТ"],
+        [],
+        ["Сегментация назначает не разрез отчётности, а поведение под стрессом:"],
+        ["на каждый портфель надевается свой набор PD, LGD, CCF и матрица миграции,"],
+        ["и через провизии он приходит в достаточность капитала. Ошибка сегмента —"],
+        ["это неверный параметр на соответствующем объёме книги, а не неточность разреза."],
+        [],
+        ["ДВА СЛОЯ"],
+        ["Слой 1 — первичная сегментация AQR (Таблица 4 Методруководства НСТ)."],
+        ["  Колонка «" + COL_SEGMENT + "». Содержит в том числе Individual loans,"],
+        ["  RELATE и DISASS как самостоятельные значения."],
+        ["Слой 2 — строка формы подачи (Таблица 3, колонка «кредитный риск»)."],
+        ["  Колонка «" + COL_PORTF + "». Таблица 3 дословно: «Индивидуальные займы»"],
+        ["  и «займы, переданные в ОУСА» — РАСПРЕДЕЛЕНЫ ПО ДРУГИМ ПОРТФЕЛЯМ."],
+        ["  Поэтому на слое 2 правила " + ", ".join(f"П{n}" for n in sorted(SKIP_L2))],
+        ["  пропускаются, и заём доходит до продуктовой ветки."],
+        [],
+        ["Колонка «" + COL_WHY + "» показывает оба слоя: какое условие сработало"],
+        ["на слое 1 и, если сегмент распределялся, какое на слое 2."],
+        [],
+        ["УСЛОВИЯ. Проверяются СТРОГО СВЕРХУ ВНИЗ: сработало — дальше не идём."],
+        ["Порядок — часть правила. Переставленное условие меняет результат."],
+        [],
+        ["№", "Условие", "Сегмент (слой 1)", "Строка формы (слой 2)",
+         "Что это значит", "Основание"],
+    ]
+    skip2 = SKIP_L2 | ({2} if args.relate == "distribute" else set())
+    for n in sorted(RULES):
+        seg, cond, meaning, base = RULES[n]
+        if n in skip2:
+            form = "распределяется — см. правила ниже"
+        elif seg == "X":
+            form = NO_PORTFOLIO
+        else:
+            form = PORTFOLIO.get(seg, NO_PORTFOLIO)
+        rows.append([n, cond, seg, form, meaning, base])
+
+    rows += [
+        [],
+        ["МЕТКА ИНДИВИДУАЛЬНОСТИ — отдельно от сегмента"],
+        ["Колонки «" + COL_INDIVID + "» и «" + COL_BASIS + "»."],
+        ["Два признака считаются НЕЗАВИСИМО, а не каскадом, поэтому основание"],
+        ["показывает состав: B2A, порог, либо B2A+порог одновременно."],
+        ["Метка сохраняется и после распределения сегмента: она нужна ЧПД,"],
+        ["объясняет происхождение провизий и показывает концентрацию внутри"],
+        ["продуктового портфеля."],
+        [],
+        ["  порог 0,2 % СК:",
+         f"{porog:,.0f} ₸".replace(",", " ") if porog else "НЕ ЗАДАН — правило П5 не применялось"],
+        ["  перечень индивидуальных:", f"{len(b2a)} БИН" if b2a else "не задан — правило П4 не применялось"],
+    ]
+    for name, n in per_file:
+        rows.append(["    файл:", name, f"{n} БИН"])
+
+    rows += [
+        [],
+        ["ОТКРЫТЫЕ ВОПРОСЫ — на что опереться нельзя"],
+        ["П3  CORINV: флаг f_inv источником не проставляется, сегмент пуст (О3)."],
+        ["П4  Перечень индивидуальных: основания в Таблице 4 нет (О6)."],
+        ["    При этом П4 даёт подавляющее большинство меток, а П5 — единицы."],
+        ["П7-П9 Размер предпринимательства: численность работников и годовой доход"],
+        ["    по ст. 24 ПК РК в витрине отсутствуют, ent_type берётся как есть (О2)."],
+        ["П2  ЛСБОО: остаётся ли своей строкой формы — не подтверждено (О28)."],
+        ["    Текущий режим: --relate " + args.relate],
+        ["    CORGOV (госкорпорации) не формируется: нет справочника БИН (О4)."],
+        [],
+        ["ЧТО ДЕЛАТЬ ОТВЕТСТВЕННОМУ ПОДРАЗДЕЛЕНИЮ"],
+        ["1. Строки с сегментом X — разобрать поимённо: ни одно условие не выполнено."],
+        ["2. Строки, где условие сработало, но результат неверен, — указать, КАКОЕ"],
+        ["   условие даёт неверный результат и почему. Спор о номере условия"],
+        ["   продуктивен, спор о сегменте — нет."],
+        ["3. Размер предпринимательства (П7-П9) проверяется по двум величинам"],
+        ["   ст. 24 ПК РК: среднегодовая численность работников и среднегодовой доход."],
+    ]
+    return rows
+
+
+def metodologiya(ws, args, porog, b2a, per_file):
+    for r in metod_rows(args, porog, b2a, per_file):
+        ws.append(r)
 
 
 def default_out(template: str) -> str:
@@ -689,10 +1003,10 @@ def default_out(template: str) -> str:
 
 # -------------------------------------------------------------------- отчёт
 
-def report(args, out, stat, seg_stat, warn, cross, b2a, zadol_bin, porog,
-           per_file, miss_key, rowcnt, delcnt, plans):
+def report(args, out, ctx, b2a, zadol_bin, porog, per_file, rowcnt, delcnt, plans):
     """Агрегаты в консоль и в CSV рядом с результатом. БИН не выводятся."""
     lines = []
+    stat, cross, miss_key = ctx.stat, ctx.cross, ctx.miss_key
 
     def add(s=""):
         lines.append(s)
@@ -700,9 +1014,12 @@ def report(args, out, stat, seg_stat, warn, cross, b2a, zadol_bin, porog,
 
     add("")
     add("=== строк обработано ===")
-    for t, n in rowcnt.items():
-        add(f"  {t:<10} {n:>10,}   неактивных {delcnt.get(t, 0):>8,}"
-            + ("" if plans[t].has_zadol else "   (в порог не входит)"))
+    for t, n in ctx.rows.items():
+        note = "" if plans[t].has_zadol else "   (в порог не входит)"
+        if rowcnt:
+            add(f"  {t:<10} {n:>10,}   неактивных {delcnt.get(t, 0):>8,}{note}")
+        else:
+            add(f"  {t:<10} {n:>10,}{note}")
 
     add("")
     add("=== метка индивидуальности, договоров ===")
@@ -739,32 +1056,43 @@ def report(args, out, stat, seg_stat, warn, cross, b2a, zadol_bin, porog,
             add("  " + a.ljust(12) + "".join(f"{cross.get((a, b), 0):>20,}" for b in theirs))
         add("  Расходится — вопрос к витрине до подачи, а не после.")
 
-    if seg_stat:
+    if ctx.rule1:
         add("")
-        add("=== сегмент из выгрузки С1, договоров ===")
-        for k, n in seg_stat.most_common():
-            add(f"  {k:<20} {n:>10,}   {PORTFOLIO.get(k, '')}")
-        add(f"  {'ВСЕГО':<20} {sum(seg_stat.values()):>10,}")
-        if warn or miss_key:
-            add("")
-            add("=== портфель НЕ проставлен ===")
-            for k, n in warn.most_common():
-                add(f"  {k:<44} {n:>10,}")
-            for t, n in miss_key.items():
-                add(f"  ключ не найден в выгрузке, лист {t:<24} {n:>10,}")
-        pseudo = sum(n for k, n in warn.items() if k.startswith("псевдосегмент"))
-        if pseudo:
-            add("")
-            add(f"  ! {pseudo:,} строк пришли с сегментом слоя 1. Таблица 3 для")
-            add("    кредитного риска требует слоя 2 («распределены по другим")
-            add("    портфелям»); домысливать за неё скрипт не станет.")
-            add("    Перевыгрузите С1 с сегментом после снятия веток (Г7).")
-        if seg_stat.get("RELATE") and args.relate == "own-row":
-            add("")
-            add(f"  ! RELATE: {seg_stat['RELATE']:,} договоров отнесены к строке «Займы")
-            add("    ЛСБОО». В ключевых строках Таблицы 3 ЛСБОО не перечислен —")
-            add("    трактуем как самостоятельную строку, но основание")
-            add("    не подтверждено. Это О28; обратное — --relate distribute.")
+        add("=== какое условие сработало, договоров (слой 1) ===")
+        for n in sorted(ctx.rule1):
+            add(f"  П{n:<3} {RULES[n][0]:<18} {ctx.rule1[n]:>10,}   {RULES[n][1][:52]}")
+        add(f"  {'ВСЕГО':<23} {sum(ctx.rule1.values()):>10,}")
+
+    if ctx.seg1:
+        add("")
+        add("=== слой 1 → слой 2, договоров ===")
+        add(f"  {'сегмент':<20} {'договоров':>10}")
+        for k, n in ctx.seg1.most_common():
+            add(f"  {k:<20} {n:>10,}")
+        add("")
+        add(f"  {'строка формы':<62} {'договоров':>10}")
+        for k, n in ctx.seg2.most_common():
+            add(f"  {k[:60]:<62} {n:>10,}")
+
+    if ctx.seg1.get("X"):
+        add("")
+        add(f"  ! X: {ctx.seg1['X']:,} строк — ни одно условие не выполнено.")
+        add("    Это и есть список на ручной разбор: причина в колонке")
+        add(f"    «{COL_WHY}», строки распределяются по подразделениям.")
+    if miss_key:
+        add("")
+        for t, n in miss_key.items():
+            add(f"  ! ключ не найден в выгрузке С1, лист {t}: {n:,}")
+    if ctx.no_casc:
+        add("")
+        for t, n in ctx.no_casc.items():
+            add(f"  ! лист {t}: {n:,} строк без полей каскада — сегмент не считался")
+    if ctx.rule1.get(2) and args.relate == "own-row":
+        add("")
+        add(f"  ! RELATE: {ctx.rule1[2]:,} договоров отнесены к строке «Займы ЛСБОО».")
+        add("    В ключевых строках Таблицы 3 ЛСБОО не перечислен — трактуем")
+        add("    как самостоятельную строку, но основание не подтверждено.")
+        add("    Это О28; обратное поведение — --relate distribute.")
 
     add("")
     if args.write == "sidecar":
