@@ -853,6 +853,15 @@ class Ctx:
         self.cross = Counter()         # наша метка × ind_sign
         self.miss_key = Counter()
         self.no_casc = Counter()
+        # То же самое по активным строкам. Без разделения отчёт нечитаем:
+        # С1 считает по is_del = '0', а в список идут все строки, и разницу
+        # в двадцать тысяч удалённых договоров видно только так. Первый же
+        # прогон дал X = 551 при нуле у С1 — без этой разбивки непонятно,
+        # дефект это каскада или свойство удалённых строк.
+        self.stat_a = Counter()
+        self.seg1_a = Counter()
+        self.seg2_a = Counter()
+        self.rule1_a = Counter()
 
     def row(self, pl: Plan, row):
         b = as_bin(cell(row, pl.j_bin))
@@ -861,6 +870,7 @@ class Ctx:
         if not b and not k:
             return None
         self.rows[pl.title] += 1
+        active = not (pl.j_isdel and not is_active(cell(row, pl.j_isdel)))
 
         f_b2a = bool(b and b in self.b2a)
         f_por = bool(self.porog is not None and b
@@ -868,6 +878,8 @@ class Ctx:
         basis = {(1, 1): "B2A+порог", (1, 0): "B2A",
                  (0, 1): "порог"}.get((int(f_b2a), int(f_por)), "")
         self.stat[basis or "—"] += 1
+        if active:
+            self.stat_a[basis or "—"] += 1
         out = {COL_INDIVID: 1 if basis else 0, COL_BASIS: basis}
 
         if pl.j_indsign:
@@ -891,6 +903,8 @@ class Ctx:
             r1 = cascade(v, frozenset())
             s1 = RULES[r1][0]
             self.rule1[r1] += 1
+            if active:
+                self.rule1_a[r1] += 1
             why = f"П{r1}: {RULES[r1][1]} → {s1}"
             if s1 == "X":
                 p = NO_PORTFOLIO
@@ -904,7 +918,10 @@ class Ctx:
 
         self.seg1[s1 or "не определён"] += 1
         self.seg2[p or "не проставлен"] += 1
-        if pl.j_isdel and not is_active(cell(row, pl.j_isdel)):
+        if active:
+            self.seg1_a[s1 or "не определён"] += 1
+            self.seg2_a[p or "не проставлен"] += 1
+        else:
             why += " [is_del = 1: в сумму порога не входит]"
 
         out[COL_SEGMENT] = s1
@@ -1084,9 +1101,10 @@ def report(args, out, ctx, b2a, zadol_bin, porog, per_file, rowcnt, delcnt, plan
 
     add("")
     add("=== метка индивидуальности, договоров ===")
+    add(f"  {'':<12} {'всего':>10} {'активных':>10}")
     for k in ("B2A", "порог", "B2A+порог", "—"):
         if stat.get(k):
-            add(f"  {k:<12} {stat[k]:>10,}")
+            add(f"  {k:<12} {stat[k]:>10,} {ctx.stat_a.get(k, 0):>10,}")
 
     if b2a:
         hit = {b for b in b2a if b in zadol_bin}
@@ -1112,34 +1130,56 @@ def report(args, out, ctx, b2a, zadol_bin, porog, per_file, rowcnt, delcnt, plan
         add("=== наша метка × ind_sign витрины ===")
         ours = sorted({a for a, _ in cross})
         theirs = sorted({b for _, b in cross})
-        add("  " + "метка".ljust(12) + "".join(f"{('ind_sign=' + (b or 'пусто')):>20}" for b in theirs))
+        # Ширина считается по самому длинному значению, а не берётся
+        # константой: в ind_sign нашлась заглушка 1111111111111, и колонки
+        # съехали ровно там, где надо было внимательно смотреть.
+        w = max(14, max(len(b or "пусто") for b in theirs) + 10)
+        add("  " + "метка".ljust(12) + "".join(
+            f"{('ind_sign=' + (b or 'пусто')):>{w}}" for b in theirs))
         for a in ours:
-            add("  " + a.ljust(12) + "".join(f"{cross.get((a, b), 0):>20,}" for b in theirs))
+            add("  " + a.ljust(12) + "".join(
+                f"{cross.get((a, b), 0):>{w},}" for b in theirs))
         add("  Расходится — вопрос к витрине до подачи, а не после.")
+        stub = [b for b in theirs if b and len(b) > 6 and len(set(b)) == 1]
+        if stub:
+            n = sum(v for (_, b), v in cross.items() if b in stub)
+            add(f"  ! в ind_sign заглушка источника {', '.join(stub)}: {n:,} строк.")
+            add("    Это Н20: значение не данные, а признак того, что источник")
+            add("    поле не заполнил. Считать его единицей или нулём одинаково")
+            add("    неверно — вопрос к владельцу витрины (О29).")
 
     if ctx.rule1:
         add("")
         add("=== какое условие сработало, договоров (слой 1) ===")
+        add(f"  {'':<23} {'всего':>10} {'активных':>10}   условие")
         for n in sorted(ctx.rule1):
-            add(f"  П{n:<3} {RULES[n][0]:<18} {ctx.rule1[n]:>10,}   {RULES[n][1][:52]}")
-        add(f"  {'ВСЕГО':<23} {sum(ctx.rule1.values()):>10,}")
+            add(f"  П{n:<3} {RULES[n][0]:<18} {ctx.rule1[n]:>10,} "
+                f"{ctx.rule1_a.get(n, 0):>10,}   {RULES[n][1][:44]}")
+        add(f"  {'ВСЕГО':<23} {sum(ctx.rule1.values()):>10,} "
+            f"{sum(ctx.rule1_a.values()):>10,}")
+        add("  Колонка «активных» — is_del = 0, то есть периметр С1.")
+        add("  С ней и сверяются контрольные суммы прошлых прогонов.")
 
     if ctx.seg1:
         add("")
         add("=== слой 1 → слой 2, договоров ===")
-        add(f"  {'сегмент':<20} {'договоров':>10}")
+        add(f"  {'сегмент':<20} {'всего':>10} {'активных':>10}")
         for k, n in ctx.seg1.most_common():
-            add(f"  {k:<20} {n:>10,}")
+            add(f"  {k:<20} {n:>10,} {ctx.seg1_a.get(k, 0):>10,}")
         add("")
-        add(f"  {'строка формы':<62} {'договоров':>10}")
+        add(f"  {'строка формы':<62} {'всего':>10} {'активных':>10}")
         for k, n in ctx.seg2.most_common():
-            add(f"  {k[:60]:<62} {n:>10,}")
+            add(f"  {k[:60]:<62} {n:>10,} {ctx.seg2_a.get(k, 0):>10,}")
 
     if ctx.seg1.get("X"):
         add("")
-        add(f"  ! X: {ctx.seg1['X']:,} строк — ни одно условие не выполнено.")
+        add(f"  ! X: {ctx.seg1['X']:,} строк, из них активных "
+            f"{ctx.seg1_a.get('X', 0):,} — ни одно условие не выполнено.")
         add("    Это и есть список на ручной разбор: причина в колонке")
         add(f"    «{COL_WHY}», строки распределяются по подразделениям.")
+        if not ctx.seg1_a.get("X"):
+            add("    Активных среди них нет: X целиком в удалённых строках,")
+            add("    где поля каскада не заполнены. На подачу не влияет.")
     if miss_key:
         add("")
         for t, n in miss_key.items():
