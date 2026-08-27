@@ -66,9 +66,18 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#D15H_cured') IS NOT NULL DROP TABLE #D15H_cured;
 
 SELECT account_number, default_date, health_date, new_default_date, fact_close_date, [type]
-     , CASE WHEN new_default_date IS NOT NULL AND new_default_date > health_date
-            THEN 1 ELSE 0 END AS redefaulted
-     , CASE WHEN new_default_date IS NOT NULL AND new_default_date > health_date
+     -- СЕМАНТИКА ДАТ, подтверждена владельцем 27.08.2026:
+     --   default_date / health_date         — САМЫЙ ПЕРВЫЙ дефолт и выход
+     --   new_default_date / new_health_date — ПОСЛЕДНИЕ доступные; при выходе
+     --   new_default_date ОБНУЛЯЕТСЯ и проставляется new_health_date.
+     -- Отсюда «new_default_date > health_date» означает «в дефолте СЕЙЧАС»,
+     -- а не «срывался когда-либо». Заём, сорвавшийся и снова вышедший, имеет
+     -- new_default_date = NULL и new_health_date позже health_date.
+     -- Признак срыва — движение ЛЮБОГО из двух указателей за первый выход.
+     , CASE WHEN new_default_date > health_date
+              OR new_health_date  > health_date THEN 1 ELSE 0 END AS redefaulted
+     , CASE WHEN new_default_date > health_date THEN 1 ELSE 0 END AS in_default_now
+     , CASE WHEN new_default_date > health_date
             THEN DATEDIFF(MONTH, health_date, new_default_date) END AS months_to_rd
 INTO #D15H_cured
 FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]
