@@ -1,0 +1,275 @@
+/* =============================================================================
+   D15-J. Разрезы по продуктам и порогу; определение дефолта в PD/LGD-модели.
+
+   ЧТО ДАЛ АУДИТ D15-I 27.08.2026 И ЧТО ИЗ ЭТОГО СЛЕДУЕТ.
+
+   1. ТАБЛИЦА ПЕРЕСОБИРАЕТСЯ ЕЖЕМЕСЯЧНО. В IFRS9 лежит полный ряд
+      KAN_YYYYMMDD_for_LGD_Fenix с парным KAN_YYYYMMDD_restructura, и самая
+      свежая — KAN_20260801_for_LGD_Fenix. Мы работали на снимке двухмесячной
+      давности. Риск «разовая выгрузка» снят, но актуальную таблицу надо брать
+      по имени, а не фиксировать в коде — см. @Snap ниже.
+
+   2. ПОЛЕ ПРОДУКТА НАЙДЕНО: subproduct nvarchar(50), пример значения «POS».
+      Есть и более дробный TARIFF («POS Soft Grace 36-60»). Рядом лежат
+      KAN_PD_LGD_Product_Basket и KAN_contract_basket — вероятная привязка
+      продукта к корзине AQR, § 0b проверяет.
+
+   3. FIRST_PAYMENT_DATE ЗАКРЫВАЕТ ДЫРУ D15-F § 3. День планового платежа
+      выводится как DAY(FIRST_PAYMENT_DATE) для ВСЕХ договоров, включая
+      непросроченные. Значит знаменатель для «доли просроченных по дню платежа»
+      есть, и repayment_schedule для этого больше не нужен.
+
+   4. TRIGGER-КОЛОНКИ — ЭТО И ЕСТЬ ОПРЕДЕЛЕНИЕ ДЕФОЛТА В МОДЕЛИ:
+      trigger_первый, trigger_последующий, [trigger на тек дату],
+      значения вида «91+», «POCI». Сравнивать надо их с нашим признаком
+      обесценения, а не даты. Это прямее и однозначнее.
+
+   5. ПОЧЕМУ РАСХОЖДЕНИЕ ДАТ ЕЩЁ НЕ ЯВЛЯЕТСЯ НАХОДКОЙ. § 3 D15-I дал: совпало
+      5 857, разошлось 6 331, пусто в IFRS9 17 077 из 29 265. Но в таблице есть
+      ОТДЕЛЬНАЯ колонка default_date_old — значит default_date перезаписывается
+      либо очищается, а прежнее значение сохраняется. Наиболее вероятное
+      объяснение 58 % пустот: дата очищается при выходе из дефолта, ровно как
+      в базе дефолтов. ДО проверки § 1c объявлять рассинхрон определения дефолта
+      НЕЛЬЗЯ — это была бы вторая находка, отозванная контролем.
+
+   ВНИМАНИЕ: в таблице есть колонка IIN — персональные данные.
+   SELECT * по ней запрещён, колонки перечисляются явно.
+
+   Read-only. Только SELECT. #temp с префиксом D15J_. MAXDOP 1.
+   § 3 требует выполненного D15_H_controls.sql В ТОМ ЖЕ ОКНЕ: используются
+   #D15H_class и #D15H_cured, они локальные.
+   T-SQL (Microsoft SQL Server).
+   ============================================================================= */
+
+SET NOCOUNT ON;
+
+/* Актуальный снимок. Проверить по § 0a и обновить перед прогоном. */
+-- KAN_20260801_for_LGD_Fenix — самая свежая на 27.08.2026
+
+
+/* =============================================================================
+   § 0. ПРОДУКТОВЫЕ СПРАВОЧНИКИ.
+   ============================================================================= */
+
+-- 0a. Убедиться, что более свежей таблицы не появилось.
+SELECT TOP 5 TABLE_NAME
+FROM [IFRS9].INFORMATION_SCHEMA.TABLES
+WHERE TABLE_NAME LIKE 'KAN_2%_for_LGD_Fenix'
+ORDER BY TABLE_NAME DESC;
+
+-- 0b. Привязка продукта к корзине AQR. Состав неизвестен — смотрим.
+SELECT 'KAN_PD_LGD_Product_Basket' AS tbl, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+FROM [IFRS9].INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'KAN_PD_LGD_Product_Basket'
+UNION ALL
+SELECT 'KAN_contract_basket', COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH
+FROM [IFRS9].INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'KAN_contract_basket'
+ORDER BY tbl, COLUMN_NAME;
+
+-- 0c. Словарь продуктов: что вообще бывает и каков вес.
+SELECT
+      subproduct
+    , COUNT(*)                                    AS rows_cnt
+    , COUNT(DISTINCT account_number)              AS accounts
+    , COUNT(DISTINCT TARIFF)                      AS tariffs
+FROM [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix]
+GROUP BY subproduct
+ORDER BY accounts DESC
+OPTION (MAXDOP 1);
+
+
+/* =============================================================================
+   § 1. ОПРЕДЕЛЕНИЕ ДЕФОЛТА В МОДЕЛИ. Н5 и Н8 контура, сделано правильно.
+   ============================================================================= */
+
+-- 1a. Какие вообще бывают триггеры. Это и есть перечень событий дефолта
+--     в модели PD/LGD. Сопоставлять надо с Приложением 4 п. 5 Методики:
+--     просрочка более 90 дней, вынужденная реструктуризация, смерть,
+--     места лишения свободы, банкротство.
+SELECT
+      trigger_первый
+    , trigger_последующий
+    , [trigger на тек дату]
+    , COUNT(*)                                    AS accounts
+FROM [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix]
+GROUP BY trigger_первый, trigger_последующий, [trigger на тек дату]
+ORDER BY accounts DESC
+OPTION (MAXDOP 1);
+
+-- 1b. Заполненность полей, которые соответствуют признакам Методики.
+--     Если признак есть в Методике, но поле под него пустое — модель его
+--     не применяет, и это расхождение по существу, а не по датам.
+SELECT
+      COUNT(*)                                                      AS rows_total
+    , SUM(CASE WHEN dead_convict   IS NOT NULL THEN 1 ELSE 0 END)   AS with_dead_convict
+    , SUM(CASE WHEN bankrupt_date  IS NOT NULL THEN 1 ELSE 0 END)   AS with_bankrupt
+    , SUM(CASE WHEN poci_date      IS NOT NULL THEN 1 ELSE 0 END)   AS with_poci
+    , SUM(CASE WHEN [дата окончания реструктуры] IS NOT NULL THEN 1 ELSE 0 END) AS with_restr
+FROM [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix]
+OPTION (MAXDOP 1);
+
+-- 1c. КОНТРОЛЬ, БЕЗ КОТОРОГО РАСХОЖДЕНИЕ ДАТ НЕЛЬЗЯ НАЗЫВАТЬ НАХОДКОЙ.
+--     Гипотеза: default_date очищается при выходе, прежнее значение уходит
+--     в default_date_old. Тогда 58 % пустот — не рассинхрон, а тот же механизм,
+--     что в базе дефолтов. Сравниваем ОБА поля.
+SELECT
+      SUM(CASE WHEN f.default_date IS NULL AND f.default_date_old IS NOT NULL
+               THEN 1 ELSE 0 END)                               AS cleared_to_old
+    , SUM(CASE WHEN f.default_date IS NULL AND f.default_date_old IS NULL
+               THEN 1 ELSE 0 END)                               AS both_null
+    , SUM(CASE WHEN COALESCE(f.default_date, f.default_date_old) = c.default_date
+               THEN 1 ELSE 0 END)                               AS match_after_coalesce
+    , SUM(CASE WHEN COALESCE(f.default_date, f.default_date_old) <> c.default_date
+               THEN 1 ELSE 0 END)                               AS differ_after_coalesce
+    , COUNT(*)                                                  AS matched_accounts
+FROM (
+    SELECT account_number, default_date, health_date, new_default_date
+    FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]
+    WHERE health_date IS NOT NULL
+) c
+INNER JOIN (
+    SELECT account_number
+         , MIN(default_date)     AS default_date
+         , MIN(default_date_old) AS default_date_old
+    FROM [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix]
+    GROUP BY account_number
+) f ON f.account_number = c.account_number
+OPTION (MAXDOP 1);
+
+-- Читать так: если cleared_to_old велик, а match_after_coalesce близок
+-- к matched_accounts — рассинхрона определения НЕТ, есть разная механика
+-- хранения. Если и после COALESCE расхождение остаётся значимым — тогда
+-- это находка Н5/Н8, и оформлять её надо ОТДЕЛЬНО от записки по правке.
+
+
+/* =============================================================================
+   § 2. ПРОДУКТ ПО НАШЕЙ ПОПУЛЯЦИИ. Сколько оздоровлённых в каждом продукте
+        и хватит ли их на разрез. Проверка мощности ДО расчёта ставок.
+   ============================================================================= */
+
+IF OBJECT_ID('tempdb..#D15J_prod') IS NOT NULL DROP TABLE #D15J_prod;
+
+SELECT
+      f.account_number
+    , MAX(f.subproduct)                           AS subproduct
+    , MAX(f.TARIFF)                               AS tariff
+    , MAX(f.FIRST_PAYMENT_DATE)                   AS first_payment_date
+    , MAX(f.[status])                             AS status
+INTO #D15J_prod
+FROM [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix] f
+GROUP BY f.account_number        -- свёртка: max 2 строки на счёт, различаются poci_date
+OPTION (MAXDOP 1);
+
+CREATE UNIQUE CLUSTERED INDEX ix_D15J_prod ON #D15J_prod(account_number);
+
+SELECT
+      p.subproduct
+    , COUNT(*)                                    AS cured_accounts
+    , CASE WHEN COUNT(*) >= 100 THEN 'разрез допустим'
+           ELSE 'МАЛО — укрупнять' END            AS power_check
+FROM #D15J_prod p
+INNER JOIN (
+    SELECT account_number FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]
+    WHERE health_date IS NOT NULL
+) c ON c.account_number = p.account_number
+GROUP BY p.subproduct
+ORDER BY cured_accounts DESC
+OPTION (MAXDOP 1);
+
+
+/* =============================================================================
+   § 3. ГЛАВНАЯ ТАБЛИЦА: ПРОДУКТ x ПОРОГ 0…30.
+
+        ТРЕБУЕТ D15_H_controls.sql, ВЫПОЛНЕННОГО В ТОМ ЖЕ ОКНЕ, — и с уже
+        выставленным @Offset по его § 1а. Иначе классификация снова уедет.
+
+        Правило минимальной клетки — 100 займов, утверждено ДО расчёта.
+        Клетки меньше в выдачу не попадают, а не «интерпретируются осторожно».
+   ============================================================================= */
+
+SELECT
+      pr.subproduct
+    , t.thr                                       AS soft_threshold
+    , SUM(CASE WHEN k.dpd_max <= t.thr THEN 1 ELSE 0 END)                 AS cured_pass
+    , SUM(CASE WHEN k.dpd_max <= t.thr THEN c.redefaulted ELSE 0 END)     AS redefaulted
+    , CAST(100.0 * SUM(CASE WHEN k.dpd_max <= t.thr THEN c.redefaulted ELSE 0 END)
+           / NULLIF(SUM(CASE WHEN k.dpd_max <= t.thr THEN 1 ELSE 0 END),0)
+           AS decimal(5,2))                                               AS rd_rate_pct
+FROM #D15H_class k
+INNER JOIN #D15H_cured c ON c.account_number = k.account_number
+INNER JOIN #D15J_prod  pr ON pr.account_number = k.account_number
+CROSS JOIN (VALUES (0),(5),(10),(15),(20),(25),(30)) t(thr)
+WHERE k.months_obs >= 6
+GROUP BY pr.subproduct, t.thr
+HAVING SUM(CASE WHEN k.dpd_max <= t.thr THEN 1 ELSE 0 END) >= 100
+ORDER BY pr.subproduct, t.thr
+OPTION (MAXDOP 1);
+
+-- 3a. Тот же разрез по TARIFF — дробнее. Клеток мало, правило то же.
+SELECT
+      pr.tariff
+    , t.thr                                       AS soft_threshold
+    , SUM(CASE WHEN k.dpd_max <= t.thr THEN 1 ELSE 0 END)                 AS cured_pass
+    , CAST(100.0 * SUM(CASE WHEN k.dpd_max <= t.thr THEN c.redefaulted ELSE 0 END)
+           / NULLIF(SUM(CASE WHEN k.dpd_max <= t.thr THEN 1 ELSE 0 END),0)
+           AS decimal(5,2))                                               AS rd_rate_pct
+FROM #D15H_class k
+INNER JOIN #D15H_cured c ON c.account_number = k.account_number
+INNER JOIN #D15J_prod  pr ON pr.account_number = k.account_number
+CROSS JOIN (VALUES (0),(10),(15),(20),(30)) t(thr)
+WHERE k.months_obs >= 6
+GROUP BY pr.tariff, t.thr
+HAVING SUM(CASE WHEN k.dpd_max <= t.thr THEN 1 ELSE 0 END) >= 100
+ORDER BY pr.tariff, t.thr
+OPTION (MAXDOP 1);
+
+
+/* =============================================================================
+   § 4. ДЕНЬ ПЛАТЕЖА ПО ВСЕМУ ПОРТФЕЛЮ — то, чего не хватало D15-F § 3.
+
+        FIRST_PAYMENT_DATE даёт день платежа для КАЖДОГО договора, а не только
+        для просроченного. Значит появляется знаменатель, и вопрос «на какое
+        число переносить» получает эмпирический ответ.
+
+        Читать по возрастанию delinquency_pct: верхние строки — рабочие даты
+        портфеля. Они же косвенно показывают, когда приходит доход,
+        без запроса зарплатных данных.
+   ============================================================================= */
+
+SELECT
+      DAY(pr.first_payment_date)                  AS pay_day
+    , COUNT(*)                                    AS loans
+    , SUM(CASE WHEN p.dpd > 0  THEN 1 ELSE 0 END) AS delinquent
+    , CAST(100.0 * SUM(CASE WHEN p.dpd > 0 THEN 1 ELSE 0 END)
+           / NULLIF(COUNT(*),0) AS decimal(5,2))  AS delinquency_pct
+    , CAST(AVG(CASE WHEN p.dpd > 0 THEN CAST(p.dpd AS float) END) AS decimal(7,1)) AS avg_dpd_if_late
+FROM #D15J_prod pr
+INNER JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] p
+        ON p.contract_number = pr.account_number
+       AND p.[date] = '2026-08-01'
+WHERE pr.first_payment_date IS NOT NULL
+  AND ISNULL(p.[tag],'') <> '11'
+GROUP BY DAY(pr.first_payment_date)
+HAVING COUNT(*) >= 100
+ORDER BY delinquency_pct ASC
+OPTION (MAXDOP 1);
+
+-- 4a. То же в разрезе продукта: рабочая дата может отличаться по продуктам,
+--     и тогда рекомендация переноса должна быть разной.
+SELECT
+      pr.subproduct
+    , DAY(pr.first_payment_date)                  AS pay_day
+    , COUNT(*)                                    AS loans
+    , CAST(100.0 * SUM(CASE WHEN p.dpd > 0 THEN 1 ELSE 0 END)
+           / NULLIF(COUNT(*),0) AS decimal(5,2))  AS delinquency_pct
+FROM #D15J_prod pr
+INNER JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] p
+        ON p.contract_number = pr.account_number
+       AND p.[date] = '2026-08-01'
+WHERE pr.first_payment_date IS NOT NULL
+  AND ISNULL(p.[tag],'') <> '11'
+GROUP BY pr.subproduct, DAY(pr.first_payment_date)
+HAVING COUNT(*) >= 100
+ORDER BY pr.subproduct, delinquency_pct ASC
+OPTION (MAXDOP 1);
