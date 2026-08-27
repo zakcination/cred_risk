@@ -346,8 +346,8 @@ OPTION (MAXDOP 1);
 --     Строка spread = 0 — это подозрение на замороженное поле или
 --     приостановленное начисление, а не на дисциплинированного заёмщика.
 SELECT
-      CASE WHEN b.band_max_dpd - b.band_min_dpd = 0 THEN '0  (проверить: невозможно при живом начислении)'
-           WHEN b.band_max_dpd - b.band_min_dpd <= 3 THEN '1-3  (совпадает с календарным шумом)'
+      CASE WHEN b.band_max_dpd - b.band_min_dpd = 0 THEN '0  (проверить: срезы одной длины месяца либо мёртвое поле)'
+           WHEN b.band_max_dpd - b.band_min_dpd <= 3 THEN '1-3  (одна платёжная дата, разная длина месяца)'
            WHEN b.band_max_dpd - b.band_min_dpd <= 6 THEN '4-6'
            ELSE '7+' END                        AS dpd_spread_bucket
     , r.longest_run
@@ -356,8 +356,8 @@ FROM #D15E_best b
 INNER JOIN #D15E_run r ON r.account_number = b.account_number
 WHERE b.months_in_band >= @MinMonths
 GROUP BY
-      CASE WHEN b.band_max_dpd - b.band_min_dpd = 0 THEN '0  (проверить: невозможно при живом начислении)'
-           WHEN b.band_max_dpd - b.band_min_dpd <= 3 THEN '1-3  (совпадает с календарным шумом)'
+      CASE WHEN b.band_max_dpd - b.band_min_dpd = 0 THEN '0  (проверить: срезы одной длины месяца либо мёртвое поле)'
+           WHEN b.band_max_dpd - b.band_min_dpd <= 3 THEN '1-3  (одна платёжная дата, разная длина месяца)'
            WHEN b.band_max_dpd - b.band_min_dpd <= 6 THEN '4-6'
            ELSE '7+' END
     , r.longest_run
