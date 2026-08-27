@@ -442,8 +442,8 @@ ORDER BY thr
 OPTION (MAXDOP 1);
 
 /* -----------------------------------------------------------------------------
-   § 8. РАЗРЕЗ ПО ПРОДУКТАМ. Требует #D15J_prod из D15_J_products.sql
-        в том же окне. Правило минимальной клетки — 100 займов.
+   § 8. РАЗРЕЗ ПО ПРОДУКТАМ. Автономен: продукт берётся напрямую из IFRS9,
+        зависимости от D15-J больше нет. Правило минимальной клетки — 100 займов.
    ----------------------------------------------------------------------------- */
 SELECT
       p.subproduct
@@ -452,8 +452,95 @@ SELECT
     , CAST(100.0 * SUM(CASE WHEN r.fwd12 > @DefThr THEN 1 ELSE 0 END)
            / NULLIF(COUNT(*),0) AS decimal(5,2))                            AS def_12m_pct
 FROM #D15K_res r
-INNER JOIN #D15J_prod p ON p.account_number = r.account_number
+INNER JOIN (
+    SELECT account_number, MAX(subproduct) AS subproduct
+    FROM [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix]
+    GROUP BY account_number
+) p ON p.account_number = r.account_number
 GROUP BY p.subproduct, r.rule_group
 HAVING COUNT(*) >= 100
 ORDER BY p.subproduct, r.rule_group
+OPTION (MAXDOP 1);
+
+
+/* =============================================================================
+   § 9-11. ТРИ ПОПРАВКИ ПО ИТОГАМ ПРОГОНА 27.08.2026.
+
+   ЧТО ПОКАЗАЛ ПРОГОН.
+     § 6b: STRICT воспроизводит 84,28 % фактических оздоровлений при среднем
+     расхождении месяца 0,0, а в NEVER фактически вылечено 7 счетов из 188 626.
+     Сумма 7 + 2 282 + 12 774 = 15 063 сходится с § 1a точно. Реконструкция
+     правила ВЕРНА — гейт пройден.
+
+   ТРИ ПРОБЛЕМЫ, КОТОРЫЕ ПРИ ЭТОМ ВИДНЫ И БЕЗ КОТОРЫХ § 6 ПРЕДЪЯВЛЯТЬ НЕЛЬЗЯ.
+
+   [П-1] SOFT-ONLY НЕ ЯВЛЯЕТСЯ ЧИСТЫМ ПРИРОСТОМ. Из 6 858 счетов группы 2 282
+   (33 %) были вылечены фактически, в среднем на 6,4 месяца ПОЗЖЕ
+   реконструированного мягкого выхода. Для них инициатива не создаёт
+   оздоровление, а УСКОРЯЕТ его на полгода. Настоящий прирост — 4 576 счетов,
+   которые не вылечились никогда. Ставку надо считать раздельно: § 11.
+
+   [П-2] ВЫБЫВАНИЕ ИСКАЖАЕТ ЗНАМЕНАТЕЛЬ. Столбец immature в § 6a считает счета
+   с неполным горизонтом наблюдения, и это не календарная незрелость, а уход
+   из сетки: закрытие, списание, продажа. В когорте 2023 у STRICT выбыло 21 %
+   (969 из 4 593), у SOFT-ONLY 40 % (510 из 1 275). Выбывший счёт не может
+   показать DPD выше 90 и попадает в знаменатель как невыдефолтивший. Значит
+   при разном выбывании ставки НЕСОПОСТАВИМЫ. § 10 считает по полному
+   наблюдению.
+
+   [П-3] АГРЕГАТ § 6 И КРИВАЯ § 7 ГОВОРЯТ РАЗНОЕ, И ПРАВА КРИВАЯ.
+   § 6 даёт SOFT-ONLY 31,99 % против STRICT 35,32 % — смягчение выглядит
+   безопаснее. Но § 7 монотонно растёт: 32,18 % при пороге 0 и 34,28 % при 15,
+   а ПРЕДЕЛЬНАЯ ставка, то есть дефолтность только добавляемых займов,
+   составляет около 43 %. Причина расхождения в определении группы: в § 6
+   SOFT-ONLY это «вышел бы РАНЬШЕ по мягкому», куда попадают и те, кто вышел бы
+   и по строгому, просто позже. Для решения нужен ЧИСТЫЙ прирост — § 9.
+   ============================================================================= */
+
+-- § 9. ЧИСТЫЙ ПРИРОСТ: прошёл порог @Soft и НИКОГДА не проходил ноль.
+--      Это единственная группа, которая появляется в портфеле из-за правки.
+SELECT
+      CASE WHEN f.m_strict IS NOT NULL THEN 'прошёл бы и строгое (когда-нибудь)'
+           ELSE                              'ЧИСТЫЙ ПРИРОСТ: только мягкое' END AS increment_group
+    , COUNT(*)                                                              AS accounts
+    , SUM(CASE WHEN r.fwd12 > @DefThr THEN 1 ELSE 0 END)                    AS def_12m
+    , CAST(100.0 * SUM(CASE WHEN r.fwd12 > @DefThr THEN 1 ELSE 0 END)
+           / NULLIF(COUNT(*),0) AS decimal(5,2))                            AS def_12m_pct
+    , SUM(CASE WHEN r.fwd24 > @DefThr THEN 1 ELSE 0 END)                    AS def_24m
+    , CAST(100.0 * SUM(CASE WHEN r.fwd24 > @DefThr THEN 1 ELSE 0 END)
+           / NULLIF(COUNT(*),0) AS decimal(5,2))                            AS def_24m_pct
+FROM #D15K_first f
+INNER JOIN #D15K_roll r ON r.account_number = f.account_number AND r.m = f.m_soft
+WHERE f.m_soft IS NOT NULL
+GROUP BY CASE WHEN f.m_strict IS NOT NULL THEN 'прошёл бы и строгое (когда-нибудь)'
+              ELSE                              'ЧИСТЫЙ ПРИРОСТ: только мягкое' END
+OPTION (MAXDOP 1);
+
+-- § 10. ТО ЖЕ, НО ТОЛЬКО ПО ПОЛНОМУ НАБЛЮДЕНИЮ. Убирает [П-2].
+--       Счета с неполными 12 месяцами вперёд исключаются из ОБЕИХ групп.
+SELECT
+      r2.rule_group
+    , COUNT(*)                                                              AS accounts_full_obs
+    , SUM(CASE WHEN r2.fwd12 > @DefThr THEN 1 ELSE 0 END)                   AS def_12m
+    , CAST(100.0 * SUM(CASE WHEN r2.fwd12 > @DefThr THEN 1 ELSE 0 END)
+           / NULLIF(COUNT(*),0) AS decimal(5,2))                            AS def_12m_pct
+FROM #D15K_res r2
+WHERE r2.fwd12_obs = 12
+GROUP BY r2.rule_group
+ORDER BY r2.rule_group
+OPTION (MAXDOP 1);
+
+-- § 11. РАЗДЕЛЕНИЕ SOFT-ONLY ПО [П-1]: ускорение против создания.
+SELECT
+      CASE WHEN health_date IS NOT NULL THEN 'вылечен фактически — ускорение на месяцы'
+           ELSE                               'не вылечен никогда — создание выхода' END AS soft_kind
+    , COUNT(*)                                                              AS accounts
+    , CAST(100.0 * SUM(CASE WHEN fwd12 > @DefThr THEN 1 ELSE 0 END)
+           / NULLIF(COUNT(*),0) AS decimal(5,2))                            AS def_12m_pct
+    , CAST(100.0 * SUM(CASE WHEN fwd24 > @DefThr THEN 1 ELSE 0 END)
+           / NULLIF(COUNT(*),0) AS decimal(5,2))                            AS def_24m_pct
+FROM #D15K_res
+WHERE rule_group LIKE 'SOFT-ONLY%'
+GROUP BY CASE WHEN health_date IS NOT NULL THEN 'вылечен фактически — ускорение на месяцы'
+              ELSE                               'не вылечен никогда — создание выхода' END
 OPTION (MAXDOP 1);
