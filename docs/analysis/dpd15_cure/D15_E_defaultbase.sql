@@ -42,12 +42,16 @@
      перекат от замороженного поля по одному DPD нельзя — для этого нужен
      календарный остаток, § 6, и день планового платежа из repayment_schedule.
 
-   Источники, имена колонок из живого аудита контура:
-     [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]  account_number, default_date
-     [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]           contract_number, date, dpd,
-                                                     category, tag, balance,
-                                                     provisions_total
-   Состав HISTORY_DEFAULT_ACCOUNT сверх двух колонок НЕ подтверждён — § 0.
+   Источники, состав подтверждён аудитом 27.08.2026:
+     [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]
+        account_number nvarchar(50), default_date, health_date, new_default_date,
+        new_health_date, fact_close_date, type — ОДНА строка на счёт;
+        плюс 181 колонка помесячной сетки '01.02.2012' … '01.02.2027', nvarchar(50).
+        ВНИМАНИЕ: кавычки входят в ИМЯ колонки, обращение — ['01.08.2026'].
+        Содержимое сетки не установлено, выясняется § 0f.
+     [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]
+        contract_number varchar, date date, dpd numeric, category numeric,
+        tag varchar, balance, provisions_total.
 
    Read-only. Только SELECT. Только #temp с префиксом D15E_. MAXDOP 1.
    В репозиторий кладутся агрегаты § 5, не выдача § 7.
@@ -102,6 +106,7 @@ SELECT
     , SUM(CASE WHEN default_date IS NOT NULL
                 AND TRY_CAST(default_date AS date) IS NULL THEN 1 ELSE 0 END) AS date_unparsable
 FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]
+WHERE default_date IS NOT NULL          -- иначе MIN/MAX шлёт warning на 6,2 млн NULL
 OPTION (MAXDOP 1);
 
 -- 0d. Стыкуется ли ключ базы дефолтов с ключом портфеля.
@@ -115,6 +120,33 @@ LEFT JOIN (
     FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]
     WHERE [date] BETWEEN @From AND @AsOf
 ) p ON p.contract_number = d.account_number
+OPTION (MAXDOP 1);
+
+-- 0f. ГЛАВНАЯ НАХОДКА АУДИТА. Помимо шести служебных колонок в таблице лежит
+--     181 колонка вида '01.02.2012' … '01.02.2027' — помесячная сетка за 15 лет,
+--     все nvarchar(50). Это потенциально та самая панель, которую мы просили
+--     выгрузкой В1 в DATA_REQUEST.md, и глубже пяти лет.
+--     Что в них лежит — состояние, корзина, DPD или флаг — НЕ ИЗВЕСТНО.
+--     Ответить одним запросом до того, как строить на этом бэк-тест.
+SELECT TOP 200
+      ['01.08.2026'] AS v, COUNT(*) AS cnt
+FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]
+GROUP BY ['01.08.2026']
+ORDER BY cnt DESC
+OPTION (MAXDOP 1);
+
+-- Сверка колонки с портфелем на ту же дату: если значения совпадают с category
+-- или с dpd — панель годится как источник, и выгрузка В1 частично не нужна.
+SELECT TOP 100
+      h.['01.08.2026']                              AS base_value
+    , p.[category]
+    , COUNT(*)                                    AS cnt
+FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT] h
+INNER JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] p
+        ON p.contract_number = h.account_number
+       AND p.[date] = '2026-08-01'
+GROUP BY h.['01.08.2026'], p.[category]
+ORDER BY cnt DESC
 OPTION (MAXDOP 1);
 
 -- 0e. Тип DPD и даты в портфеле. Если date — datetime со временем,
@@ -135,15 +167,31 @@ ORDER BY ORDINAL_POSITION;
 
 IF OBJECT_ID('tempdb..#D15E_pool') IS NOT NULL DROP TABLE #D15E_pool;
 
+-- ФАКТ ПОСЛЕ АУДИТА 27.08.2026: max_rows_per_account = 1. Таблица НЕ событийная,
+-- а широкая: одна строка на счёт, эпизоды закодированы парами колонок
+--   default_date     -> health_date        (первый дефолт и выход из него)
+--   new_default_date -> new_health_date    (второй дефолт и выход)
+-- Значит COUNT(*) как счётчик эпизодов не работает — структура вмещает
+-- максимум ДВА эпизода. Считаем по непустым датам.
 SELECT
       d.account_number
-    , COUNT(*)                                    AS default_events
-    , MIN(TRY_CAST(d.default_date AS date))       AS default_date_first
-    , MAX(TRY_CAST(d.default_date AS date))       AS default_date_last
+    , CASE WHEN d.default_date     IS NOT NULL THEN 1 ELSE 0 END
+    + CASE WHEN d.new_default_date IS NOT NULL THEN 1 ELSE 0 END  AS default_events
+    , d.default_date
+    , d.health_date
+    , d.new_default_date
+    , d.new_health_date
+    , d.fact_close_date
+    , d.[type]
+    -- повторный дефолт после оздоровления — прямой исход бэк-теста
+    , CASE WHEN d.health_date IS NOT NULL
+            AND d.new_default_date IS NOT NULL
+            AND d.new_default_date > d.health_date THEN 1 ELSE 0 END AS redefault_after_cure
+    , CASE WHEN d.health_date IS NOT NULL AND d.new_default_date IS NOT NULL
+           THEN DATEDIFF(MONTH, d.health_date, d.new_default_date) END AS months_to_redefault
 INTO #D15E_pool
 FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT] d
-WHERE TRY_CAST(d.default_date AS date) IS NOT NULL
-GROUP BY d.account_number
+WHERE d.default_date IS NOT NULL
 OPTION (MAXDOP 1);
 
 CREATE UNIQUE CLUSTERED INDEX ix_D15E_pool ON #D15E_pool(account_number);
@@ -256,10 +304,9 @@ FROM (
             , p.month_idx
             , p.month_idx - ROW_NUMBER() OVER (PARTITION BY p.account_number
                                                ORDER BY p.month_idx) AS grp
-        FROM #D15E_panel p
+        FROM #D15E_obs p                     -- [Р-6] та же популяция, что в § 3
         INNER JOIN #D15E_best b ON b.account_number = p.account_number
-        WHERE p.dpd IS NOT NULL
-          AND p.dpd BETWEEN b.base_dpd - @Band AND b.base_dpd + @Band
+        WHERE p.dpd BETWEEN b.base_dpd - @Band AND b.base_dpd + @Band
     ) islands
     GROUP BY account_number, grp
 ) runs
@@ -320,22 +367,16 @@ OPTION (MAXDOP 1);
 -- 5d. Повторность дефолтов по найденной популяции.
 --     Отвечает на «сколько раз счёт дефолтил» из разбора бэк-теста.
 SELECT
-      CASE WHEN h.default_events = 1 THEN '1'
-           WHEN h.default_events = 2 THEN '2'
-           WHEN h.default_events BETWEEN 3 AND 4 THEN '3-4'
-           ELSE '5+' END                        AS default_events_bucket
+      h.default_events
+    , h.redefault_after_cure
     , COUNT(*)                                  AS accounts
     , AVG(CAST(r.longest_run AS float))         AS avg_longest_run
 FROM #D15E_pool h
 INNER JOIN #D15E_best b ON b.account_number = h.account_number
 INNER JOIN #D15E_run  r ON r.account_number = h.account_number
 WHERE b.months_in_band >= @MinMonths
-GROUP BY
-      CASE WHEN h.default_events = 1 THEN '1'
-           WHEN h.default_events = 2 THEN '2'
-           WHEN h.default_events BETWEEN 3 AND 4 THEN '3-4'
-           ELSE '5+' END
-ORDER BY default_events_bucket
+GROUP BY h.default_events, h.redefault_after_cure
+ORDER BY h.default_events, h.redefault_after_cure
 OPTION (MAXDOP 1);
 
 
@@ -383,8 +424,10 @@ OPTION (MAXDOP 1);
 SELECT
       b.account_number
     , h.default_events
-    , h.default_date_first
-    , h.default_date_last
+    , h.default_date
+    , h.health_date
+    , h.new_default_date
+    , h.redefault_after_cure
     , b.base_dpd
     , b.band_min_dpd
     , b.band_max_dpd
@@ -397,5 +440,67 @@ FROM #D15E_best b
 INNER JOIN #D15E_run  r ON r.account_number = b.account_number
 INNER JOIN #D15E_pool h ON h.account_number = b.account_number
 WHERE b.months_in_band >= @MinMonths
-ORDER BY r.longest_run DESC, b.months_in_band DESC, b.dpd_spread ASC
+ORDER BY r.longest_run DESC, b.months_in_band DESC, dpd_spread ASC
+OPTION (MAXDOP 1);
+
+
+/* =============================================================================
+   § 8. ПОВТОРНЫЙ ДЕФОЛТ ПОСЛЕ ОЗДОРОВЛЕНИЯ — прямо из базы дефолтов.
+        Считается СЕГОДНЯ, без ожидания выгрузок: пары
+        default_date -> health_date и new_default_date -> new_health_date
+        дают факт оздоровления и факт повторного дефолта по всей истории
+        с 2011 года.
+
+        ОГРАНИЧЕНИЕ: структура вмещает максимум ДВА эпизода на счёт. Счёт,
+        дефолтивший трижды, здесь неотличим от дефолтившего дважды.
+        Поэтому величина — нижняя граница, и так её и предъявлять.
+   ============================================================================= */
+
+-- 8a. Базовая ставка повторного дефолта по когортам оздоровления.
+--     Это КОНТРОЛЬНАЯ группа бэк-теста: оздоровлённые по действующему правилу.
+SELECT
+      YEAR(health_date)                           AS cure_year
+    , COUNT(*)                                    AS cured
+    , SUM(redefault_after_cure)                   AS redefaulted
+    , CAST(100.0 * SUM(redefault_after_cure) / NULLIF(COUNT(*),0) AS decimal(5,2))
+                                                  AS redefault_rate_pct
+FROM #D15E_pool
+WHERE health_date IS NOT NULL
+GROUP BY YEAR(health_date)
+ORDER BY cure_year
+OPTION (MAXDOP 1);
+
+-- 8b. Скорость срыва: через сколько месяцев после оздоровления приходит
+--     повторный дефолт. Ранний срыв означает, что оздоровление было фиктивным.
+SELECT
+      CASE WHEN months_to_redefault <= 3  THEN '0-3'
+           WHEN months_to_redefault <= 6  THEN '4-6'
+           WHEN months_to_redefault <= 12 THEN '7-12'
+           WHEN months_to_redefault <= 24 THEN '13-24'
+           ELSE '25+' END                         AS months_bucket
+    , COUNT(*)                                    AS accounts
+FROM #D15E_pool
+WHERE redefault_after_cure = 1
+GROUP BY
+      CASE WHEN months_to_redefault <= 3  THEN '0-3'
+           WHEN months_to_redefault <= 6  THEN '4-6'
+           WHEN months_to_redefault <= 12 THEN '7-12'
+           WHEN months_to_redefault <= 24 THEN '13-24'
+           ELSE '25+' END
+ORDER BY months_bucket
+OPTION (MAXDOP 1);
+
+-- 8c. Та же ставка, но только по найденной популяции устойчивого DPD.
+--     Сравнение 8c против 8a и есть первый ответ на вопрос «безопасно ли это».
+SELECT
+      b.months_in_band
+    , COUNT(*)                                    AS cured
+    , SUM(h.redefault_after_cure)                 AS redefaulted
+    , CAST(100.0 * SUM(h.redefault_after_cure) / NULLIF(COUNT(*),0) AS decimal(5,2))
+                                                  AS redefault_rate_pct
+FROM #D15E_pool h
+INNER JOIN #D15E_best b ON b.account_number = h.account_number
+WHERE h.health_date IS NOT NULL
+GROUP BY b.months_in_band
+ORDER BY b.months_in_band DESC
 OPTION (MAXDOP 1);
