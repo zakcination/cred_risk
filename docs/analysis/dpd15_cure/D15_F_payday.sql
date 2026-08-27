@@ -34,8 +34,14 @@
    а не глубину проблемы. Заёмщик с DPD 4-7 и заёмщик с DPD 14-17 опаздывают
    ОДИНАКОВО — просто у первого платёж 25-го, у второго 15-го.
 
+   АВТОНОМЕН. D15-E запускать не требуется: § 0 строит панель заново.
+   Причина: #D15E_panel — ЛОКАЛЬНАЯ временная таблица, она живёт только
+   в породившей её сессии и в другом окне не видна. Ссылаться на неё из
+   отдельного скрипта нельзя. Соседний sql/stage3_cure_pool.sql решает это
+   глобальными ## таблицами, но те гибнут при закрытии сессии-создателя
+   и конфликтуют между пользователями. Здесь — своя панель с префиксом D15F_.
+
    Read-only. Только SELECT. #temp с префиксом D15F_. MAXDOP 1.
-   Требует выполненного D15-E в том же окне (используются #D15E_panel, #D15E_best).
    T-SQL (Microsoft SQL Server).
    ============================================================================= */
 
@@ -43,9 +49,48 @@ SET NOCOUNT ON;
 
 DECLARE @AsOf    date = '2026-08-01';
 DECLARE @Months  int  = 6;
+DECLARE @Cap     int  = 30;   -- верхняя отсечка DPD, как в D15-E
 DECLARE @MaxMove int  = 29;   -- № 61 опр. 12: перенос МЕНЕЕ 30 календарных дней
 
 DECLARE @From date = DATEADD(MONTH, -(@Months - 1), @AsOf);
+
+
+/* =============================================================================
+   § 0. СОБСТВЕННАЯ ПАНЕЛЬ. Повторяет § 1-2 из D15-E, чтобы скрипт можно было
+        запускать в любом окне независимо. Параметры @AsOf и @Months должны
+        совпадать с теми, на которых считался D15-E, иначе пулы разойдутся.
+   ============================================================================= */
+
+IF OBJECT_ID('tempdb..#D15F_pool') IS NOT NULL DROP TABLE #D15F_pool;
+
+SELECT
+      d.account_number
+    , d.default_date
+    , d.health_date
+    , d.new_default_date
+INTO #D15F_pool
+FROM [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT] d
+WHERE d.default_date IS NOT NULL
+OPTION (MAXDOP 1);
+
+CREATE UNIQUE CLUSTERED INDEX ix_D15F_pool ON #D15F_pool(account_number);
+
+IF OBJECT_ID('tempdb..#D15F_panel') IS NOT NULL DROP TABLE #D15F_panel;
+
+SELECT
+      a.account_number
+    , TRY_CAST(p.[date] AS date)              AS snap_date
+    , TRY_CAST(p.[dpd] AS int)                AS dpd
+    , p.[category]
+INTO #D15F_panel
+FROM #D15F_pool a
+INNER JOIN [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] p
+        ON p.contract_number = a.account_number
+WHERE TRY_CAST(p.[date] AS date) BETWEEN @From AND @AsOf
+  AND ISNULL(p.[tag], '') <> '11'
+OPTION (MAXDOP 1);
+
+CREATE CLUSTERED INDEX ix_D15F_panel ON #D15F_panel(account_number, snap_date);
 
 
 /* =============================================================================
@@ -63,10 +108,10 @@ SELECT
     , DAY(EOMONTH(DATEADD(MONTH, -1, p.snap_date))) AS days_in_prev_month
     , DAY(EOMONTH(DATEADD(MONTH, -1, p.snap_date))) - p.dpd + 1 AS pay_day_est
 INTO #D15F_payday
-FROM #D15E_panel p
+FROM #D15F_panel p
 WHERE p.dpd IS NOT NULL
   AND p.dpd > 0
-  AND p.dpd < 30
+  AND p.dpd < @Cap
 OPTION (MAXDOP 1);
 
 CREATE CLUSTERED INDEX ix_D15F_payday ON #D15F_payday(account_number, snap_date);

@@ -53,6 +53,11 @@
         contract_number varchar, date date, dpd numeric, category numeric,
         tag varchar, balance, provisions_total.
 
+   ВРЕМЕННЫЕ ТАБЛИЦЫ ЗДЕСЬ ЛОКАЛЬНЫЕ (#), то есть живут только в той сессии,
+   которая их создала, и из другого окна не видны. Все секции § 1-8 запускать
+   в ОДНОМ окне подряд. Ссылаться на #D15E_panel из другого скрипта нельзя —
+   D15_F_payday.sql поэтому строит свою панель заново (его § 0).
+
    Read-only. Только SELECT. Только #temp с префиксом D15E_. MAXDOP 1.
    В репозиторий кладутся агрегаты § 5, не выдача § 7.
    T-SQL (Microsoft SQL Server).
