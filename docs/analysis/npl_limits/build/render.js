@@ -6,7 +6,7 @@ const path = require('path');
 const {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
   Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
-  PageBreak, LevelFormat, convertMillimetersToTwip,
+  ImageRun, PageBreak, LevelFormat, convertMillimetersToTwip,
 } = require('docx');
 
 const IN = path.resolve(process.argv[2]);
@@ -208,6 +208,27 @@ for (const b of BLOCKS) {
       children.push(codeBlock(b));
       children.push(new Paragraph({ spacing: { after: 160 }, children: [] }));
       break;
+    case 'image': {
+      // путь в блоке — относительно каталога JSON (build/)
+      const img = fs.readFileSync(path.resolve(path.dirname(IN), b.path));
+      // размеры из заголовка PNG (IHDR, байты 16..24); рендер шёл
+      // с deviceScaleFactor 2 — вписываем в ширину полосы набора
+      const pxW = img.readUInt32BE(16), pxH = img.readUInt32BE(20);
+      const w = 660, h = Math.round(w * pxH / pxW);
+      children.push(new Paragraph({
+        spacing: { before: 120, after: 60 }, alignment: AlignmentType.CENTER,
+        children: [new ImageRun({ type: 'png', data: img,
+                                  transformation: { width: w, height: h } })],
+      }));
+      if (b.caption) {
+        children.push(new Paragraph({
+          spacing: { after: 200 }, alignment: AlignmentType.CENTER,
+          children: [new TextRun({ text: b.caption, font: FONT, size: 16,
+                                   italics: true, color: MUTED })],
+        }));
+      }
+      break;
+    }
     case 'pagebreak':
       children.push(new Paragraph({ children: [new PageBreak()] }));
       break;
