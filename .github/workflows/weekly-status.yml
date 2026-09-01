@@ -1,0 +1,144 @@
+name: Еженедельный статус
+
+# Сообщает, а не принуждает. Защита веток на приватном репозитории недоступна
+# (403 Upgrade to GitHub Pro), поэтому Б3 проверяется отчётом, а не блокировкой.
+#
+# § 2: в отчёт идут идентификаторы, счётчики, возраст и ссылки. Аналитики,
+# ВНД, ПДн и выгрузок здесь нет и быть не должно.
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'   # понедельник, 04:00 UTC — 10:00 Астана
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      R: ${{ github.repository }}
+      TITLE: 'Еженедельный статус продукта'
+    steps:
+      - name: Собрать отчёт
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          TODAY=$(date -u +%s)
+          OUT=report.md
+
+          echo "_Собрано $NOW (UTC). Обновляется еженедельно; правки руками будут перезаписаны._" > $OUT
+          echo >> $OUT
+
+          # ---------- вехи и ближайший срок ----------
+          gh api "repos/$R/milestones?state=open&per_page=100" \
+            --jq '.[] | [.title, .due_on, .open_issues, .closed_issues] | @tsv' \
+            | sort -t$'\t' -k2 > ms.tsv || true
+
+          if [ -s ms.tsv ]; then
+            NEAREST=$(head -1 ms.tsv)
+            NT=$(echo "$NEAREST" | cut -f1); ND=$(echo "$NEAREST" | cut -f2)
+            if [ -n "$ND" ] && [ "$ND" != "null" ]; then
+              LEFT=$(( ( $(date -u -d "$ND" +%s) - TODAY ) / 86400 ))
+              echo "## Ближайший срок" >> $OUT
+              echo >> $OUT
+              echo "**$NT** — $(date -u -d "$ND" +%d.%m.%Y), осталось **$LEFT дн.**" >> $OUT
+              echo >> $OUT
+            fi
+            echo "## Вехи" >> $OUT
+            echo >> $OUT
+            echo "| Веха | Срок | Осталось | Открыто | Закрыто |" >> $OUT
+            echo "|---|---|---|---|---|" >> $OUT
+            while IFS=$'\t' read -r t d o c; do
+              if [ -n "$d" ] && [ "$d" != "null" ]; then
+                dd=$(date -u -d "$d" +%d.%m.%Y)
+                left=$(( ( $(date -u -d "$d" +%s) - TODAY ) / 86400 ))
+                [ "$left" -lt 0 ] && left="**просрочено на $(( -left ))**"
+              else
+                dd="—"; left="—"
+              fi
+              echo "| $t | $dd | $left | $o | $c |" >> $OUT
+            done < ms.tsv
+            echo >> $OUT
+          fi
+
+          # ---------- открытые PR: возраст и Б3 ----------
+          gh pr list -R "$R" --state open --limit 100 \
+            --json number,createdAt,headRefName,isDraft,milestone,labels > prs.json
+
+          echo "## Открытые PR" >> $OUT
+          echo >> $OUT
+          echo "| PR | Контур | Возраст | Коммитов | Б3 |" >> $OUT
+          echo "|---|---|---|---|---|" >> $OUT
+
+          VIOL=0; TOTAL=0
+          while IFS=$'\t' read -r num created branch draft contour; do
+            [ -z "$num" ] && continue
+            TOTAL=$(( TOTAL + 1 ))
+            AGE=$(( ( TODAY - $(date -u -d "$created" +%s) ) / 86400 ))
+            AHEAD=$(gh api "repos/$R/compare/main...$branch" --jq '.ahead_by' 2>/dev/null || echo "?")
+            BAD=""
+            if [ "$AGE" -gt 7 ]; then BAD="возраст"; fi
+            if [ "$AHEAD" != "?" ] && [ "$AHEAD" -gt 20 ]; then
+              BAD="${BAD:+$BAD + }коммиты"
+            fi
+            if [ -n "$BAD" ]; then VIOL=$(( VIOL + 1 )); FLAG="⚠ $BAD"; else FLAG="ок"; fi
+            [ "$draft" = "true" ] && D=" (draft)" || D=""
+            echo "| #$num$D | ${contour:-—} | $AGE дн. | $AHEAD | $FLAG |" >> $OUT
+          done < <(jq -r '.[] | [
+                     (.number|tostring), .createdAt, .headRefName, (.isDraft|tostring),
+                     ([.labels[].name | select(startswith("contour:"))] | join(", "))
+                   ] | @tsv' prs.json)
+
+          echo >> $OUT
+          echo "**Б3 (7 дн. / ~20 коммитов): нарушают $VIOL из $TOTAL.**" >> $OUT
+          echo >> $OUT
+
+          # ---------- приземлено за неделю ----------
+          SINCE=$(date -u -d '7 days ago' +%Y-%m-%d)
+          echo "## Приземлено за неделю" >> $OUT
+          echo >> $OUT
+          MERGED=$(gh pr list -R "$R" --state merged --limit 50 \
+                   --json number,title,mergedAt \
+                   --jq "[.[] | select(.mergedAt >= \"${SINCE}T00:00:00Z\")] | .[] | \"- #\(.number) \(.title)\"" || true)
+          if [ -n "$MERGED" ]; then echo "$MERGED" >> $OUT; else
+            LAST=$(gh pr list -R "$R" --state merged --limit 1 --json mergedAt --jq '.[0].mergedAt' || echo "")
+            if [ -n "$LAST" ] && [ "$LAST" != "null" ]; then
+              SILENT=$(( ( TODAY - $(date -u -d "$LAST" +%s) ) / 86400 ))
+              echo "Ничего. На \`main\` тихо **$SILENT дн.** (последнее слияние $(date -u -d "$LAST" +%d.%m.%Y))." >> $OUT
+            else
+              echo "Ничего." >> $OUT
+            fi
+          fi
+          echo >> $OUT
+
+          # ---------- заблокированное ----------
+          BLOCKED=$(gh issue list -R "$R" --state open --label "blocked-on-human" --limit 50 \
+                    --json number,title,createdAt \
+                    --jq '.[] | "- #\(.number) \(.title)"' || true)
+          if [ -n "$BLOCKED" ]; then
+            echo "## Ждёт ответа человека" >> $OUT
+            echo >> $OUT
+            echo "$BLOCKED" >> $OUT
+            echo >> $OUT
+            echo "_Правило Н6: спрашивать батчами по адресатам, а не по одному._" >> $OUT
+          fi
+
+          cat $OUT
+
+      - name: Опубликовать
+        run: |
+          set -euo pipefail
+          gh label create "статус" -R "$R" -c "ededed" -d "Еженедельный отчёт продуктового слоя" --force >/dev/null 2>&1 || true
+          NUM=$(gh issue list -R "$R" --state open --label "статус" --limit 1 --json number --jq '.[0].number // empty')
+          if [ -z "$NUM" ]; then
+            gh issue create -R "$R" -t "$TITLE" -F report.md -l "статус"
+          else
+            gh issue edit "$NUM" -R "$R" -F report.md
+            gh issue comment "$NUM" -R "$R" -F report.md
+            echo "Обновлён #$NUM"
+          fi
