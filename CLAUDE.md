@@ -167,6 +167,7 @@ git diff --name-only origin/main...HEAD | grep -Ei 'FINDINGS|README|CLAUDE\.md' 
 | `docs/analysis/risk_dwh_reconciliation/` | Сверка `Dictionaries.risk_analytics` ↔ `CL_PORTFOLIO.dbo`. `FINDINGS.md` — ground truth, читать первым | **да** |
 | `docs/analysis/risk_appetite/` | Пересмотр уровней риск-аппетита по кредитному риску (замечание СВА, сроки 30.09 / 31.12.2026) | нет |
 | `docs/analysis/npl_limits/` | Лимиты главы 11 Нормативов № 85, сработка лимита 98-3 (НЗ/СП ≥ 10 %) | нет |
+| `docs/analysis/dpd15_cure/` | Оздоровление розничных займов при пороге DPD 15 дней: норма, метод сбора на месячных срезах, ретро-тест повторного дефолта. `FINDINGS_DPD15.md` — реестр, `RESULTS_D15N.md` и `RESULTS_D15O.md` — действующие результаты | нет |
 | `topic_classifier/`, `topics/` | Классификатор документов кредитного риска | нет |
 | `sql/` | Проверочные и сверочные скрипты | правила ниже |
 | `notebooks/`, `scripts/`, `data/`, `examples/`, `tests/` | Обвязка контуров | нет |
