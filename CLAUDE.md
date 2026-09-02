@@ -178,6 +178,7 @@ git diff --name-only origin/main...HEAD | grep -Ei 'FINDINGS|README|CLAUDE\.md' 
 | `docs/analysis/risk_showcase/` | Витрина риск-метрик: полочки по нормативным документам, счётчики длительности, динамика. Реестры — в `registry/*.csv` | нет |
 | `docs/analysis/bank_recovery/` | План и режим восстановления финансовой устойчивости, ст. 88–89; сравнение восьми документов | нет |
 | `docs/pm/` | Слой управления продуктом: `ROADMAP.md` (контуры, календарь обязательств, спринты) и `CONFIG.md` (как ведётся трекинг) | нет |
+| `docs/analysis/dict_registry/` | Паспорта объектов `Dictionaries.risk_analytics`: таблицы, ключи, историзация, поля с числами и семантические ловушки. Ground truth — `risk_dwh_reconciliation/FINDINGS.md` | нет |
 | `topic_classifier/`, `topics/` | Классификатор документов кредитного риска | нет |
 | `sql/` | Проверочные и сверочные скрипты | правила ниже |
 | `notebooks/`, `scripts/`, `data/`, `examples/`, `tests/` | Обвязка контуров | нет |
