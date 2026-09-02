@@ -1,0 +1,3 @@
+# Зависимости сборщика записок (npm i --no-save docx). В репозиторий не идут.
+node_modules/
+package-lock.json
