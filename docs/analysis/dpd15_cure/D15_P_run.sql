@@ -1,85 +1,78 @@
 /* =============================================================================
-   D15-P. Повторный тест «длина подтверждения против высоты порога»
-   со сдвинутым окном исхода, флагом реструктуризации и балансом на выходе.
+   D15-P (редакция 2, 02.09.2026). Повторный тест «длина подтверждения против
+   высоты порога»: сетка правил k = 6…9 чистых месяцев, просрочка на шести
+   месяцах после выхода, три порога исхода, флаг реструктуризации.
    -----------------------------------------------------------------------------
-   ЗАЧЕМ. Оценка Г-O1 из RESULTS_D15O.md (ещё один чистый месяц снимает
-   до −17,96 п.п. срывов) получена при НЕСДВИНУТОМ окне исхода и является
-   оценкой сверху: заём, просроченный на паузе t+1 и не заплативший дальше,
-   автоматически окажется у 60 дней к t+2. Этот прогон разводит три вещи,
-   которые в D15-O были склеены:
+   ПОРЯДОК ПО §6 CLAUDE.md. Структура согласована автором 02.09.2026 — шесть
+   решений С1–С6 из PR #69; в этой редакции реализованы ВЫБРАННЫЕ варианты:
 
-     (a) сдвиг окна   — тот же заём, тот же выход t, исход на t+3 / t+4
-                        вместо t+2 / t+3. Если ставка падает уже здесь,
-                        это дрейф окна, а не эффект подтверждения;
-     (b) подтверждение — выход по правилу «7 чистых месяцев» (ветвь B),
-                        исход на t'+2 / t'+3. Это и есть «ещё один месяц»;
-     (c) отбор         — разница между (a) и (b) на одной когорте
-                        показывает, сколько даёт требование чистого 7-го
-                        месяца само по себе.
+     С1  ветви — не одна B7, а СЕТКА k = 6, 7, 8, 9 чистых месяцев
+         (k = 6 — действующее правило, оно же база D15-O);
+     С2  окно исхода не фиксируется: экспортируется просрочка на t+1 … t+6,
+         любое окно — t+2/t+3, t+3/t+4, t+4/t+5 — собирается в сводной;
+     С3  порогов исхода три — DPD > 30, > 60, > 90 — плюс флаг повторного
+         дефолта из реестра (f_redef_reg);
+     С4  когорта ПОЛНАЯ, как в D15-O: строка есть, если наблюдаемы t+2 и t+3;
+         более поздние месяцы — NULL там, где сетка кончилась; obs_lead
+         говорит, сколько месяцев после выхода наблюдаемо;
+     С5  реструктуризация — [дата окончания реструктуры] IS NOT NULL, любая
+         дата; сама дата экспортируется, вариант «между дефолтом и выходом»
+         пересчитывается в сводной;
+     С6  баланса нет — поле ждём из mart, соединение с CL_PORTFOLIO_2 снято.
 
-   Плюс два поля, которых в D15-O не было:
-     * f_restr    — Г-N3′: заём реструктурирован до выхода
-                    ([дата окончания реструктуры] из IFRS9);
-     * bal_exit   — баланс на дату выхода из CL_PORTFOLIO_2 (только S03),
-                    чтобы взвесить ставку срыва по экспозиции — вход в EL.
+   ВЗАИМОДЕЙСТВИЕ С2 × С3, названо прямо. У займа с DPD = 0 на выходе t
+   просрочка на t+2 не превышает ≈ 62 дней, на t+3 ≈ 93 — столько
+   календарных дней не прошло (это тест Г-N3 из RESULTS_D15O.md). Поэтому:
+     порог > 30 и > 60 — считать на окне t+2/t+3 (out_max_23);
+     порог > 90 — ТОЛЬКО на окне t+4/t+5 (out_max_45) и позже;
+     f90 на окне t+2/t+3 арифметически невозможен, и его тут нет.
 
-   ОДНА КОГОРТА ДЛЯ ВСЕХ ВЕТВЕЙ. Строка ветви A появляется, только если
-   наблюдаемы четыре месяца после выхода (t+1 … t+4). Это отсекает ≈1,75 %
-   когорты D15-O (самая поздняя дата выхода становится 2026-04 вместо
-   2026-05); ожидаемая усечённая база при tau = 0 — 20 586 займов.
-
-   ДВЕ ВЕТВИ В ОДНОЙ ВЫГРУЗКЕ, колонка arm:
-     A6  действующее правило: 6 чистых месяцев, первое достижимое окно,
-         пауза t+1, исход t+2 / t+3 (out_max) и сдвинутый t+3 / t+4
-         (out_max_shift);
-     B7  продлённое правило: 7 чистых месяцев, первое достижимое окно t',
-         пауза t'+1, исход t'+2 / t'+3 (out_max).
-   B7 ⊆ A6 по займам; при t' = t + 1 календарные месяцы исхода B7
-   совпадают со сдвинутым исходом A6. Сравнивать в сводной:
-     A6/out_max   → базовая ставка (ожидание ≈ 29,48 %);
-     A6/out_max_shift → тот же заём, окно позже;
-     B7/out_max   → правило «ещё один месяц».
+   ЧТО ЭТО РАЗВОДИТ. Для k = 6 на одной когорте: out_max_23 — базовая ставка
+   (ожидание 29,04 %); out_max_34 и out_max_45 — тот же заём, окно позже:
+   дрейф окна. Для k = 7…9 — правило «ещё k − 6 месяцев», исход на своём
+   t'+2/t'+3. Эффект подтверждения = ставка k на out_max_23 против ставки
+   k = 6 на окне, сдвинутом на k − 6 месяцев. Это и есть цифра вместо −17,96.
 
    ЧТО ПЕРЕСОБИРАЕТСЯ В EXCEL (сводная поверх выгрузки):
-     фильтр arm=A6, tau=0, строки exit_month    → ранние против поздних
-     фильтр arm, tau; значение СРЗНАЧ(f_return30) и СРЗНАЧ(f_return30_shift)
-     фильтр tau=0, строки arm, столбцы f_restr  → доля реструктурированных
-     фильтр f_bal_match=1; СУММ(bal_exit) по f_return30 → ставка в деньгах
+     фильтр k=6, tau=0, строки exit_month           → ранние против поздних
+     строки k, значения СРЗНАЧ(f30_23), СРЗНАЧ(f60_23), СРЗНАЧ(f90_45)
+     строки k, фильтр obs_lead>=5, СРЗНАЧ по out_max_34 / out_max_45 > 30
+     фильтр tau=0, строки k, столбцы f_restr         → доля реструктурированных
+     строки vintage_year / subproduct                → контроли, как в D15-O
 
-   ГРАНИЦЫ, названы прямо:
+   ГРАНИЦЫ:
      * когорта — дефолты 2019-01 … 2025-10, сетка снимков по 2026-08;
-     * окно ищется до 36-го месяца от дефолта;
-     * баланс есть только для счетов, найденных в CL_PORTFOLIO_2 (S03);
-       f_bal_match = 0 не означает нулевой баланс — означает «не найден»;
-     * [дата окончания реструктуры] берётся из среза KAN_20260801: заём,
-       реструктурированный ПОСЛЕ этой даты, флага не получит;
-     * приостановка начисления по-прежнему не выделяется — поля нет.
+     * окно ищется до 36-го месяца от дефолта; t+6 ищется до 42-го;
+     * сравнивать ветви k только на займах с наблюдаемым нужным окном —
+       фильтр по obs_lead, иначе ветви стоят на разных знаменателях;
+     * [дата окончания реструктуры] — срез KAN_20260801: реструктуризация
+       после этой даты флага не получит;
+     * приостановка начисления не выделяется — поля нет.
 
    Источники:
      [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT]  займы, даты, сетка DPD
      [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix]      продукт, дата окончания
                                                      реструктуры; SELECT *
                                                      запрещён — там ИИН
-     [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]           баланс на дату, S03
 
    КОНФИДЕНЦИАЛЬНОСТЬ. Выгрузка содержит номера договоров и В РЕПОЗИТОРИЙ
    НЕ КОММИТИТСЯ, за периметр банка не выносится. Если файл нужно кому-то
    передать — сначала удалить колонку account_number.
 
    Read-only. Только SELECT. Без временных таблиц. MAXDOP 1.
-   Ожидаемый объём: A6 ≈ 197 тыс. строк, B7 ≈ 140 тыс. — около 340 тыс.,
-   помещается в лист Excel; при нехватке памяти выгружать ветви по отдельности
-   (фильтр по arm в последнем WHERE).
+   ОБЪЁМ: четыре ветви × восемь tau — порядка 450 тыс. строк. Лист Excel
+   держит 1 048 576; если тяжело — оставить в последнем WHERE tau IN (0, 15)
+   (комментарий помечен) — объём упадёт до ≈ 115 тыс.
 
-   ГЕЙТ, объявлен ДО прогона — см. блок проверок в конце файла.
+   ГЕЙТ объявлен ДО прогона — блок проверок в конце файла.
    ============================================================================= */
 
 SET NOCOUNT ON;
 
 
 /* ---------------------------------------------------------------------------
-   § 0. ПРЯМОЙ ЗАМЕР на усечённой когорте — три ставки одним запросом.
-   Гнать первым: если A6/out_max не даст ≈ 29,48 %, выгрузке не верить.
+   § 0. ПРЯМОЙ ЗАМЕР по четырём ветвям — одним запросом, до выгрузки.
+   Строка k = 6 / out_max_23 обязана дать 20 953 займа и 29,04 %.
    --------------------------------------------------------------------------- */
 WITH panel AS (
     SELECT
@@ -138,67 +131,65 @@ WITH panel AS (
     WHERE h.default_date >= '2019-01-01'
       AND h.default_date <= '2025-10-01'
       AND CAST(v.snap AS date) >  h.default_date
-      AND CAST(v.snap AS date) <= DATEADD(MONTH, 40, h.default_date)
+      AND CAST(v.snap AS date) <= DATEADD(MONTH, 42, h.default_date)
 ),
 w AS (
     SELECT
           account_number, m, dpd
-        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS obs6
-        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS wmax6
-        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS obs7
-        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS wmax7
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS obs6
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS wmax6
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS obs7
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS wmax7
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 7 PRECEDING AND CURRENT ROW) AS obs8
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 7 PRECEDING AND CURRENT ROW) AS wmax8
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 8 PRECEDING AND CURRENT ROW) AS obs9
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 8 PRECEDING AND CURRENT ROW) AS wmax9
+        , LEAD(dpd, 1) OVER (PARTITION BY account_number ORDER BY m) AS d1
         , LEAD(dpd, 2) OVER (PARTITION BY account_number ORDER BY m) AS d2
         , LEAD(dpd, 3) OVER (PARTITION BY account_number ORDER BY m) AS d3
         , LEAD(dpd, 4) OVER (PARTITION BY account_number ORDER BY m) AS d4
+        , LEAD(dpd, 5) OVER (PARTITION BY account_number ORDER BY m) AS d5
     FROM panel
 ),
-a6 AS (
-    SELECT account_number, m, d2, d3, d4
+firstk AS (
+    SELECT 6 AS k, account_number, m, d1, d2, d3, d4, d5
          , ROW_NUMBER() OVER (PARTITION BY account_number ORDER BY m) AS rn
     FROM w WHERE obs6 = 6 AND wmax6 = 0 AND m <= 36
-),
-b7 AS (
-    SELECT account_number, m, d2, d3
-         , ROW_NUMBER() OVER (PARTITION BY account_number ORDER BY m) AS rn
+    UNION ALL
+    SELECT 7, account_number, m, d1, d2, d3, d4, d5
+         , ROW_NUMBER() OVER (PARTITION BY account_number ORDER BY m)
     FROM w WHERE obs7 = 7 AND wmax7 = 0 AND m <= 36
-),
-coh AS (   -- усечённая когорта: у A6 наблюдаем t+4
-    SELECT account_number FROM a6
-    WHERE rn = 1 AND d2 IS NOT NULL AND d3 IS NOT NULL AND d4 IS NOT NULL
+    UNION ALL
+    SELECT 8, account_number, m, d1, d2, d3, d4, d5
+         , ROW_NUMBER() OVER (PARTITION BY account_number ORDER BY m)
+    FROM w WHERE obs8 = 8 AND wmax8 = 0 AND m <= 36
+    UNION ALL
+    SELECT 9, account_number, m, d1, d2, d3, d4, d5
+         , ROW_NUMBER() OVER (PARTITION BY account_number ORDER BY m)
+    FROM w WHERE obs9 = 9 AND wmax9 = 0 AND m <= 36
 )
-SELECT N'A6 / когорта D15-O (t+3 наблюдаем)' AS ветвь, COUNT(*) AS займов
-     , SUM(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 30 THEN 1 ELSE 0 END) AS вернулись_30plus
-     , CAST(100.0 * SUM(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 30 THEN 1 ELSE 0 END)
-            / COUNT(*) AS decimal(5,2)) AS ставка_pct
-FROM a6 WHERE rn = 1 AND d2 IS NOT NULL AND d3 IS NOT NULL      -- ожидание: 20 953 / 29,04 %
-UNION ALL
-SELECT N'A6 / усечённая (t+4 наблюдаем), исход t+2,t+3', COUNT(*)
-     , SUM(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 30 THEN 1 ELSE 0 END)
-     , CAST(100.0 * SUM(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 30 THEN 1 ELSE 0 END)
-            / COUNT(*) AS decimal(5,2))
-FROM a6 WHERE rn = 1 AND account_number IN (SELECT account_number FROM coh)   -- ожидание: ≈ 20 586 / 29,48 %
-UNION ALL
-SELECT N'A6 / сдвиг t+3,t+4', COUNT(*)
-     , SUM(CASE WHEN (CASE WHEN d3 >= d4 THEN d3 ELSE d4 END) > 30 THEN 1 ELSE 0 END)
-     , CAST(100.0 * SUM(CASE WHEN (CASE WHEN d3 >= d4 THEN d3 ELSE d4 END) > 30 THEN 1 ELSE 0 END)
-            / COUNT(*) AS decimal(5,2))
-FROM a6 WHERE rn = 1 AND account_number IN (SELECT account_number FROM coh)
-UNION ALL
-SELECT N'B7 / исход t''+2,t''+3', COUNT(*)
-     , SUM(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 30 THEN 1 ELSE 0 END)
-     , CAST(100.0 * SUM(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 30 THEN 1 ELSE 0 END)
-            / COUNT(*) AS decimal(5,2))
-FROM b7 WHERE rn = 1 AND d2 IS NOT NULL AND d3 IS NOT NULL
-  AND account_number IN (SELECT account_number FROM coh)
+SELECT k                                                          AS чистых_месяцев
+     , COUNT(*)                                                   AS займов
+     , CAST(100.0 * AVG(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 30 THEN 1.0 ELSE 0 END)
+            AS decimal(5,2))                                      AS ставка30_t23_pct
+     , CAST(100.0 * AVG(CASE WHEN (CASE WHEN d2 >= d3 THEN d2 ELSE d3 END) > 60 THEN 1.0 ELSE 0 END)
+            AS decimal(5,2))                                      AS ставка60_t23_pct
+     , SUM(CASE WHEN d4 IS NOT NULL AND d5 IS NOT NULL THEN 1 ELSE 0 END) AS займов_с_t45
+     , CAST(100.0 * SUM(CASE WHEN (CASE WHEN d4 >= d5 THEN d4 ELSE d5 END) > 30 THEN 1 ELSE 0 END)
+            / NULLIF(SUM(CASE WHEN d4 IS NOT NULL AND d5 IS NOT NULL THEN 1 ELSE 0 END), 0)
+            AS decimal(5,2))                                      AS ставка30_t45_pct
+     , CAST(100.0 * SUM(CASE WHEN (CASE WHEN d4 >= d5 THEN d4 ELSE d5 END) > 90 THEN 1 ELSE 0 END)
+            / NULLIF(SUM(CASE WHEN d4 IS NOT NULL AND d5 IS NOT NULL THEN 1 ELSE 0 END), 0)
+            AS decimal(5,2))                                      AS ставка90_t45_pct
+FROM firstk
+WHERE rn = 1 AND d2 IS NOT NULL AND d3 IS NOT NULL
+GROUP BY k
+ORDER BY k
 OPTION (MAXDOP 1);
 
 
 /* ---------------------------------------------------------------------------
-   § 1. САМА ВЫГРУЗКА. Выгружать в Excel как есть, сводную строить поверх.
+   § 1. САМА ВЫГРУЗКА. Одна строка = заём × k × tau. Выгружать в Excel как есть.
    --------------------------------------------------------------------------- */
 WITH panel AS (
     SELECT
@@ -262,56 +253,66 @@ WITH panel AS (
     WHERE h.default_date >= '2019-01-01'
       AND h.default_date <= '2025-10-01'
       AND CAST(v.snap AS date) >  h.default_date
-      AND CAST(v.snap AS date) <= DATEADD(MONTH, 40, h.default_date)
+      AND CAST(v.snap AS date) <= DATEADD(MONTH, 42, h.default_date)
 ),
 w AS (
     SELECT
           account_number, default_date, health_date, redef, snap, m, dpd
-        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS obs6
-        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS wmax6
-        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS obs7
-        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m
-                           ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS wmax7
-        , LAG (dpd, 6) OVER (PARTITION BY account_number ORDER BY m) AS l6
-        , LAG (dpd, 5) OVER (PARTITION BY account_number ORDER BY m) AS l5
-        , LAG (dpd, 4) OVER (PARTITION BY account_number ORDER BY m) AS l4
-        , LAG (dpd, 3) OVER (PARTITION BY account_number ORDER BY m) AS l3
-        , LAG (dpd, 2) OVER (PARTITION BY account_number ORDER BY m) AS l2
-        , LAG (dpd, 1) OVER (PARTITION BY account_number ORDER BY m) AS l1
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS obs6
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 5 PRECEDING AND CURRENT ROW) AS wmax6
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS obs7
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) AS wmax7
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 7 PRECEDING AND CURRENT ROW) AS obs8
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 7 PRECEDING AND CURRENT ROW) AS wmax8
+        , COUNT(dpd) OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 8 PRECEDING AND CURRENT ROW) AS obs9
+        , MAX(dpd)   OVER (PARTITION BY account_number ORDER BY m ROWS BETWEEN 8 PRECEDING AND CURRENT ROW) AS wmax9
+        /* окно как оно есть: просрочка на t−8 … t, без пересборки под k */
+        , LAG (dpd, 8) OVER (PARTITION BY account_number ORDER BY m) AS m8
+        , LAG (dpd, 7) OVER (PARTITION BY account_number ORDER BY m) AS m7
+        , LAG (dpd, 6) OVER (PARTITION BY account_number ORDER BY m) AS m6
+        , LAG (dpd, 5) OVER (PARTITION BY account_number ORDER BY m) AS m5
+        , LAG (dpd, 4) OVER (PARTITION BY account_number ORDER BY m) AS m4
+        , LAG (dpd, 3) OVER (PARTITION BY account_number ORDER BY m) AS m3
+        , LAG (dpd, 2) OVER (PARTITION BY account_number ORDER BY m) AS m2
+        , LAG (dpd, 1) OVER (PARTITION BY account_number ORDER BY m) AS m1
+        /* шесть месяцев после выхода */
         , LEAD(dpd, 1) OVER (PARTITION BY account_number ORDER BY m) AS d1
         , LEAD(dpd, 2) OVER (PARTITION BY account_number ORDER BY m) AS d2
         , LEAD(dpd, 3) OVER (PARTITION BY account_number ORDER BY m) AS d3
         , LEAD(dpd, 4) OVER (PARTITION BY account_number ORDER BY m) AS d4
+        , LEAD(dpd, 5) OVER (PARTITION BY account_number ORDER BY m) AS d5
+        , LEAD(dpd, 6) OVER (PARTITION BY account_number ORDER BY m) AS d6
     FROM panel
 ),
 tau AS ( SELECT tau FROM ( VALUES (0),(3),(5),(10),(15),(20),(25),(30) ) t(tau) ),
-candA AS (
-    SELECT 'A6' AS arm, t.tau, w.*
+cand AS (
+    SELECT 6 AS k, t.tau, w.account_number, w.default_date, w.health_date, w.redef, w.snap, w.m, w.dpd
+         , w.wmax6 AS wmax, w.m8, w.m7, w.m6, w.m5, w.m4, w.m3, w.m2, w.m1
+         , w.d1, w.d2, w.d3, w.d4, w.d5, w.d6
          , ROW_NUMBER() OVER (PARTITION BY w.account_number, t.tau ORDER BY w.m) AS rn
     FROM w CROSS JOIN tau t
     WHERE w.obs6 = 6 AND w.wmax6 <= t.tau AND w.m <= 36
-),
-candB AS (
-    SELECT 'B7' AS arm, t.tau, w.*
-         , ROW_NUMBER() OVER (PARTITION BY w.account_number, t.tau ORDER BY w.m) AS rn
+    UNION ALL
+    SELECT 7, t.tau, w.account_number, w.default_date, w.health_date, w.redef, w.snap, w.m, w.dpd
+         , w.wmax7, w.m8, w.m7, w.m6, w.m5, w.m4, w.m3, w.m2, w.m1
+         , w.d1, w.d2, w.d3, w.d4, w.d5, w.d6
+         , ROW_NUMBER() OVER (PARTITION BY w.account_number, t.tau ORDER BY w.m)
     FROM w CROSS JOIN tau t
     WHERE w.obs7 = 7 AND w.wmax7 <= t.tau AND w.m <= 36
-),
-coh AS (   -- усечённая когорта: у A6 при tau = 0 наблюдаем t+4
-    SELECT account_number FROM candA
-    WHERE tau = 0 AND rn = 1 AND d2 IS NOT NULL AND d3 IS NOT NULL AND d4 IS NOT NULL
-),
-cand AS (
-    SELECT arm, tau, account_number, default_date, health_date, redef, snap, m, dpd
-         , wmax6, wmax7, l6, l5, l4, l3, l2, l1, d1, d2, d3, d4
-    FROM candA WHERE rn = 1 AND d2 IS NOT NULL AND d3 IS NOT NULL AND d4 IS NOT NULL
     UNION ALL
-    SELECT arm, tau, account_number, default_date, health_date, redef, snap, m, dpd
-         , wmax6, wmax7, l6, l5, l4, l3, l2, l1, d1, d2, d3, d4
-    FROM candB WHERE rn = 1 AND d2 IS NOT NULL AND d3 IS NOT NULL
+    SELECT 8, t.tau, w.account_number, w.default_date, w.health_date, w.redef, w.snap, w.m, w.dpd
+         , w.wmax8, w.m8, w.m7, w.m6, w.m5, w.m4, w.m3, w.m2, w.m1
+         , w.d1, w.d2, w.d3, w.d4, w.d5, w.d6
+         , ROW_NUMBER() OVER (PARTITION BY w.account_number, t.tau ORDER BY w.m)
+    FROM w CROSS JOIN tau t
+    WHERE w.obs8 = 8 AND w.wmax8 <= t.tau AND w.m <= 36
+    UNION ALL
+    SELECT 9, t.tau, w.account_number, w.default_date, w.health_date, w.redef, w.snap, w.m, w.dpd
+         , w.wmax9, w.m8, w.m7, w.m6, w.m5, w.m4, w.m3, w.m2, w.m1
+         , w.d1, w.d2, w.d3, w.d4, w.d5, w.d6
+         , ROW_NUMBER() OVER (PARTITION BY w.account_number, t.tau ORDER BY w.m)
+    FROM w CROSS JOIN tau t
+    WHERE w.obs9 = 9 AND w.wmax9 <= t.tau AND w.m <= 36
 )
 SELECT
       c.account_number
@@ -320,46 +321,40 @@ SELECT
     , CAST(YEAR(c.default_date) AS varchar(4)) + '-Q'
       + CAST(DATEPART(QUARTER, c.default_date) AS varchar(1))     AS vintage_qtr
     , p.subproduct
-    , c.arm
+    , c.k                                                         AS k_clean_months
     , c.tau
     , c.m                                                         AS exit_month
     , c.snap                                                      AS exit_snap
-    , CASE WHEN (c.arm = 'A6' AND c.wmax6 = 0)
-             OR (c.arm = 'B7' AND c.wmax7 = 0) THEN 'STRICT'
-           ELSE 'SOFT-ONLY' END                                   AS grp
-    /* окно: для A6 — w1…w6 = l5…l1, текущий; для B7 — w1…w7 = l6…l1, текущий */
-    , CASE WHEN c.arm = 'B7' THEN c.l6 ELSE c.l5 END              AS w1
-    , CASE WHEN c.arm = 'B7' THEN c.l5 ELSE c.l4 END              AS w2
-    , CASE WHEN c.arm = 'B7' THEN c.l4 ELSE c.l3 END              AS w3
-    , CASE WHEN c.arm = 'B7' THEN c.l3 ELSE c.l2 END              AS w4
-    , CASE WHEN c.arm = 'B7' THEN c.l2 ELSE c.l1 END              AS w5
-    , CASE WHEN c.arm = 'B7' THEN c.l1 ELSE c.dpd END             AS w6
-    , CASE WHEN c.arm = 'B7' THEN c.dpd ELSE NULL END             AS w7
-    , c.d1                                                        AS dpd_pause
-    , c.d2                                                        AS dpd_out1
-    , c.d3                                                        AS dpd_out2
-    , c.d4                                                        AS dpd_out3
-    , CASE WHEN c.d2 >= c.d3 THEN c.d2 ELSE c.d3 END              AS out_max
+    , CASE WHEN c.wmax = 0 THEN 'STRICT' ELSE 'SOFT-ONLY' END     AS grp
+    /* окно наблюдения: просрочка на t−8 … t. Для ветви k значимы t−(k−1) … t;
+       что левее — справочно (NULL, если сетка не началась) */
+    , c.m8 AS dpd_m8, c.m7 AS dpd_m7, c.m6 AS dpd_m6, c.m5 AS dpd_m5
+    , c.m4 AS dpd_m4, c.m3 AS dpd_m3, c.m2 AS dpd_m2, c.m1 AS dpd_m1
+    , c.dpd                                                       AS dpd_m0
+    /* шесть месяцев после выхода; NULL — сетка кончилась */
+    , c.d1 AS dpd_p1, c.d2 AS dpd_p2, c.d3 AS dpd_p3
+    , c.d4 AS dpd_p4, c.d5 AS dpd_p5, c.d6 AS dpd_p6
+    , (CASE WHEN c.d1 IS NULL THEN 0 ELSE 1 END) + (CASE WHEN c.d2 IS NULL THEN 0 ELSE 1 END)
+    + (CASE WHEN c.d3 IS NULL THEN 0 ELSE 1 END) + (CASE WHEN c.d4 IS NULL THEN 0 ELSE 1 END)
+    + (CASE WHEN c.d5 IS NULL THEN 0 ELSE 1 END) + (CASE WHEN c.d6 IS NULL THEN 0 ELSE 1 END)
+                                                                  AS obs_lead
+    /* окна исхода — максимум по паре месяцев; флаги считаются из них */
+    , CASE WHEN c.d2 >= c.d3 THEN c.d2 ELSE c.d3 END              AS out_max_23
     , CASE WHEN c.d4 IS NULL THEN NULL
-           WHEN c.d3 >= c.d4 THEN c.d3 ELSE c.d4 END              AS out_max_shift
-    /* флаги: определение видно целиком, пересчитывается из соседних колонок */
-    , CASE WHEN (CASE WHEN c.d2 >= c.d3 THEN c.d2 ELSE c.d3 END) > 30
-           THEN 1 ELSE 0 END                                      AS f_return30
-    , CASE WHEN c.d4 IS NULL THEN NULL
-           WHEN (CASE WHEN c.d3 >= c.d4 THEN c.d3 ELSE c.d4 END) > 30
-           THEN 1 ELSE 0 END                                      AS f_return30_shift
+           WHEN c.d3 >= c.d4 THEN c.d3 ELSE c.d4 END              AS out_max_34
+    , CASE WHEN c.d4 IS NULL OR c.d5 IS NULL THEN NULL
+           WHEN c.d4 >= c.d5 THEN c.d4 ELSE c.d5 END              AS out_max_45
+    , CASE WHEN (CASE WHEN c.d2 >= c.d3 THEN c.d2 ELSE c.d3 END) > 30 THEN 1 ELSE 0 END AS f30_23
+    , CASE WHEN (CASE WHEN c.d2 >= c.d3 THEN c.d2 ELSE c.d3 END) > 60 THEN 1 ELSE 0 END AS f60_23
+    , CASE WHEN c.d4 IS NULL OR c.d5 IS NULL THEN NULL
+           WHEN (CASE WHEN c.d4 >= c.d5 THEN c.d4 ELSE c.d5 END) > 90 THEN 1 ELSE 0 END AS f90_45
     , CASE WHEN (CASE WHEN c.d2 >= c.d3 THEN c.d2 ELSE c.d3 END)
                 - c.dpd >= 30 THEN 1 ELSE 0 END                   AS f_delta30
     , CASE WHEN c.health_date IS NOT NULL THEN 1 ELSE 0 END       AS f_cured_fact
     , c.redef                                                     AS f_redef_reg
-    /* Г-N3′: реструктуризация закончилась между дефолтом и выходом */
+    /* С5: реструктуризация — любая дата; сама дата рядом, чтобы пересчитать иначе */
     , p.restr_end
-    , CASE WHEN p.restr_end IS NOT NULL
-            AND p.restr_end >  c.default_date
-            AND p.restr_end <= c.snap THEN 1 ELSE 0 END           AS f_restr
-    /* вход в EL: баланс на дату выхода, только S03 */
-    , b.bal_exit
-    , CASE WHEN b.bal_exit IS NOT NULL THEN 1 ELSE 0 END          AS f_bal_match
+    , CASE WHEN p.restr_end IS NOT NULL THEN 1 ELSE 0 END         AS f_restr
 FROM cand c
 LEFT JOIN (
     SELECT account_number
@@ -368,39 +363,39 @@ LEFT JOIN (
     FROM [IFRS9].[dbo].[KAN_20260801_for_LGD_Fenix]
     GROUP BY account_number
 ) p ON p.account_number = c.account_number
-LEFT JOIN (
-    SELECT contract_number, [date]
-         , SUM(TRY_CAST(balance AS decimal(18,2))) AS bal_exit
-    FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]
-    GROUP BY contract_number, [date]
-) b ON b.contract_number = c.account_number AND b.[date] = c.snap
-WHERE c.account_number IN (SELECT account_number FROM coh)
-ORDER BY c.account_number, c.arm, c.tau
+WHERE c.rn = 1
+  AND c.d2 IS NOT NULL
+  AND c.d3 IS NOT NULL
+  -- AND c.tau IN (0, 15)          -- раскомментировать, если Excel не держит объём
+ORDER BY c.account_number, c.k, c.tau
 OPTION (MAXDOP 1);
 
 
 /* ---------------------------------------------------------------------------
-   ГЕЙТ — проверки, объявленные до прогона. Ожидания взяты из построчной
-   выгрузки D15-O, усечённой до займов с наблюдаемым t+4 (o_scope.py, 01.09).
+   ГЕЙТ — проверки, объявленные до прогона. Ожидания — из D15-O на полной
+   когорте (С4), поэтому цифры те же, что уже прошли гейт 01.09.
 
-   1. Строк arm = A6 при tau = 0 обязано быть 20 586 (усечённая когорта).
-   2. СРЗНАЧ(f_return30) при arm = A6, tau = 0 обязан дать 29,48 %.
-   3. При arm = A6, tau = 0: exit_month = 7 → 47,61 % на 9 316 займах;
-      exit_month >= 8 → 14,50 % на 11 270. Это разложение D15-O на той же
-      когорте; расхождение больше 0,05 п.п. — дефект скрипта, не находка.
-   4. У всех строк с grp = 'STRICT' окно (w1…w6, для B7 — w1…w7) — нули.
-   5. exit_month у A6 не меньше 7, у B7 — не меньше 8.
-   6. При tau = 0 строк B7 не больше, чем строк A6 с dpd_pause = 0:
-      заём с 7 чистыми месяцами обязан иметь чистую паузу в шестимесячной
-      постановке (на полной когорте таких было 15 083).
-   7. f_bal_match — только справочно, гейтом не является: баланс есть
-      у счетов S03. Долю совпадения записать в отчёт, а не объяснять.
+   1. Строк k = 6 при tau = 0 обязано быть 20 953.
+   2. СРЗНАЧ(f30_23) при k = 6, tau = 0 обязан дать 29,04 %.
+   3. При k = 6, tau = 0: exit_month = 7 → 47,41 % на 9 368 займах;
+      exit_month >= 8 → 14,18 % на 11 585. Расхождение больше 0,05 п.п. —
+      дефект скрипта, не находка.
+   4. У всех строк с grp = 'STRICT' значения dpd_m(k−1) … dpd_m0 — нули.
+   5. exit_month не меньше k + 1: у k = 6 — от 7, у k = 9 — от 10.
+   6. Вложенность: при tau = 0 строк k = 7 не больше, чем строк k = 6
+      с dpd_p1 = 0 (на когорте D15-O их 15 083); аналогично k = 8 против
+      k = 7 с dpd_p1 = 0, k = 9 против k = 8.
+   7. f90_45 при k = 6 не пуст: доля строк с obs_lead >= 5 должна быть
+      порядка 96–98 % (сдвиг на один месяц отсекал 1,75 % по расчёту 01.09;
+      здесь сдвиг на два — ожидаемая потеря примерно вдвое больше).
+   8. f90_45 обязан быть NULL ровно там, где dpd_p4 или dpd_p5 NULL —
+      ноль вместо NULL здесь означал бы «не сорвался» про ненаблюдаемое.
 
    Что считается результатом, а не гейтом:
-      A6/out_max_shift против A6/out_max — дрейф окна;
-      B7/out_max против A6/out_max_shift — эффект подтверждения за вычетом
-      дрейфа; это и есть цифра, которую можно предъявлять вместо −17,96.
+      k = 6, out_max_34 / out_max_45 против out_max_23 — дрейф окна;
+      k = 7…9 на out_max_23 против k = 6 на окне, сдвинутом на k − 6 —
+      эффект подтверждения за вычетом дрейфа. Это цифра вместо −17,96.
 
-   Любая непройденная проверка 1–6 означает, что выгрузка не соответствует
-   расчёту D15-O, и сравнивать ветви нельзя, пока причина не найдена.
+   Любая непройденная проверка 1–6 и 8 означает, что выгрузка не
+   соответствует D15-O, и сравнивать ветви нельзя, пока причина не найдена.
    --------------------------------------------------------------------------- */
