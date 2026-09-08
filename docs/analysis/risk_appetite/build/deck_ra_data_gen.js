@@ -16,6 +16,22 @@ const D = {
   sknew: rows.map(r => r2(n(r.sk_new_mln) / 1000)),
   zaim:  rows.map(r => r2(n(r.zaim_mln) / 1000)),
 };
+
+// Квартальные средние, месячные приращения и средние по окнам — для слайдов «простого взгляда».
+const mean = a => a.reduce((s, x) => s + x, 0) / a.length;
+const qs = {};
+D.full.forEach((d, i) => {
+  const k = d.slice(0, 4) + "Q" + (Math.floor((Number(d.slice(5, 7)) - 1) / 3) + 1);
+  (qs[k] = qs[k] || []).push(D.new[i]);
+});
+const qk = Object.keys(qs).sort();
+D.qlab = qk.map(k => k.slice(2).replace("Q", " кв."));
+D.qval = qk.map(k => r2(mean(qs[k])));
+D.dval = D.new.slice(1).map((v, i) => r2(v - D.new[i]));
+D.dlab = D.labels.slice(1);
+D.avgLab = ["36 мес.", "24 мес.", "12 мес.", "6 мес.", "3 мес.", "последняя"];
+D.avgVal = [36, 24, 12, 6, 3].map(w => r2(mean(D.new.slice(-w)))).concat([D.new[D.new.length - 1]]);
+
 if (require.main === module) {
   fs.writeFileSync(path.join(__dirname, "deck_ra_data.js"),
     "module.exports = " + JSON.stringify(D) + ";\n");
