@@ -53,6 +53,48 @@ def col_letter(j):
     return s
 
 
+def dump_external_links(xlsx_path):
+    """Цели внешних связей: [1], [2]… -> путь книги-источника и имена её листов.
+
+    Формула вида ='[1]Лист'!B20 не показывает, ЧТО за книга скрыта под [1].
+    Соответствие лежит в xl/externalLinks/externalLinkN.xml и его .rels.
+    """
+    import re
+    import zipfile
+    print("\n=== ВНЕШНИЕ СВЯЗИ ===")
+    try:
+        z = zipfile.ZipFile(xlsx_path)
+    except Exception as e:
+        print("  не открыть архив: %s" % e.__class__.__name__)
+        return
+    with z:
+        names = sorted(n for n in z.namelist()
+                       if re.match(r"xl/externalLinks/externalLink\d+\.xml$", n))
+        if not names:
+            print("  внешних связей нет")
+            return
+        for n in names:
+            idx = re.search(r"(\d+)\.xml$", n).group(1)
+            rels = "xl/externalLinks/_rels/externalLink%s.xml.rels" % idx
+            target = "(цель не найдена)"
+            try:
+                rx = z.read(rels).decode("utf-8", "replace")
+                m = re.search(r'Target="([^"]+)"', rx)
+                if m:
+                    target = m.group(1)
+            except KeyError:
+                pass
+            try:
+                xml = z.read(n).decode("utf-8", "replace")
+            except Exception:
+                xml = ""
+            sheets = re.findall(r'<sheetName val="([^"]*)"', xml)
+            n_cells = len(re.findall(r"<cell ", xml))
+            print("  [%s] -> %s" % (idx, target))
+            if sheets:
+                print("        листы: %s" % ", ".join(sheets[:20]))
+            print("        кэшированных ячеек в книге-приёмнике: %d" % n_cells)
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("path", nargs="?", default=SRC)
@@ -94,6 +136,8 @@ def main():
     targets = [s for s in wbv.sheetnames if (a.sheet is None or s == a.sheet)]
     if a.sheet and not targets:
         sys.exit("нет листа «%s». Есть: %s" % (a.sheet, ", ".join(wbv.sheetnames)))
+
+    dump_external_links(tmp)
 
     for name in targets:
         wsv, wsf = wbv[name], wbf[name]
