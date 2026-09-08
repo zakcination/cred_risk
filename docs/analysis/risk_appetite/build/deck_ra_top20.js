@@ -1,5 +1,6 @@
 // Сборка презентации по уровню и зонам топ-20 (docs/analysis/risk_appetite).
-// Запуск:  node deck_ra_data.js && node deck_ra_top20.js
+// Запуск:  node deck_ra_data_gen.js && node deck_ra_top20.js
+//          python3 pptx_enum_check.py RA_top20_zones.pptx   <- обязательно
 // Обложка cover_bg.png — декоративная, без единой цифры; в репозиторий не коммитится.
 // Все графики нативные: правятся в PowerPoint без пересборки.
 const pptxgen = require("pptxgenjs");
@@ -220,7 +221,7 @@ s.addChart(p.ChartType.line, [
   {name:"Граница жёлтой зоны — 99,60 %", labels:D.labels, values:yel},
   {name:"Уровень риск-аппетита — 108,63 %", labels:D.labels, values:lim}],
   Object.assign({x:M, y:2.2, w:8.15, h:4.1, chartColors:[C1, AMBER, RED],
-    lineSize:2.5, lineDataSymbol:"none", lineDash:["solid","dash","dash"],
+    lineSize:2.5, lineDataSymbol:"none",
     showLegend:true, legendPos:"b", legendFontSize:10, legendFontFace:BF,
     valAxisMinVal:75, valAxisMaxVal:115}, axis));
 const zones = [
