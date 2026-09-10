@@ -182,6 +182,9 @@ SELECT
     , CASE WHEN in_b2a = 1
              OR zadol_borrower > @capital * @thr_ind
            THEN 1 ELSE 0 END                                 AS flag_individual
+    , CASE WHEN in_b2a = 1 THEN 1 ELSE 0 END                 AS ind_by_list
+    , CASE WHEN zadol_borrower > @capital * @thr_ind
+           THEN 1 ELSE 0 END                                 AS ind_by_threshold
 INTO #seg24_cmp
 FROM agg
 OPTION (MAXDOP 1);
