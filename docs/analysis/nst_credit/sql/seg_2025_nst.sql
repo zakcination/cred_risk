@@ -175,9 +175,15 @@ SELECT
            THEN 1 ELSE 0 END                                 AS flag_individual
     -- основание индивидуальности нужно раздельно: список выходит за критерий
     -- Таблицы 4 и требует отдельного обоснования перед Агентством
+    -- основания раздельно: заёмщик может быть и в списке, и выше порога
+    -- одновременно. Единая колонка со взаимоисключающими значениями это теряет.
+    , CASE WHEN in_b2a = 1 THEN 1 ELSE 0 END                 AS ind_by_list
+    , CASE WHEN zadol_borrower > @capital * @thr_ind
+           THEN 1 ELSE 0 END                                 AS ind_by_threshold
     , CASE
-        WHEN in_b2a = 1                           THEN 'B2A'
-        WHEN zadol_borrower > @capital * @thr_ind THEN 'threshold'
+        WHEN in_b2a = 1 AND zadol_borrower > @capital * @thr_ind THEN 'B2A+порог'
+        WHEN in_b2a = 1                                          THEN 'B2A'
+        WHEN zadol_borrower > @capital * @thr_ind                THEN 'порог'
         ELSE NULL
       END                                                    AS individual_basis
 INTO #seg25_rows
@@ -224,12 +230,14 @@ ORDER BY flag, val;
 SELECT
       segment
     , individual_basis
+    , ind_by_list
+    , ind_by_threshold
     , COUNT(*)                        AS contracts
     , COUNT(DISTINCT iin_bin)         AS borrowers
     , SUM(ead_n)                      AS ead_total
 FROM #seg25_rows
 WHERE flag_individual = 1
-GROUP BY segment, individual_basis
+GROUP BY segment, individual_basis, ind_by_list, ind_by_threshold
 ORDER BY ead_total DESC;
 
 /* ============================================================================
@@ -259,6 +267,8 @@ SELECT
     , ead_n                AS ead
     , amount
     , flag_individual
+    , ind_by_list
+    , ind_by_threshold
     , individual_basis
     , flag_relate
     , flag_disass
