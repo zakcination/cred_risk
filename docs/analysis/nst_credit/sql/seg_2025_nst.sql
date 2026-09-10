@@ -248,12 +248,42 @@ UNION ALL
 SELECT 'дубли ключа loan_id_kr',           COUNT(*), NULL FROM (SELECT loan_id_kr FROM #seg25_rows GROUP BY loan_id_kr HAVING COUNT(*) > 1) d
 UNION ALL
 SELECT 'индивидуальных заёмщиков всего',   COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE flag_individual = 1
+-- считать по раздельным флагам, а не по метке individual_basis: заёмщик может
+-- проходить по обоим основаниям сразу, и подсчёт по строковой метке его теряет
 UNION ALL
-SELECT 'из них по списку B2A',             COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE individual_basis = 'B2A'
+SELECT 'из них проходят по списку B2A',    COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE ind_by_list = 1
 UNION ALL
-SELECT 'из них по порогу 0,2 % СК',        COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE individual_basis = 'threshold'
+SELECT 'из них проходят по порогу 0,2 %',  COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE ind_by_threshold = 1
+UNION ALL
+SELECT 'из них по обоим основаниям',       COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE ind_by_list = 1 AND ind_by_threshold = 1
+UNION ALL
+SELECT 'из них ТОЛЬКО по списку',          COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE ind_by_list = 1 AND ind_by_threshold = 0
+UNION ALL
+SELECT 'из них ТОЛЬКО по порогу',          COUNT(DISTINCT iin_bin), NULL FROM #seg25_rows WHERE ind_by_list = 0 AND ind_by_threshold = 1
 UNION ALL
 SELECT 'договоров всего',                  COUNT(*), SUM(ead_n) FROM #seg25_rows;
+
+/* ============================================================================
+   ВЫВОД 5б. Диагностика молчащих флагов.
+   Флаг, который нигде не равен единице, не «показал отсутствие признака» —
+   он мог не сработать вовсе. Проверка от источника: какие значения реально
+   встречаются в колонках, на которых стоят условия.
+   ========================================================================= */
+SELECT 'entity (условие flag_disass = EUB1)' AS column_checked
+     , CAST(entity AS nvarchar(50))          AS value
+     , COUNT(*)                              AS contracts
+FROM       [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4]
+WHERE is_del = '0'
+GROUP BY CAST(entity AS nvarchar(50))
+ORDER BY contracts DESC;
+
+SELECT 'lsboo (условие flag_relate = 1)'     AS column_checked
+     , CAST(lsboo AS nvarchar(50))           AS value
+     , COUNT(*)                              AS contracts
+FROM       [CL_PORTFOLIO].[dbo].[AQR2026_B1A_2025_Q4]
+WHERE is_del = '0'
+GROUP BY CAST(lsboo AS nvarchar(50))
+ORDER BY contracts DESC;
 
 /* ============================================================================
    ВЫВОД 6. Строчная выгрузка — для материализации в свою таблицу.
