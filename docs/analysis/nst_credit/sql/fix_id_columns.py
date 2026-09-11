@@ -27,7 +27,7 @@ CSV можно дополнительно получить ключом --csv.
 Запуск (без аргументов — путь тот же, что у nst_fill_2026.py):
   python fix_id_columns.py
   python fix_id_columns.py --work-dir C:\\work        # если %TEMP% на сети
-  python fix_id_columns.py --engine calamine        # если долго идёт чтение
+  python fix_id_columns.py --engine calamine        # чтение 165 -> 60 с
   python fix_id_columns.py --csv                    # ещё и CSV
   python fix_id_columns.py --selftest               # проверить сам скрипт
 """
@@ -249,7 +249,7 @@ def main():
                          "идентификаторы добавляются всегда. Резко сокращает "
                          "время записи и размер книги")
     ap.add_argument("--engine", default=None,
-                    help="движок чтения: calamine быстрее openpyxl в 10-20 раз")
+                    help="движок чтения: calamine. На этой книге 2,7 раза (165 -> 60 с)")
     ap.add_argument("--selftest", action="store_true",
                     help="проверить to_text/to_iin на известных ловушках и выйти")
     a = ap.parse_args()
