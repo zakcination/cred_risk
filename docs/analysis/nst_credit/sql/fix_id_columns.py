@@ -208,9 +208,9 @@ def main():
     if a.out_dir is None:
         a.out_dir = os.path.dirname(os.path.abspath(a.src))
 
-    import pandas as pd
-
     t0 = time.time()
+    import pandas as pd
+    t_import = time.time() - t0
     lines = []
     def log(s=""):
         print(s, flush=True)
@@ -242,9 +242,10 @@ def main():
     t = time.time(); shutil.copy2(a.src, local)
     t_copy_in = time.time() - t
     mb = os.path.getsize(local) / 2**20
-    log("  скопировано за %.1f с, %.1f МБ (%.1f МБ/с)"
-        % (t_copy_in, mb, mb / t_copy_in if t_copy_in > 0.05 else float("nan")))
-    stages = [("копирование с сетевого диска", t_copy_in)]
+    rate = ("%.1f МБ/с" % (mb / t_copy_in)) if t_copy_in > 0.05 else "быстрее, чем измеримо"
+    log("  скопировано за %.1f с, %.1f МБ (%s)" % (t_copy_in, mb, rate))
+    stages = [("импорт pandas", t_import),
+              ("копирование с сетевого диска", t_copy_in)]
 
     kw = dict(dtype=str, keep_default_na=False, na_filter=False)
     if a.engine:
@@ -337,7 +338,7 @@ def main():
         log("  %-38s %7.1f с   %5.1f %%" % (name, dt, 100.0 * dt / total if total else 0))
         if "сетев" in name or "перенос" in name:
             net += dt
-    log("  %-38s %7.1f с   %5.1f %%" % ("прочее (импорт pandas, служебное)",
+    log("  %-38s %7.1f с   %5.1f %%" % ("прочее (служебное)",
                                         max(total - sum(d for _, d in stages), 0.0),
                                         100.0 * max(total - sum(d for _, d in stages), 0.0) / total if total else 0))
     log("  " + "-" * 56)
