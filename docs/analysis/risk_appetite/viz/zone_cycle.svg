@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="400" viewBox="0 0 980 400" font-family="Inter, Segoe UI, Arial, sans-serif">
+<rect width="980" height="400" fill="#fcfcfb"/>
+<title>Требуемый лимит как функция цикла решения</title>
+<line x1="64.0" y1="346.0" x2="770.0" y2="346.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="350.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">100</text>
+<line x1="64.0" y1="304.6" x2="770.0" y2="304.6" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="308.6" font-size="11" fill="#898781" text-anchor="end" font-weight="400">102</text>
+<line x1="64.0" y1="263.1" x2="770.0" y2="263.1" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="267.1" font-size="11" fill="#898781" text-anchor="end" font-weight="400">104</text>
+<line x1="64.0" y1="221.7" x2="770.0" y2="221.7" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="225.7" font-size="11" fill="#898781" text-anchor="end" font-weight="400">106</text>
+<line x1="64.0" y1="180.3" x2="770.0" y2="180.3" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="184.3" font-size="11" fill="#898781" text-anchor="end" font-weight="400">108</text>
+<line x1="64.0" y1="138.9" x2="770.0" y2="138.9" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="142.9" font-size="11" fill="#898781" text-anchor="end" font-weight="400">110</text>
+<line x1="64.0" y1="97.4" x2="770.0" y2="97.4" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="101.4" font-size="11" fill="#898781" text-anchor="end" font-weight="400">112</text>
+<line x1="64.0" y1="56.0" x2="770.0" y2="56.0" stroke="#e1e0d9" stroke-width="1"/>
+<text x="56.0" y="60.0" font-size="11" fill="#898781" text-anchor="end" font-weight="400">114</text>
+<line x1="64.0" y1="167.2" x2="770.0" y2="167.2" stroke="#d03b3b" stroke-width="2" stroke-dasharray="6 4"/>
+<text x="70.0" y="159.2" font-size="11" fill="#d03b3b" text-anchor="start" font-weight="600">пересчёт базы: 108.63 %</text>
+<polyline points="64.0,247.4 299.3,202.7 534.7,168.4 770.0,139.4" fill="none" stroke="#2a78d6" stroke-width="2.5"/>
+<circle cx="64.0" cy="247.4" r="5" fill="#2a78d6"/>
+<text x="64.0" y="234.4" font-size="11.5" fill="#0b0b0b" text-anchor="middle" font-weight="600">104.76</text>
+<text x="64.0" y="366.0" font-size="11.5" fill="#898781" text-anchor="middle" font-weight="400">T = 1 мес.</text>
+<circle cx="299.3" cy="202.7" r="5" fill="#2a78d6"/>
+<text x="299.3" y="189.7" font-size="11.5" fill="#0b0b0b" text-anchor="middle" font-weight="600">106.92</text>
+<text x="299.3" y="366.0" font-size="11.5" fill="#898781" text-anchor="middle" font-weight="400">T = 2 мес.</text>
+<circle cx="534.7" cy="168.4" r="5" fill="#2a78d6"/>
+<text x="534.7" y="155.4" font-size="11.5" fill="#0b0b0b" text-anchor="middle" font-weight="600">108.58</text>
+<text x="534.7" y="366.0" font-size="11.5" fill="#898781" text-anchor="middle" font-weight="400">T = 3 мес.</text>
+<circle cx="770.0" cy="139.4" r="5" fill="#2a78d6"/>
+<text x="770.0" y="126.4" font-size="11.5" fill="#0b0b0b" text-anchor="middle" font-weight="600">109.97</text>
+<text x="770.0" y="366.0" font-size="11.5" fill="#898781" text-anchor="middle" font-weight="400">T = 4 мес.</text>
+<text x="788.0" y="60.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="600">Что показывает</text>
+<text x="788.0" y="82.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400">Два независимых пути дают</text>
+<text x="788.0" y="99.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400">один уровень:</text>
+<text x="788.0" y="116.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400"></text>
+<text x="788.0" y="133.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">· пересчёт базы → 108.63 %</text>
+<text x="788.0" y="150.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">· квартал реагирования → 108.58 %</text>
+<text x="788.0" y="167.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400"></text>
+<text x="788.0" y="184.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="400">расхождение 0.05 пп.</text>
+<text x="788.0" y="201.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400"></text>
+<text x="788.0" y="218.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400">Уровень не выбран под факт —</text>
+<text x="788.0" y="235.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400">его требует длина цикла.</text>
+<text x="64.0" y="26.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="600">Цикл решения задаёт минимальное расстояние до лимита</text>
+<text x="64.0" y="43.0" font-size="11" fill="#898781" text-anchor="start" font-weight="400">Жёлтая линия на квантиле 90 % ряда; запас = z(0,90) · σ_Δ · √T</text>
+</svg>
