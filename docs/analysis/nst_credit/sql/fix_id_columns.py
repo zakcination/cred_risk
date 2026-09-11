@@ -168,6 +168,34 @@ def profile(df, sheet, log):
                int(nonempty.str.startswith("0").sum()), lens.min(), lens.max()))
 
 
+def blank_missing(df, log):
+    """Пропуски -> None до записи.
+
+    xlsxwriter определяет тип значения сам. NaT он принимает за дату и падает
+    на ней: «NaTType does not support isocalendar». Проверки `isinstance(v, float)
+    and v != v` для этого мало — NaT не float, как и pd.NA.
+
+    Дешевле и надёжнее заменить пропуски один раз по колонке, чем проверять
+    каждую из 67 млн ячеек. float64/int64 не трогаем: там пропуск — обычный
+    nan, его ловит проверка при записи.
+    """
+    import pandas as pd  # noqa: F401
+    fixed = []
+    for c in df.columns:
+        col = df[c]
+        dt = str(col.dtype)
+        if dt in ("float64", "int64", "float32", "int32"):
+            continue
+        if not col.isna().any():
+            continue
+        df[c] = col.astype(object).where(col.notna(), None)
+        fixed.append("%s [%s]" % (c, dt))
+    if fixed:
+        log("  пропуски приведены к пустой ячейке в %d колонках: %s"
+            % (len(fixed), ", ".join(fixed[:6]) + (" …" if len(fixed) > 6 else "")))
+    return df
+
+
 def write_book(path, frames, log):
     """Книга через xlsxwriter в постоянной памяти: колонки-идентификаторы
     получают текстовый формат '@', остальные пишутся как есть и остаются
@@ -179,6 +207,7 @@ def write_book(path, frames, log):
     fmt_txt = wb.add_format({"num_format": "@"})
     fmt_hdr = wb.add_format({"bold": True})
     for sheet, df in frames:
+        df = blank_missing(df, log)
         ws = wb.add_worksheet(sheet)
         cols = list(df.columns)
         for j, c in enumerate(cols):
@@ -215,6 +244,10 @@ def main():
     ap.add_argument("--csv", action="store_true", help="дополнительно выгрузить CSV")
     ap.add_argument("--fresh", action="store_true",
                     help="скопировать книгу заново, не переиспользуя локальную копию")
+    ap.add_argument("--cols", default=None,
+                    help="оставить только эти колонки (через запятую); "
+                         "идентификаторы добавляются всегда. Резко сокращает "
+                         "время записи и размер книги")
     ap.add_argument("--engine", default=None,
                     help="движок чтения: calamine быстрее openpyxl в 10-20 раз")
     ap.add_argument("--selftest", action="store_true",
@@ -335,14 +368,27 @@ def main():
             log("  iin_bin дополнено нулями до 12 знаков: %d значений" % padded)
 
         profile(df, sheet, log)
+
+        if a.cols:
+            want = [c.strip() for c in a.cols.split(",") if c.strip()]
+            keep = [c for c in df.columns if c in want or c in ID_COLS]
+            missing = [c for c in want if c not in df.columns]
+            if missing:
+                log("  нет таких колонок: %s" % ", ".join(missing))
+            df = df[keep]
+            log("  оставлено колонок: %d" % len(keep))
+
         frames.append((sheet, df))
 
     if not frames:
         sys.exit("ни один лист не прочитан")
 
     # 2. книга: идентификаторы текстом, остальное числами
+    cells = sum(len(df) * len(df.columns) for _, df in frames)
     log("")
-    log("пишу книгу...")
+    log("пишу книгу: %.1f млн ячеек, ориентировочно %.0f мин"
+        % (cells / 1e6, cells / 190000.0 / 60))
+    log("  (сократить: --cols \"колонка1,колонка2\" — идентификаторы остаются всегда)")
     t = time.time()
     book = os.path.join(tmpdir, a.out_name)
     write_book(book, frames, log)
