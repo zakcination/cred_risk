@@ -1,0 +1,67 @@
+{
+  "schema_version": "1.0",
+  "as_of": "2026-09-13",
+  "language": "ru",
+  "entrypoint": "docs/analysis/npa_registry/KNOWLEDGE_BASE.md",
+  "instructions": "docs/analysis/npa_registry/GPT_INSTRUCTIONS.md",
+  "confidentiality": "Исходные ВНД и банковские данные не загружаются; используются только реквизиты, координаты пунктов и обезличенные результаты анализа.",
+  "core_sources": [
+    {
+      "path": "docs/analysis/npa_registry/REGISTRY.md",
+      "role": "source_registry",
+      "authority": "canonical_for_identity_version_status"
+    },
+    {
+      "path": "docs/analysis/npa_registry/CITED.md",
+      "role": "clause_index",
+      "authority": "canonical_for_verified_clauses"
+    },
+    {
+      "path": "docs/analysis/provisions_method/PACKAGE_1_NPA_VND.md",
+      "role": "source_cards_and_conflicts",
+      "authority": "canonical_for_provisions_package_1"
+    },
+    {
+      "path": "docs/analysis/provisions_method/README.md",
+      "role": "vnd_computational_analysis",
+      "authority": "secondary_analysis_with_source_coordinates"
+    }
+  ],
+  "topic_routes": {
+    "provisions_ecl": [
+      "docs/analysis/provisions_method/PACKAGE_1_NPA_VND.md",
+      "docs/analysis/provisions_method/README.md"
+    ],
+    "staging_default_cure": [
+      "docs/analysis/dpd15_cure/NPA_MAP.md",
+      "docs/analysis/dpd15_cure/LEGAL_NOTE.md",
+      "docs/analysis/dpd15_cure/FINDINGS_DPD15.md"
+    ],
+    "prudential_limits": [
+      "docs/analysis/npl_limits/CHAPTER11_MAP.md",
+      "docs/analysis/npl_limits/REGMAP.md"
+    ],
+    "risk_appetite": [
+      "docs/analysis/risk_appetite/DOCUMENT_MAP.md",
+      "docs/analysis/risk_appetite/DECOMPOSITION.md"
+    ],
+    "bank_recovery": [
+      "docs/analysis/bank_recovery/RECOVERY_MAP.md"
+    ],
+    "accounts_dq": [
+      "docs/analysis/risk_dwh_reconciliation/SCHETA_DQ.md"
+    ],
+    "srep": [
+      "docs/analysis/srep_action_plan/README.md"
+    ],
+    "nst": [
+      "docs/analysis/nst_credit/NST_CREDIT.md"
+    ]
+  },
+  "allowed_statuses": [
+    "ПОДТВЕРЖДЕНО",
+    "НЕ ПРИМЕНИМО",
+    "ОТСУТСТВУЕТ",
+    "ТРЕБУЕТ РЕШЕНИЯ"
+  ]
+}
