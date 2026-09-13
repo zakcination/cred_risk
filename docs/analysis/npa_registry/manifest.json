@@ -1,9 +1,10 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "2.0",
   "as_of": "2026-09-13",
   "language": "ru",
   "entrypoint": "docs/analysis/npa_registry/KNOWLEDGE_BASE.md",
   "instructions": "docs/analysis/npa_registry/GPT_INSTRUCTIONS.md",
+  "coverage": "docs/analysis/npa_registry/COVERAGE.md",
   "confidentiality": "Исходные ВНД и банковские данные не загружаются; используются только реквизиты, координаты пунктов и обезличенные результаты анализа.",
   "core_sources": [
     {
@@ -27,6 +28,31 @@
       "authority": "secondary_analysis_with_source_coordinates"
     }
   ],
+  "machine_catalogs": [
+    {
+      "path": "docs/analysis/npa_registry/catalog/sources.csv",
+      "grain": "one_row_per_source",
+      "generated_from": "docs/analysis/npa_registry/REGISTRY.md"
+    },
+    {
+      "path": "docs/analysis/npa_registry/catalog/clauses.csv",
+      "grain": "one_row_per_verified_source_clause",
+      "generated_from": "docs/analysis/npa_registry/CITED.md"
+    },
+    {
+      "path": "docs/analysis/npa_registry/catalog/open_questions.csv",
+      "grain": "one_row_per_unresolved_source_gap",
+      "generated_from": "docs/analysis/npa_registry/CITED.md"
+    }
+  ],
+  "build": {
+    "command": "python3 docs/analysis/npa_registry/build_catalog.py",
+    "check_command": "python3 docs/analysis/npa_registry/build_catalog.py --check",
+    "canonical_inputs": [
+      "docs/analysis/npa_registry/REGISTRY.md",
+      "docs/analysis/npa_registry/CITED.md"
+    ]
+  },
   "topic_routes": {
     "provisions_ecl": [
       "docs/analysis/provisions_method/PACKAGE_1_NPA_VND.md",
