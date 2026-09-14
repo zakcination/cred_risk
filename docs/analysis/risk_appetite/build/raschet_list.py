@@ -5,24 +5,28 @@
 Назначение одно: защитить числа § 11.10 `DECOMPOSITION.md` и `DISCLOSURE.md`
 на комитете, в самом Excel, без обращения к python. Поэтому в книге нет ни одного
 посчитанного заранее значения — только ряд, параметры и формулы поверх них.
+Единственное исключение помечено прямо в строке: бутстрап (200 тыс. розыгрышей)
+в Excel без макросов не воспроизводится.
 
     python3 raschet_list.py            # собрать книгу
     python3 raschet_list.py --verify   # вычислить формулы книги и сверить каждое
                                        # число с опубликованным (нужен `formulas`)
 
-Сверка обязательна: формула, набранная руками, может разойтись с той, что описана
-словами, и увидеть это можно только вычислением. Допуск — половина последнего
-напечатанного разряда, как в `calib/top20_disclosure.py --selftest`.
-
 Сверка считает не «то же самое на python», а сами формулы листа — иначе проверялась
-бы вторая реализация, а не книга. Первая версия делала это прогоном LibreOffice;
-в контейнере сессии soffice не открывает даже пустую книгу («source file could not
-be loaded»), поэтому путь заменён на движок `formulas`.
+бы вторая реализация, а не книга. Допуск — половина последнего напечатанного разряда.
 
-Две ошибки, которые эта сверка уже поймала и которые глазами не видны:
+Редакция 14.09.2026, вторая:
+  • раскладка листа «Ряд» приведена к правке автора: обе базы капитала рядом,
+    метод B убран целиком (не защищается на комитете);
+  • `k` считается живой формулой из ряда, а не вбитой константой, поэтому шесть
+    опубликованных чисел пересчитаны — они стояли на `k`, округлённом до пяти знаков;
+  • доверие для буфера вынесено в параметр: z берётся как НОРМСТОБР(p), а не вбит;
+  • заведены листы «Зоны» и «Обоснование M(T)» — четыре проверки допущений формулы.
+
+Две ошибки, которые сверка поймала в первой редакции и которые глазами не видны:
 имена `z90` и `kG26` оказались синтаксически допустимыми адресами ячеек (Z90, KG26) —
 Excel такие имена не создаёт, и формулы читали бы пустые ячейки вместо параметров;
-лист «Три сигмы» ссылался на строку заголовка блока вместо строки σ.
+лист сравнения σ ссылался на строку заголовка блока вместо строки σ.
 """
 
 import csv
@@ -36,14 +40,12 @@ from openpyxl.workbook.defined_name import DefinedName
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "..", "data", "top20_monthly_2023_08_2026_07.csv")
-OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.0.xlsx")
+OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.1.xlsx")
 
 # ── оформление ────────────────────────────────────────────────────────────
-INK = "FF0B0B0B"
-MUTED = "FF6B6A66"
-HEAD_BG = "FFEDEBE3"
-BLOCK_BG = "FFF6F5F0"
-WARN_BG = "FFFFF4D6"
+INK, MUTED = "FF0B0B0B", "FF6B6A66"
+HEAD_BG, BLOCK_BG, WARN_BG = "FFEDEBE3", "FFF6F5F0", "FFFFF4D6"
+GREEN_BG, YELLOW_BG, RED_BG = "FFE3F2E1", "FFFDF2CF", "FFF8DDDA"
 THIN = Side(style="thin", color="FFD8D6CC")
 BOX = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 
@@ -55,6 +57,10 @@ F_MUTED = Font(name="Calibri", size=9, color=MUTED)
 F_MONO = Font(name="Consolas", size=9, color=MUTED)
 WRAP = Alignment(wrap_text=True, vertical="top")
 TOP = Alignment(vertical="top")
+CENTER = Alignment(horizontal="center", vertical="top")
+
+FIRST, LAST = 5, 40          # строки данных листа «Ряд»
+N_POINTS = LAST - FIRST + 1
 
 
 def load_rows():
@@ -76,172 +82,31 @@ def put(ws, cell, value, font=F_BODY, fmt=None, align=TOP, fill=None, border=Fal
     return c
 
 
-# ── лист «Ряд» ────────────────────────────────────────────────────────────
-def sheet_series(wb, rows):
-    """Исходный ряд и всё, что считается построчно. Ничего агрегированного."""
-    ws = wb.create_sheet("Ряд")
-    put(ws, "A1", "Ряд топ-20: 36 месячных точек, 01.08.2023 — 01.07.2026", F_TITLE)
-    put(ws, "A2", "Источник: data/top20_monthly_2023_08_2026_07.csv, дамп листа "
-                  "Monthly рабочей книги 08.09.2026 (DECOMPOSITION § 11.7). "
-                  "Колонки A–D — как в выгрузке, E–K — расчёт.", F_MUTED, align=WRAP)
-    ws.merge_cells("A2:K2")
-    ws.row_dimensions[2].height = 28
-
-    heads = [
-        ("A", "Дата", 12),
-        ("B", "Займ топ-20, млн ₸", 16),
-        ("C", "СК балансовый, млн ₸", 17),
-        ("D", "coef_new (доля)", 14),
-        ("E", "v = coef_new × 100", 15),
-        ("F", "Δ = v(t) − v(t−1)", 15),
-        ("G", "ΔСК, %", 10),
-        ("H", "ΔЗайм, %", 11),
-        ("I", "В базе метода B", 13),
-        ("J", "Δ для метода B", 14),
-        ("K", "Триггер", 13),
-    ]
-    for col, title, width in heads:
-        put(ws, f"{col}4", title, F_HEAD, align=Alignment(wrap_text=True, vertical="bottom"),
-            fill=HEAD_BG, border=True)
-        ws.column_dimensions[col].width = width
-    ws.row_dimensions[4].height = 30
-
-    first, last = 5, 5 + len(rows) - 1
-    max_v_row = None
-    best = None
-    for i, r in enumerate(rows):
-        rr = first + i
-        put(ws, f"A{rr}", r["date"], F_BODY, border=True)
-        put(ws, f"B{rr}", float(r["zaim_mln"]), F_BODY, "#,##0.0", border=True)
-        put(ws, f"C{rr}", float(r["sk_new_mln"]), F_BODY, "#,##0.0", border=True)
-        put(ws, f"D{rr}", float(r["coef_new"]), F_BODY, "0.00000000", border=True)
-        put(ws, f"E{rr}", f"=D{rr}*100", F_BODY, "0.0000", border=True)
-        cv = float(r["coef_new"]) * 100.0
-        if best is None or cv > best:
-            best, max_v_row = cv, rr
-        if i == 0:
-            for col in ("F", "G", "H", "J", "K"):
-                put(ws, f"{col}{rr}", "—", F_MUTED, border=True)
-            put(ws, f"I{rr}", "—", F_MUTED, border=True)
-            continue
-        p = rr - 1
-        put(ws, f"F{rr}", f"=E{rr}-E{p}", F_BODY, "0.0000", border=True)
-        put(ws, f"G{rr}", f"=(C{rr}-C{p})/C{p}*100", F_BODY, "0.00", border=True)
-        put(ws, f"H{rr}", f"=(B{rr}-B{p})/B{p}*100", F_BODY, "0.00", border=True)
-        put(ws, f"J{rr}", f'=IF(I{rr}=1,F{rr},"")', F_BODY, "0.0000", border=True)
-        put(ws, f"K{rr}",
-            f'=IF(AND(G{rr}<=-3,H{rr}>=5),"оба",IF(G{rr}<=-3,"СК",IF(H{rr}>=5,"Займ","")))',
-            F_BODY, border=True)
-
-    # Метод B исключает два прироста, примыкающих к выбросу: вход в него и выход.
-    excl = {max_v_row, max_v_row + 1}
-    for rr in range(first + 1, last + 1):
-        flag = 0 if rr in excl else 1
-        c = put(ws, f"I{rr}", flag, F_BODY, "0", border=True)
-        if flag == 0:
-            c.fill = PatternFill("solid", fgColor=WARN_BG)
-
-    note = last + 2
-    put(ws, f"A{note}",
-        "Колонка I — база метода B. Ноль стоит у двух приростов, примыкающих к максимуму "
-        f"ряда ({rows[max_v_row - first]['date']}): вход в выброс и выход из него. "
-        "Это определение восстановлено обратным счётом от опубликованных 113,17 и в тексте "
-        "методов не приведено — см. DISCLOSURE.md, Р-Д1. Колонка J гасит эти два значения, "
-        "поэтому STDEVP по ней считает σ метода B, а STDEV по F — σ методов D и H.",
-        F_MUTED, align=WRAP)
-    ws.merge_cells(f"A{note}:K{note}")
-    ws.row_dimensions[note].height = 58
-    ws.freeze_panes = "A5"
-    return first, last, max_v_row
+def note(ws, row, last_col, text, height=30, font=F_MUTED):
+    put(ws, f"A{row}", text, font, align=WRAP)
+    ws.merge_cells(f"A{row}:{last_col}{row}")
+    ws.row_dimensions[row].height = height
 
 
-# ── лист «Параметры» ──────────────────────────────────────────────────────
-def sheet_params(wb):
-    ws = wb.create_sheet("Параметры")
-    put(ws, "A1", "Параметры расчёта", F_TITLE)
-    put(ws, "A2", "Всё, что не выводится из ряда. Меняется здесь — пересчитывается везде.",
-        F_MUTED)
-    for col, w in (("A", 26), ("B", 30), ("C", 14), ("D", 62)):
-        ws.column_dimensions[col].width = w
-    for col, title in (("A", "Параметр"), ("B", "Обозначение"),
-                       ("C", "Значение"), ("D", "Откуда")):
-        put(ws, f"{col}4", title, F_HEAD, fill=HEAD_BG, border=True)
+class Ledger:
+    """Строка вида «формула словами — формула листа — значение — опубликовано»."""
 
-    params = [
-        ("Квантиль нормального для 0,90", "z(0,90)", 1.2815515655446004, "0.000000",
-         "Стандартное нормальное распределение. Проверка в самом Excel: "
-         "=NORMSINV(0,9) даёт то же число"),
-        ("Отношение баз капитала", "k (Г26)", 0.87453, "0.00000",
-         "E_балансовый / E_регуляторный на 01.01.2026. Находка Г26: с 01.01.2026 "
-         "знаменатель метрики сменил базу, уровень при этом не пересматривался"),
-        ("Уровень в регуляторной базе", "L_рег", 95.0, "0.00",
-         "Действующий уровень риск-аппетита по топ-20. Приложение № 3 к Политике "
-         "(VND-02). История уровня: 250 % → 95 %, см. data/top20_limit_history.csv"),
-        ("Длина цикла реагирования, мес.", "T", 3, "0",
-         "ДОПУЩЕНИЕ, не измеренная величина. Пока длина цикла не закреплена "
-         "в регламенте, метод H держится на ней со слов — DISCLOSURE § 6"),
-        ("Порог триггера по капиталу, %", "порог ΔСК", -3.0, "0.0",
-         "Месячное падение СК, при котором наблюдение ускоряется независимо от зоны"),
-        ("Порог триггера по портфелю, %", "порог ΔЗайм", 5.0, "0.0",
-         "Месячный рост задолженности топ-20, при котором наблюдение ускоряется"),
-    ]
-    r = 5
-    for name, sign, val, fmt, src in params:
-        put(ws, f"A{r}", name, F_BODY, align=WRAP, border=True)
-        put(ws, f"B{r}", sign, F_BODY, border=True)
-        put(ws, f"C{r}", val, F_BLOCK, fmt, border=True)
-        put(ws, f"D{r}", src, F_MUTED, align=WRAP, border=True)
-        ws.row_dimensions[r].height = 30
-        r += 1
+    def __init__(self, ws, start_row, last_col="H"):
+        self.ws, self.row, self.last_col = ws, start_row, last_col
+        self.checks, self.anchors = [], {}
 
-    warn = r + 1
-    put(ws, f"A{warn}",
-        "T = 3 — единственный параметр здесь, у которого нет внешнего источника. "
-        "Если на комитете спросят «почему три месяца», честный ответ: длина цикла "
-        "решения не измерена, и это записано как незакрытый пункт. Поставьте другое "
-        "число в C8 — вся книга пересчитается, и станет видно, что уровень от этого "
-        "меняется на 1,4–1,5 пп за каждый месяц цикла.", F_MUTED, align=WRAP)
-    ws.merge_cells(f"A{warn}:D{warn}")
-    ws.row_dimensions[warn].height = 58
-    return {"z_90": "C5", "k_G26": "C6", "L_reg": "C7", "T_cikl": "C8",
-            "por_sk": "C9", "por_zaim": "C10"}
+    def block(self, title):
+        put(self.ws, f"A{self.row}", title, F_BLOCK, fill=BLOCK_BG)
+        for i in range(2, ord(self.last_col) - ord("A") + 2):
+            put(self.ws, f"{get_column_letter(i)}{self.row}", None, fill=BLOCK_BG)
+        self.row += 1
 
+    def note(self, text, height=30):
+        note(self.ws, self.row, self.last_col, text, height)
+        self.row += 1
 
-# ── лист «Расчёт» ─────────────────────────────────────────────────────────
-def sheet_calc(wb, first, last):
-    """Каждая строка: словами — формулой — значением — опубликованным — расхождением."""
-    ws = wb.create_sheet("Расчёт")
-    put(ws, "A1", "Расчётный лист: формула, вход, результат", F_TITLE)
-    put(ws, "A2",
-        "Колонка D считается формулой из листов «Ряд» и «Параметры». Колонка E — то, что "
-        "напечатано в DECOMPOSITION § 11.10 и DISCLOSURE § 2. Колонка G должна быть «да» "
-        "во всех строках: иначе опубликованное число разошлось с расчётом.",
-        F_MUTED, align=WRAP)
-    ws.merge_cells("A2:H2")
-    ws.row_dimensions[2].height = 30
-
-    for col, w in (("A", 38), ("B", 46), ("C", 40), ("D", 13),
-                   ("E", 13), ("F", 12), ("G", 10), ("H", 22)):
-        ws.column_dimensions[col].width = w
-    heads = ("Показатель", "Формула словами", "Формула в этой книге", "Значение",
-             "Опубликовано", "Расхождение", "Сходится", "Где напечатано")
-    for i, t in enumerate(heads):
-        put(ws, f"{get_column_letter(i + 1)}4", t, F_HEAD, fill=HEAD_BG, border=True,
-            align=Alignment(wrap_text=True, vertical="bottom"))
-    ws.row_dimensions[4].height = 30
-
-    rows_out = []          # (row, tolerance) для сверки
-    anchors = {}
-    r = [5]
-
-    def block(title):
-        put(ws, f"A{r[0]}", title, F_BLOCK, fill=BLOCK_BG)
-        for c in "BCDEFGH":
-            put(ws, f"{c}{r[0]}", None, fill=BLOCK_BG)
-        r[0] += 1
-
-    def line(key, label, words, formula, published, fmt, where, tol=None):
-        rr = r[0]
+    def line(self, key, label, words, formula, published, fmt, where, sheet_tag):
+        ws, rr = self.ws, self.row
         put(ws, f"A{rr}", label, F_BODY, align=WRAP, border=True)
         put(ws, f"B{rr}", words, F_BODY, align=WRAP, border=True)
         put(ws, f"C{rr}", formula, F_MONO, align=WRAP, border=True)
@@ -249,175 +114,540 @@ def sheet_calc(wb, first, last):
         put(ws, f"E{rr}", published, F_BODY, fmt, border=True)
         put(ws, f"F{rr}", f"=D{rr}-E{rr}", F_BODY, "0.000000", border=True)
         dec = fmt.split(".")[1].count("0") if "." in fmt else 0
-        t = tol if tol is not None else 0.5 * 10 ** (-dec) + 1e-12
-        tol_txt = f"{t:.10f}".rstrip("0")
-        put(ws, f"G{rr}", f'=IF(ABS(F{rr})<={tol_txt},"да","НЕТ")', F_BODY, border=True,
-            align=Alignment(horizontal="center", vertical="top"))
+        tol = 0.5 * 10 ** (-dec) + 1e-12
+        put(ws, f"G{rr}", f'=IF(ABS(F{rr})<={tol:.10f},"да","НЕТ")'.replace("0000000000", "0"),
+            F_BODY, border=True, align=CENTER)
         put(ws, f"H{rr}", where, F_MUTED, align=WRAP, border=True)
         ws.row_dimensions[rr].height = 30
-        rows_out.append((rr, t))
+        self.checks.append((sheet_tag, rr, tol))
         if key:
-            anchors[key] = f"D{rr}"
-        r[0] += 1
+            self.anchors[key] = f"D{rr}"
+        self.row += 1
 
-    # ── база
-    block("1. База: что даёт сам ряд")
-    line("sigma_d", "σ_Δ — с.к.о. месячных приростов",
-         "выборочное с.к.о. (n−1) по всем 35 приростам",
-         "STDEV(d)", 4.0667, "0.0000", "DISCLOSURE § 2.1")
-    line("sigma_B", "σ метода B",
-         "популяционное с.к.о. приростов без двух, примыкающих к выбросу 01.2024",
-         "STDEVP(dB)", 3.6326, "0.0000", "DISCLOSURE Р-Д1")
-    line("sigma_lvl", "σ уровней (метод М1)",
-         "выборочное с.к.о. самих значений ряда, не приростов",
-         "STDEV(v)", 6.2201, "0.0000", "DISCLOSURE Р-Д1")
-    line("v_last", "Текущая точка, 01.07.2026", "последнее значение ряда",
-         f"'Ряд'!E{last}", 101.5041, "0.0000", "DISCLOSURE § 2.1")
-    line("v_max", "Максимум ряда, 01.2024", "наибольшее значение ряда",
-         "MAX(v)", 105.9003, "0.0000", "DISCLOSURE § 2.1")
-    line(None, "Число точек", "сколько наблюдений в ряде", "COUNT(v)", 36, "0",
-         "DISCLOSURE § 1")
+    def headers(self, titles):
+        for i, t in enumerate(titles):
+            put(self.ws, f"{get_column_letter(i + 1)}4", t, F_HEAD, fill=HEAD_BG,
+                border=True, align=Alignment(wrap_text=True, vertical="bottom"))
+        self.ws.row_dimensions[4].height = 30
 
-    # ── уровень
-    block("2. Уровень")
-    line("L", "L — уровень в балансовой базе",
-         "действующий уровень 95 %, пересчитанный под балансовый капитал: L_рег / k",
-         "L_reg/k_G26", 108.6298, "0.0000", "DISCLOSURE § 2.2")
-    put(ws, f"A{r[0]}",
-        "Это одна величина в двух системах измерения, а не два разных лимита. "
-        "Фраза «пробит лимит 95 % по балансовому капиталу» — категориальная ошибка: "
-        "числитель берётся из одной базы, знаменатель из другой.",
-        F_MUTED, align=WRAP)
-    ws.merge_cells(f"A{r[0]}:H{r[0]}")
-    ws.row_dimensions[r[0]].height = 30
-    r[0] += 1
+    def total(self, label):
+        self.row += 1
+        rr = self.row
+        lo, hi = self.checks[0][1], self.checks[-1][1]
+        put(self.ws, f"A{rr}", label, F_BLOCK, fill=BLOCK_BG, border=True)
+        put(self.ws, f"B{rr}", f'=COUNTIF(G{lo}:G{hi},"НЕТ")', F_BLOCK, "0",
+            fill=BLOCK_BG, border=True)
+        put(self.ws, f"C{rr}",
+            "Ноль означает: все опубликованные числа воспроизводятся формулами этой "
+            "книги. Это не означает, что формулы верны по существу — воспроизводимость "
+            "и правильность разные вещи.", F_MUTED, align=WRAP, fill=BLOCK_BG, border=True)
+        self.ws.merge_cells(f"C{rr}:{self.last_col}{rr}")
+        self.ws.row_dimensions[rr].height = 32
+        self.row += 1
 
-    # ── запас и жёлтая линия
-    block("3. Запас на реагирование M(T) = z(0,90) · σ_Δ · √T и жёлтая линия L − M(T)")
+
+# ── лист «Ряд» ────────────────────────────────────────────────────────────
+def sheet_series(wb, rows):
+    ws = wb.create_sheet("Ряд")
+    put(ws, "A1", "Ряд топ-20: 36 месячных точек, 01.08.2023 — 01.07.2026", F_TITLE)
+    note(ws, 2, "M",
+         "Источник: data/top20_monthly_2023_08_2026_07.csv, дамп листа Monthly рабочей "
+         "книги 08.09.2026 (DECOMPOSITION § 11.7). Колонки A–D — как в выгрузке, "
+         "E–M — расчёт. С 01.02.2026 регуляторный капитал в выгрузке отсутствует: "
+         "метрика ведётся только в балансовой базе, поэтому C, E, F и I у последних "
+         "шести дат пусты. Это не пропуск данных, а следствие смены базы (Г26).", 42)
+
+    heads = [("A", "Дата", 12), ("B", "Займ топ-20, млн ₸", 16),
+             ("C", "СК регуляторный, млн ₸", 17), ("D", "СК балансовый, млн ₸", 17),
+             ("E", "coef_reg (доля)", 13), ("F", "v_reg = coef_reg × 100", 15),
+             ("G", "coef_new (доля)", 13), ("H", "v_new = coef_new × 100", 15),
+             ("I", "Разрыв баз: v_new − v_reg", 15),
+             ("J", "Δ = v_new(t) − v_new(t−1)", 15),
+             ("K", "ΔСК балансовый, %", 12), ("L", "ΔЗайм, %", 11), ("M", "Триггер", 13)]
+    for col, title, width in heads:
+        put(ws, f"{col}4", title, F_HEAD, fill=HEAD_BG, border=True,
+            align=Alignment(wrap_text=True, vertical="bottom"))
+        ws.column_dimensions[col].width = width
+    ws.row_dimensions[4].height = 32
+
+    k_row = None
+    for i, r in enumerate(rows):
+        rr = FIRST + i
+        has_reg = bool(r["sk_old_mln"].strip())
+        if r["date"] == "2026-01-01":
+            k_row = rr
+        put(ws, f"A{rr}", r["date"], F_BODY, border=True)
+        put(ws, f"B{rr}", float(r["zaim_mln"]), F_BODY, "#,##0.0", border=True)
+        put(ws, f"C{rr}", float(r["sk_old_mln"]) if has_reg else None,
+            F_BODY, "#,##0.0", border=True)
+        put(ws, f"D{rr}", float(r["sk_new_mln"]), F_BODY, "#,##0.0", border=True)
+        put(ws, f"E{rr}", f'=IF(C{rr}="","",B{rr}/C{rr})', F_BODY, "0.00000000", border=True)
+        put(ws, f"F{rr}", f'=IF(E{rr}="","",E{rr}*100)', F_BODY, "0.0000", border=True)
+        put(ws, f"G{rr}", f"=B{rr}/D{rr}", F_BODY, "0.00000000", border=True)
+        put(ws, f"H{rr}", f"=G{rr}*100", F_BODY, "0.0000", border=True)
+        put(ws, f"I{rr}", f'=IF(F{rr}="","",H{rr}-F{rr})', F_BODY, "0.0000", border=True)
+        if i == 0:
+            for col in ("J", "K", "L", "M"):
+                put(ws, f"{col}{rr}", "—", F_MUTED, border=True, align=CENTER)
+            continue
+        p = rr - 1
+        put(ws, f"J{rr}", f"=H{rr}-H{p}", F_BODY, "0.0000", border=True)
+        put(ws, f"K{rr}", f"=(D{rr}-D{p})/D{p}*100", F_BODY, "0.00", border=True)
+        put(ws, f"L{rr}", f"=(B{rr}-B{p})/B{p}*100", F_BODY, "0.00", border=True)
+        put(ws, f"M{rr}",
+            f'=IF(AND(K{rr}<=por_sk,L{rr}>=por_zaim),"оба",'
+            f'IF(K{rr}<=por_sk,"СК",IF(L{rr}>=por_zaim,"Займ","")))',
+            F_BODY, border=True, align=CENTER)
+
+    note(ws, LAST + 2, "M",
+         "Колонка I — разрыв двух баз на одну дату, а не движение во времени. "
+         "Через неё видно, что k не постоянен: разрыв сузился с 22,2 пп в 08.2023 "
+         "до 12,0 пп в 01.2026. Уровень L = L_рег / k, посчитанный по k одной даты, "
+         "стареет вместе с k — открытый вопрос к запросу данных, не свойство расчёта.", 44)
+    ws.freeze_panes = "A5"
+    return k_row
+
+
+# ── лист «Параметры» ──────────────────────────────────────────────────────
+def sheet_params(wb, k_row):
+    ws = wb.create_sheet("Параметры")
+    put(ws, "A1", "Параметры расчёта", F_TITLE)
+    note(ws, 2, "E", "Всё, что не выводится из ряда. Меняется здесь — "
+                     "пересчитывается везде.", 16)
+    for col, w in (("A", 28), ("B", 14), ("C", 14), ("D", 26), ("E", 62)):
+        ws.column_dimensions[col].width = w
+    for col, t in (("A", "Параметр"), ("B", "Обозначение"), ("C", "Значение"),
+                   ("D", "Формула"), ("E", "Откуда")):
+        put(ws, f"{col}4", t, F_HEAD, fill=HEAD_BG, border=True)
+
+    params = [
+        ("Доверие для буфера", "p", 0.90, "0.00", "ввод",
+         "Доля T-месячных движений, которые буфер обязан накрыть. 0,90 означает один "
+         "ложный отбой из десяти. Это РЕШЕНИЕ комитета о цене ложного сигнала, "
+         "а не расчётная величина: выше p — жёлтая ниже, лампа горит чаще"),
+        ("Квантиль нормального", "z(p)", "=NORMSINV(C5)", "0.000000", "NORMSINV(p)",
+         "Вычисляется из p, не вбивается. По-русски функция называется НОРМСТОБР"),
+        ("Отношение баз капитала", "k (Г26)", f"=Ряд!D{k_row}/Ряд!C{k_row}", "0.00000000",
+         f"Ряд!D{k_row}/Ряд!C{k_row}",
+         "СК_балансовый / СК_регуляторный на 01.01.2026 — последняя дата, где есть обе "
+         "базы. Находка Г26: с 01.01.2026 знаменатель метрики сменил базу, уровень при "
+         "этом не пересматривался. ВНИМАНИЕ: k не константа, см. колонку I листа «Ряд»"),
+        ("Уровень в регуляторной базе", "L_рег", 95.0, "0.00", "ввод",
+         "Действующий уровень риск-аппетита по топ-20. Приложение № 3 к Политике "
+         "(VND-02). История уровня: 250 % → 95 %, см. data/top20_limit_history.csv"),
+        ("Длина цикла реагирования, мес.", "T", 3, "0", "ввод",
+         "ДОПУЩЕНИЕ, не измеренная величина. Пока длина цикла не закреплена "
+         "в регламенте, метод H держится на ней со слов — DISCLOSURE § 6"),
+        ("Порог триггера по капиталу, %", "порог ΔСК", -3.0, "0.0", "ввод",
+         "Месячное падение СК, при котором наблюдение ускоряется независимо от зоны"),
+        ("Порог триггера по портфелю, %", "порог ΔЗайм", 5.0, "0.0", "ввод",
+         "Месячный рост задолженности топ-20, при котором наблюдение ускоряется"),
+    ]
+    r = 5
+    for name, sign, val, fmt, form, src in params:
+        put(ws, f"A{r}", name, F_BODY, align=WRAP, border=True)
+        put(ws, f"B{r}", sign, F_BODY, border=True)
+        put(ws, f"C{r}", val, F_BLOCK, fmt, border=True)
+        put(ws, f"D{r}", form, F_MONO, align=WRAP, border=True)
+        put(ws, f"E{r}", src, F_MUTED, align=WRAP, border=True)
+        ws.row_dimensions[r].height = 34
+        r += 1
+
+    note(ws, r + 1, "E",
+         "Из семи параметров вычисляются два: z из p и k из ряда. Остальные пять — "
+         "чьи-то решения, и у каждого должен быть автор. У L_рег он есть (Приложение № 3), "
+         "у T и двух порогов — нет. T = 3 единственный без внешнего источника: поставьте "
+         "другое число в C9 — вся книга пересчитается, и станет видно, что требуемый "
+         "уровень меняется на 1,4–1,5 пп за каждый месяц цикла.", 58, F_BODY)
+    return {"p_conf": "C5", "z_p": "C6", "k_G26": "C7", "L_reg": "C8",
+            "T_cikl": "C9", "por_sk": "C10", "por_zaim": "C11"}
+
+
+# ── лист «Расчёт» ─────────────────────────────────────────────────────────
+def sheet_calc(wb):
+    ws = wb.create_sheet("Расчёт")
+    put(ws, "A1", "Расчётный лист: формула, вход, результат", F_TITLE)
+    note(ws, 2, "H",
+         "Колонка D считается формулой из листов «Ряд» и «Параметры». Колонка E — то, "
+         "что напечатано в DECOMPOSITION § 11.10 и DISCLOSURE § 2. Колонка G должна быть "
+         "«да» во всех строках: иначе опубликованное число разошлось с расчётом.", 30)
+    for col, w in (("A", 36), ("B", 44), ("C", 38), ("D", 13),
+                   ("E", 13), ("F", 12), ("G", 10), ("H", 22)):
+        ws.column_dimensions[col].width = w
+
+    L = Ledger(ws, 5)
+    L.headers(("Показатель", "Формула словами", "Формула в этой книге", "Значение",
+               "Опубликовано", "Расхождение", "Сходится", "Где напечатано"))
+
+    L.block("1. База: что даёт сам ряд")
+    L.line("sigma_d", "σ_Δ — с.к.о. месячных приростов",
+           "выборочное с.к.о. (n−1) по всем 35 приростам",
+           "STDEV(d)", 4.0667, "0.0000", "DISCLOSURE § 2.1", "РАСЧЁТ")
+    L.line("sigma_lvl", "σ уровней (метод М1)",
+           "выборочное с.к.о. самих значений ряда, не приростов",
+           "STDEV(v)", 6.2201, "0.0000", "DISCLOSURE Р-Д1", "РАСЧЁТ")
+    L.line("v_last", "Текущая точка, 01.07.2026", "последнее значение ряда",
+           f"Ряд!H{LAST}", 101.5041, "0.0000", "DISCLOSURE § 2.1", "РАСЧЁТ")
+    L.line("v_max", "Максимум ряда, 01.2024", "наибольшее значение ряда",
+           "MAX(v)", 105.9003, "0.0000", "DISCLOSURE § 2.1", "РАСЧЁТ")
+    L.line("n_pts", "Число точек", "сколько наблюдений в ряде",
+           "COUNT(v)", N_POINTS, "0", "DISCLOSURE § 1", "РАСЧЁТ")
+
+    L.block("2. Уровень")
+    L.line("L", "L — уровень в балансовой базе",
+           "действующий уровень 95 %, пересчитанный под балансовый капитал: L_рег / k",
+           "L_reg/k_G26", 108.6304, "0.0000", "DISCLOSURE § 2.2", "РАСЧЁТ")
+    L.note("Это одна величина в двух системах измерения, а не два разных лимита. Фраза "
+           "«пробит лимит 95 % по балансовому капиталу» — категориальная ошибка: "
+           "числитель берётся из одной базы, знаменатель из другой. Значение 108,6304 "
+           "стоит на k, посчитанном из ряда; в DISCLOSURE до 14.09.2026 печаталось "
+           "108,6298 — та же величина при k, округлённом до пяти знаков.")
+
+    L.block("3. Запас на реагирование M(T) = z(p) · σ_Δ · √T и жёлтая линия L − M(T)")
     pub_m = {1: 5.2117, 2: 7.3705, 3: 9.0270, 4: 10.4235}
-    pub_y = {1: 103.4180, 2: 101.2593, 3: 99.6028, 4: 98.2063}
+    pub_y = {1: 103.4187, 2: 101.2599, 3: 99.6034, 4: 98.2069}
     pub_s = {1: 2.8, 2: 5.6, 3: 11.1, 4: 16.7}
     pub_n = {1: 1, 2: 2, 3: 4, 4: 6}
     for T in (1, 2, 3, 4):
-        line(f"M{T}", f"Запас M(T) при T = {T}", "z(0,90) × σ_Δ × корень из T",
-             f"z_90*{anchors['sigma_d']}*SQRT({T})", pub_m[T], "0.0000",
-             "DISCLOSURE § 2.3")
-        line(f"Y{T}", f"Жёлтая линия при T = {T}", "L − M(T)",
-             f"{anchors['L']}-{anchors[f'M{T}']}", pub_y[T], "0.0000",
-             "DISCLOSURE § 2.3")
-        line(None, f"Наблюдений выше жёлтой, T = {T}",
-             "сколько точек ряда не ниже жёлтой линии",
-             f'COUNTIF(v,">="&{anchors[f"Y{T}"]})', pub_n[T], "0",
-             "DISCLOSURE § 2.3, Р-Д3")
-        line(None, f"Доля времени выше жёлтой, T = {T}", "их доля от 36 наблюдений",
-             f'COUNTIF(v,">="&{anchors[f"Y{T}"]})/COUNT(v)*100', pub_s[T], "0.0",
-             "DISCLOSURE § 2.3, Р-Д3")
-    put(ws, f"A{r[0]}",
-        "Р-Д3: доля в процентах от 36 наблюдений читается точнее, чем есть. "
-        "2,8 % — это одно наблюдение, 11,1 % — четыре. На комитете доля называется "
-        "только вместе с числом наблюдений, поэтому строка «Наблюдений» стоит выше "
-        "строки «Доля», а не под ней.", F_MUTED, align=WRAP)
-    ws.merge_cells(f"A{r[0]}:H{r[0]}")
-    ws.row_dimensions[r[0]].height = 30
-    r[0] += 1
+        L.line(f"M{T}", f"Запас M(T) при T = {T}", "z(p) × σ_Δ × корень из T",
+               f"z_p*{L.anchors['sigma_d']}*SQRT({T})", pub_m[T], "0.0000",
+               "DISCLOSURE § 2.3", "РАСЧЁТ")
+        L.line(f"Y{T}", f"Жёлтая линия при T = {T}", "L − M(T)",
+               f"{L.anchors['L']}-{L.anchors[f'M{T}']}", pub_y[T], "0.0000",
+               "DISCLOSURE § 2.3", "РАСЧЁТ")
+        L.line(None, f"Наблюдений выше жёлтой, T = {T}",
+               "сколько точек ряда не ниже жёлтой линии",
+               f'COUNTIF(v,">="&{L.anchors[f"Y{T}"]})', pub_n[T], "0",
+               "DISCLOSURE § 2.3, Р-Д3", "РАСЧЁТ")
+        L.line(None, f"Доля времени выше жёлтой, T = {T}", "их доля от 36 наблюдений",
+               f'COUNTIF(v,">="&{L.anchors[f"Y{T}"]})/COUNT(v)*100', pub_s[T], "0.0",
+               "DISCLOSURE § 2.3, Р-Д3", "РАСЧЁТ")
+    L.note("Р-Д3: доля в процентах от 36 наблюдений читается точнее, чем есть. 2,8 % — "
+           "это одно наблюдение, 11,1 % — четыре. На комитете доля называется только "
+           "вместе с числом наблюдений, поэтому строка «Наблюдений» стоит выше строки "
+           "«Доля», а не под ней. Обоснование самой формулы M(T) — на листе "
+           "«Обоснование M(T)»; разметка зон по этим границам — на листе «Зоны».")
 
-    # ── квантили
-    block("4. Квантили ряда (метод C). Линейная интерполяция между порядковыми статистиками")
+    L.block("4. Квантили ряда (метод C). Линейная интерполяция между порядковыми "
+            "статистиками")
     for p, pub in ((85, 98.1887), (90, 99.5485), (95, 101.0117)):
-        line(f"q{p}", f"Квантиль {p} %", f"значение, ниже которого лежит {p} % ряда",
-             f"PERCENTILE(v,0.{p})", pub, "0.0000", "DISCLOSURE § 2.5")
+        L.line(f"q{p}", f"Квантиль {p} %", f"значение, ниже которого лежит {p} % ряда",
+               f"PERCENTILE(v,0.{p})", pub, "0.0000", "DISCLOSURE § 2.5", "РАСЧЁТ")
 
-    # ── два пути
-    block("5. Два независимых пути к одному уровню")
-    line("H3", "Метод H: квантиль 90 % + запас T = 3", "квантиль₉₀(v) + M(3)",
-         f"{anchors['q90']}+{anchors['M3']}", 108.5755, "0.0000", "DISCLOSURE § 2.4")
-    line(None, "Расхождение двух путей", "L (пересчёт базы) − H (цикл решения)",
-         f"{anchors['L']}-{anchors['H3']}", 0.0543, "0.0000", "DISCLOSURE § 2.4")
-    put(ws, f"A{r[0]}",
-        "Главный довод против упрёка «уровень подогнан под факт»: пути не связаны "
-        "по построению. Первый смотрит на отношение баз капитала, второй — на "
-        "распределение ряда и длину процесса. Сходятся на 0,05 пп.", F_MUTED, align=WRAP)
-    ws.merge_cells(f"A{r[0]}:H{r[0]}")
-    ws.row_dimensions[r[0]].height = 30
-    r[0] += 1
+    L.block("5. Два независимых пути к одному уровню")
+    L.line("H3", "Метод H: квантиль 90 % + запас T = 3", "квантиль₉₀(v) + M(3)",
+           f"{L.anchors['q90']}+{L.anchors['M3']}", 108.5755, "0.0000",
+           "DISCLOSURE § 2.4", "РАСЧЁТ")
+    L.line(None, "Расхождение двух путей", "L (пересчёт базы) − H (цикл решения)",
+           f"{L.anchors['L']}-{L.anchors['H3']}", 0.0549, "0.0000",
+           "DISCLOSURE § 2.4", "РАСЧЁТ")
+    L.note("Главный довод против упрёка «уровень подогнан под факт»: пути не связаны по "
+           "построению. Первый смотрит на отношение баз капитала, второй — на "
+           "распределение ряда и длину процесса. Сходятся на 0,05 пп.")
 
-    # ── производные
-    block("6. Производные метрики")
-    line(None, "D — расстояние до L, в σ", "(L − текущая точка) / σ_Δ",
-         f"({anchors['L']}-{anchors['v_last']})/{anchors['sigma_d']}", 1.752, "0.000",
-         "DISCLOSURE § 2.6")
-    line(None, "D при сохранении L = 95", "(95 − текущая точка) / σ_Δ",
-         f"(L_reg-{anchors['v_last']})/{anchors['sigma_d']}", -1.599, "0.000",
-         "DISCLOSURE § 2.6")
-    line(None, "F — падение СК до достижения L, %", "текущая точка / L − 1, в процентах",
-         f"({anchors['v_last']}/{anchors['L']}-1)*100", -6.56, "0.00",
-         "DISCLOSURE § 2.6")
-    line(None, "Метод B: максимум + 2σ_B", "max(v) + 2 × σ метода B",
-         f"{anchors['v_max']}+2*{anchors['sigma_B']}", 113.1655, "0.0000",
-         "DISCLOSURE Р-Д1")
+    L.block("6. Производные метрики")
+    L.line(None, "D — расстояние до L, в σ", "(L − текущая точка) / σ_Δ",
+           f"({L.anchors['L']}-{L.anchors['v_last']})/{L.anchors['sigma_d']}", 1.752,
+           "0.000", "DISCLOSURE § 2.6", "РАСЧЁТ")
+    L.line(None, "D при сохранении L = 95", "(95 − текущая точка) / σ_Δ",
+           f"(L_reg-{L.anchors['v_last']})/{L.anchors['sigma_d']}", -1.599, "0.000",
+           "DISCLOSURE § 2.6", "РАСЧЁТ")
+    L.line(None, "F — падение СК до достижения L, %", "текущая точка / L − 1, в процентах",
+           f"({L.anchors['v_last']}/{L.anchors['L']}-1)*100", -6.56, "0.00",
+           "DISCLOSURE § 2.6", "РАСЧЁТ")
+    L.line("Tstar", "T* — остаток времени до лимита, мес.",
+           "сколько месяцев до лимита при доверии p: ((L − v) / (z·σ_Δ))²",
+           f"(({L.anchors['L']}-{L.anchors['v_last']})/(z_p*{L.anchors['sigma_d']}))^2",
+           1.8697, "0.0000", "новое, 14.09.2026", "РАСЧЁТ")
+    L.note("T* — та же формула M(T), решённая относительно T. Она переводит зону из "
+           "цвета в срок: в текущей точке до лимита остаётся 1,87 месяца при доверии "
+           "90 %. Это число говорит комитету больше, чем «мы в жёлтой зоне».")
 
-    # ── цена решения «не трогаем»
-    block("7. Цена решения «уровень не трогаем»: обратный счёт при L = 95")
-    line("Y95", "Жёлтая линия при L = 95", "95 − M(3)",
-         f"L_reg-{anchors['M3']}", 85.9730, "0.0000", "DISCLOSURE § 2.6")
-    line(None, "Наблюдений выше неё", "сколько точек ряда не ниже 85,97",
-         f'COUNTIF(v,">="&{anchors["Y95"]})', 31, "0", "DISCLOSURE § 2.6")
-    line(None, "Доля времени выше неё", "их доля от 36 наблюдений",
-         f'COUNTIF(v,">="&{anchors["Y95"]})/COUNT(v)*100', 86.1, "0.0",
-         "DISCLOSURE § 2.6")
-    put(ws, f"A{r[0]}",
-        "31 наблюдение из 36 — это светофор с постоянно горящей жёлтой лампой. "
-        "Именно это число отвечает на предложение «оставить 95 % и ничего не менять».",
-        F_MUTED, align=WRAP)
-    ws.merge_cells(f"A{r[0]}:H{r[0]}")
-    ws.row_dimensions[r[0]].height = 28
-    r[0] += 1
+    L.block("7. Цена решения «уровень не трогаем»: обратный счёт при L = 95")
+    L.line("Y95", "Жёлтая линия при L = 95", "95 − M(3)",
+           f"L_reg-{L.anchors['M3']}", 85.9730, "0.0000", "DISCLOSURE § 2.6", "РАСЧЁТ")
+    L.line(None, "Наблюдений выше неё", "сколько точек ряда не ниже 85,97",
+           f'COUNTIF(v,">="&{L.anchors["Y95"]})', 31, "0", "DISCLOSURE § 2.6", "РАСЧЁТ")
+    L.line(None, "Доля времени выше неё", "их доля от 36 наблюдений",
+           f'COUNTIF(v,">="&{L.anchors["Y95"]})/COUNT(v)*100', 86.1, "0.0",
+           "DISCLOSURE § 2.6", "РАСЧЁТ")
+    L.note("31 наблюдение из 36 — это светофор с постоянно горящей жёлтой лампой. "
+           "Именно это число отвечает на предложение «оставить 95 % и ничего не менять».")
 
-    # ── итог сверки
-    r[0] += 1
-    total = r[0]
-    lo, hi = rows_out[0][0], rows_out[-1][0]
-    put(ws, f"A{total}", "Строк не сошлось", F_BLOCK, fill=BLOCK_BG, border=True)
-    put(ws, f"B{total}", f'=COUNTIF(G{lo}:G{hi},"НЕТ")', F_BLOCK, "0", fill=BLOCK_BG,
-        border=True)
-    put(ws, f"C{total}",
-        "Ноль означает: все опубликованные числа воспроизводятся формулами этой книги. "
-        "Это не означает, что формулы верны по существу — воспроизводимость и "
-        "правильность разные вещи.", F_MUTED, align=WRAP, fill=BLOCK_BG, border=True)
-    ws.merge_cells(f"C{total}:H{total}")
-    ws.row_dimensions[total].height = 32
+    L.total("Строк не сошлось")
     ws.freeze_panes = "A5"
-    return rows_out, anchors
+    return L
 
 
-# ── лист «Три сигмы» ──────────────────────────────────────────────────────
-def sheet_sigmas(wb, anchors):
-    ws = wb.create_sheet("Три сигмы")
-    put(ws, "A1", "Р-Д1: в таблице восьми методов три разные σ", F_TITLE)
-    put(ws, "A2",
-        "Это первый вопрос, который задаст любой, кто читает таблицу методов внимательно. "
-        "Ответ лучше дать самому, до вопроса.", F_MUTED)
-    for col, w in (("A", 16), ("B", 46), ("C", 13), ("D", 13), ("E", 56)):
+# ── лист «Обоснование M(T)» ───────────────────────────────────────────────
+def sheet_basis(wb, calc):
+    """Четыре проверки допущений, на которых стоит M(T) = z·σ·√T."""
+    ws = wb.create_sheet("Обоснование M(T)")
+    put(ws, "A1", "Обоснование формулы M(T) = z(p) · σ_Δ · √T", F_TITLE)
+    note(ws, 2, "H",
+         "Формула держится на трёх допущениях: приросты независимы (отсюда √T), "
+         "распределение суммы близко к нормальному (отсюда z), дрейфа нет. Ниже каждое "
+         "проверено на нашем же ряде. Колонки J–N — служебные: T-месячные изменения, "
+         "по которым считаются проверки.", 42)
+    for col, w in (("A", 36), ("B", 44), ("C", 38), ("D", 13),
+                   ("E", 13), ("F", 12), ("G", 10), ("H", 22)):
+        ws.column_dimensions[col].width = w
+
+    # служебные колонки: изменения за T месяцев
+    helper = {}
+    for idx, T in enumerate((1, 2, 3, 4, 6)):
+        col = get_column_letter(10 + idx)          # J, K, L, M, N
+        ws.column_dimensions[col].width = 13
+        put(ws, f"{col}4", f"Изменение за {T} мес.", F_HEAD, fill=HEAD_BG, border=True,
+            align=Alignment(wrap_text=True, vertical="bottom"))
+        end = LAST - T
+        for rr in range(FIRST, end + 1):
+            put(ws, f"{col}{rr}", f"=Ряд!H{rr + T}-Ряд!H{rr}", F_BODY, "0.0000")
+        helper[T] = f"${col}${FIRST}:${col}${end}"
+
+    L = Ledger(ws, 5, last_col="H")
+    L.headers(("Проверка", "Что именно проверяется", "Формула в этой книге", "Значение",
+               "Ожидание", "Расхождение", "Сходится", "Как читать"))
+
+    sd = f"'Расчёт'!{calc.anchors['sigma_d']}"
+
+    L.block("1. Независимость приростов — единственное, на чём держится √T")
+    L.line("r1", "Автокорреляция лага 1",
+           "связь прироста с предыдущим приростом",
+           f"CORREL(Ряд!J{FIRST + 2}:J{LAST},Ряд!J{FIRST + 1}:J{LAST - 1})",
+           -0.0828, "0.0000", "новое, 14.09.2026", "ОБОСНОВАНИЕ M(T)")
+    L.line(None, "Порог значимости 2/√n",
+           "выше этого значения автокорреляцию нельзя считать шумом",
+           "2/SQRT(COUNT(d))", 0.3381, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.note("|−0,083| против порога 0,338 — свидетельств против независимости нет. "
+           "Это НЕ доказательство независимости: при 35 наблюдениях тест почти лишён "
+           "мощности. Сказать об этом надо самим, иначе скажет оппонент.")
+
+    pub_fact = {1: 4.0667, 2: 5.5686, 3: 6.4021, 4: 7.1177, 6: 7.6940}
+    pub_ratio = {1: 1.0000, 2: 0.9682, 3: 0.9089, 4: 0.8751, 6: 0.7724}
+    for T in (1, 2, 3, 4, 6):
+        L.line(f"fact{T}", f"Фактическое с.к.о. изменений за {T} мес.",
+               f"разброс реальных {T}-месячных изменений ряда",
+               f"STDEV({helper[T]})", pub_fact[T], "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+        L.line(None, f"Отношение факт / модель при T = {T}",
+               f"во сколько раз реальный разброс отличается от σ_Δ·√{T}",
+               f"{L.anchors[f'fact{T}']}/({sd}*SQRT({T}))", pub_ratio[T], "0.0000",
+               "новое", "ОБОСНОВАНИЕ M(T)")
+    L.note("Отношение ниже единицы означает, что √T ЗАВЫШАЕТ разброс: ряд слегка "
+           "возвращается к среднему. На T = 3 завышение 9 %, на T = 6 — 23 %. Для буфера "
+           "это ошибка в безопасную сторону — жёлтая линия ниже, предупреждение раньше. "
+           "Оговорка: окна перекрываются, поэтому это оценка, а не точное измерение.", 44)
+
+    L.block("2. Нормальность — и почему нужна не та, о которой спрашивают")
+    mean_d = "AVERAGE(d)"
+    m2 = f"(SUMPRODUCT((d-{mean_d})^2)/COUNT(d))"
+    m3 = f"(SUMPRODUCT((d-{mean_d})^3)/COUNT(d))"
+    m4 = f"(SUMPRODUCT((d-{mean_d})^4)/COUNT(d))"
+    L.line("g1", "Асимметрия приростов",
+           "скошенность месячных приростов: третий момент / σ³",
+           f"{m3}/{m2}^1.5", 0.6738, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line("g2", "Избыточный эксцесс приростов",
+           "толщина хвостов приростов: четвёртый момент / σ⁴ − 3",
+           f"{m4}/{m2}^2-3", 0.1896, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line("JB", "Жарк–Бера по приростам",
+           "сводный тест нормальности: n/6 × (g1² + g2²/4)",
+           f"COUNT(d)/6*({L.anchors['g1']}^2+{L.anchors['g2']}^2/4)", 2.7009, "0.0000",
+           "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line(None, "Критическое значение 5 %",
+           "порог хи-квадрат с 2 степенями свободы; выше него нормальность отвергается",
+           "5.991", 5.991, "0.000", "статистическая таблица", "ОБОСНОВАНИЕ M(T)")
+
+    h3 = helper[3]
+    mean3 = f"AVERAGE({h3})"
+    p2 = f"(SUMPRODUCT(({h3}-{mean3})^2)/COUNT({h3}))"
+    p3 = f"(SUMPRODUCT(({h3}-{mean3})^3)/COUNT({h3}))"
+    p4 = f"(SUMPRODUCT(({h3}-{mean3})^4)/COUNT({h3}))"
+    L.line("G1", "Асимметрия 3-месячных изменений",
+           "скошенность того, к чему буфер реально применяется",
+           f"{p3}/{p2}^1.5", 0.0448, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line("G2", "Избыточный эксцесс 3-месячных изменений",
+           "толщина хвостов трёхмесячной суммы",
+           f"{p4}/{p2}^2-3", -0.4373, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line(None, "Жарк–Бера по 3-месячным изменениям", "тот же тест на трёхмесячной сумме",
+           f"COUNT({h3})/6*({L.anchors['G1']}^2+{L.anchors['G2']}^2/4)", 0.2740,
+           "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line(None, "Что предсказывает ЦПТ", "асимметрия суммы трёх независимых = g1 / √3",
+           f"{L.anchors['g1']}/SQRT(3)", 0.3890, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.note("Главный довод: буфер применяется не к приростам, а к их трёхмесячной СУММЕ. "
+           "У приростов асимметрия 0,67 — заметная. У трёхмесячной суммы 0,04, то есть "
+           "она исчезла, и даже быстрее, чем требовала ЦПТ (0,39). Жарк–Бера 2,70 "
+           "против критических 5,99 — нормальность не отвергается даже на приростах. "
+           "И третье: z(0,90) = 1,28 лежит в теле распределения, а не в хвосте; ошибки "
+           "нормальности бьют на 99 % и 99,9 %, а не на 90 %.", 58)
+
+    L.block("3. Буфер M(3) четырьмя независимыми способами")
+    L.line("Mnorm", "Нормальная модель z·σ_Δ·√3", "то, что стоит в расчёте",
+           f"z_p*{sd}*SQRT(3)", 9.0270, "0.0000", "DISCLOSURE § 2.3",
+           "ОБОСНОВАНИЕ M(T)")
+    L.line("Memp", "Эмпирический 90-й процентиль",
+           "90 % реальных 3-месячных изменений не превысили эту величину",
+           f"PERCENTILE({h3},p_conf)", 9.2887, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    zcf = (f"(z_p+(z_p^2-1)/6*{L.anchors['g1']}/SQRT(3)"
+           f"+(z_p^3-3*z_p)/24*{L.anchors['g2']}/3"
+           f"-(2*z_p^3-5*z_p)/36*({L.anchors['g1']}/SQRT(3))^2)")
+    L.line("Mcf", "Корниш–Фишер",
+           "нормальный квантиль с поправкой на асимметрию и эксцесс суммы",
+           f"{zcf}*{sd}*SQRT(3)", 9.3532, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line(None, "Разброс трёх способов, %",
+           "насколько максимальный ответ выше минимального",
+           f"MAX({L.anchors['Mnorm']},{L.anchors['Memp']},{L.anchors['Mcf']})/"
+           f"MIN({L.anchors['Mnorm']},{L.anchors['Memp']},{L.anchors['Mcf']})*100-100",
+           3.6137, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line("se_sig", "Стандартная ошибка самой σ_Δ",
+           "точность оценки σ по 35 наблюдениям: σ / √(2(n−1))",
+           f"{sd}/SQRT(2*(COUNT(d)-1))", 0.4932, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line(None, "Она же в единицах M(3)", "z · SE(σ) · √3 — неопределённость буфера",
+           f"z_p*{L.anchors['se_sig']}*SQRT(3)", 1.0947, "0.0000", "новое",
+           "ОБОСНОВАНИЕ M(T)")
+    L.note("Все три непараметрических способа дают буфер ВЫШЕ нормальной модели, "
+           "разброс 3,6 %. Направление систематическое: нормальная модель тонковата "
+           "примерно на 0,33 пп. Поправка сознательно не вносится — собственная "
+           "погрешность σ_Δ равна ±1,09 пп, то есть втрое больше смещения. Но записано "
+           "это должно быть явно: ровно за молчание о выборе σ мы критикуем метод B "
+           "в Р-Д1. Четвёртый способ — бутстрап 200 тыс. сумм трёх случайно взятых "
+           "приростов — даёт 9,3688; в Excel без макросов он не воспроизводится "
+           "и потому в таблицу не вынесен.", 58)
+
+    L.block("4. Дрейф")
+    L.line(None, "Средний прирост за месяц", "есть ли систематический снос ряда вверх",
+           "AVERAGE(d)", 0.0321, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.line(None, "Дрейф за 3 месяца", "во что он превращается на горизонте буфера",
+           "AVERAGE(d)*3", 0.0964, "0.0000", "новое", "ОБОСНОВАНИЕ M(T)")
+    L.note("0,10 пп против буфера 9,03 — меньше 1 %. Допущение нулевого дрейфа "
+           "безвредно, слагаемое μ·T в формулу не добавляется.")
+
+    L.total("Строк не сошлось")
+    ws.freeze_panes = "A5"
+    return L
+
+
+# ── лист «Зоны» ───────────────────────────────────────────────────────────
+def sheet_zones(wb, calc):
+    ws = wb.create_sheet("Зоны")
+    put(ws, "A1", "Зоны: зелёная, жёлтая, красная", F_TITLE)
+    note(ws, 2, "G",
+         "Границы зон — не подобранные числа, а одна и та же формула L − M(T) при разном "
+         "T. Поэтому зона читается как ОСТАТОК ВРЕМЕНИ до лимита, а не как цвет.", 30)
+    for col, w in (("A", 22), ("B", 30), ("C", 13), ("D", 13),
+                   ("E", 13), ("F", 11), ("G", 54)):
+        ws.column_dimensions[col].width = w
+    for col, t in (("A", "Зона"), ("B", "Что означает"), ("C", "Нижняя граница"),
+                   ("D", "Верхняя граница"), ("E", "Наблюдений"), ("F", "Доля, %"),
+                   ("G", "Что делает")):
+        put(ws, f"{col}4", t, F_HEAD, fill=HEAD_BG, border=True,
+            align=Alignment(wrap_text=True, vertical="bottom"))
+    ws.row_dimensions[4].height = 30
+
+    Lc, y1, y3 = calc.anchors["L"], calc.anchors["Y1"], calc.anchors["Y3"]
+    R = "'Расчёт'!"
+    rows = [
+        ("Зелёная", "больше трёх месяцев запаса", None, f"{R}{y3}",
+         f'COUNTIF(v,"<"&{R}{y3})', 32, GREEN_BG,
+         "Штатное наблюдение: ежемесячный отчёт, без отдельных действий"),
+        ("Жёлтая", "от одного до трёх месяцев", f"{R}{y3}", f"{R}{y1}",
+         f'COUNTIFS(v,">="&{R}{y3},v,"<"&{R}{y1})', 3, YELLOW_BG,
+         "Ускоренное наблюдение и заранее согласованные меры. Времени на решение "
+         "ещё хватает — в этом весь смысл границы"),
+        ("Красная", "меньше месяца либо пробой", f"{R}{y1}", None,
+         f'COUNTIF(v,">="&{R}{y1})', 1, RED_BG,
+         "Эскалация на уполномоченный орган. Граница стоит НИЖЕ лимита сознательно: "
+         "красная лампа, загорающаяся в момент пробоя, не предупреждает, а "
+         "протоколирует"),
+    ]
+    checks = []
+    r = 5
+    for name, mean, lo, hi, cnt, pub, bg, act in rows:
+        put(ws, f"A{r}", name, F_BLOCK, border=True, fill=bg)
+        put(ws, f"B{r}", mean, F_BODY, align=WRAP, border=True, fill=bg)
+        put(ws, f"C{r}", f"={lo}" if lo else "—", F_BODY, "0.0000", border=True, fill=bg)
+        put(ws, f"D{r}", f"={hi}" if hi else "—", F_BODY, "0.0000", border=True, fill=bg)
+        put(ws, f"E{r}", f"={cnt}", F_BLOCK, "0", border=True, align=CENTER, fill=bg)
+        put(ws, f"F{r}", f"=E{r}/COUNT(v)*100", F_BODY, "0.0", border=True, fill=bg)
+        put(ws, f"G{r}", act, F_MUTED, align=WRAP, border=True, fill=bg)
+        ws.row_dimensions[r].height = 46
+        checks.append(("ЗОНЫ", f"E{r}", pub, 0.5))
+        r += 1
+
+    put(ws, f"A{r}", "Всего", F_BLOCK, border=True, fill=BLOCK_BG)
+    put(ws, f"E{r}", f"=SUM(E5:E{r - 1})", F_BLOCK, "0", border=True, align=CENTER,
+        fill=BLOCK_BG)
+    put(ws, f"F{r}", f"=E{r}/COUNT(v)*100", F_BODY, "0.0", border=True, fill=BLOCK_BG)
+    put(ws, f"G{r}", "Должно быть 36 и 100,0 % — иначе границы зон не покрывают ряд "
+                     "целиком либо перекрываются.", F_MUTED, align=WRAP, border=True,
+        fill=BLOCK_BG)
+    for col in ("B", "C", "D"):
+        put(ws, f"{col}{r}", None, border=True, fill=BLOCK_BG)
+    checks.append(("ЗОНЫ", f"E{r}", N_POINTS, 0.5))
+    ws.row_dimensions[r].height = 30
+    r += 2
+
+    put(ws, f"A{r}", "Где мы сейчас", F_BLOCK)
+    r += 1
+    cur = [
+        ("Текущая точка, 01.07.2026", f"={R}{calc.anchors['v_last']}", 101.5041, "0.0000"),
+        ("Граница жёлтой (3 мес.)", f"={R}{y3}", 99.6034, "0.0000"),
+        ("Граница красной (1 мес.)", f"={R}{y1}", 103.4187, "0.0000"),
+        ("Лимит", f"={R}{Lc}", 108.6304, "0.0000"),
+        ("До лимита, пп", f"={R}{Lc}-{R}{calc.anchors['v_last']}", 7.1263, "0.0000"),
+        ("T* — остаток времени, мес.", f"={R}{calc.anchors['Tstar']}", 1.8697, "0.0000"),
+    ]
+    for label, formula, pub, fmt in cur:
+        put(ws, f"A{r}", label, F_BODY, border=True)
+        put(ws, f"B{r}", formula, F_BLOCK, fmt, border=True)
+        put(ws, f"C{r}", pub, F_MUTED, fmt, border=True)
+        put(ws, f"D{r}", "опубликовано", F_MUTED, border=True)
+        checks.append(("ЗОНЫ", f"B{r}", pub, 0.00005))
+        r += 1
+
+    put(ws, f"A{r}", "Зона текущей точки", F_BODY, border=True)
+    put(ws, f"B{r}",
+        f'=IF({R}{calc.anchors["v_last"]}>={R}{Lc},"ПРОБОЙ",'
+        f'IF({R}{calc.anchors["v_last"]}>={R}{y1},"КРАСНАЯ",'
+        f'IF({R}{calc.anchors["v_last"]}>={R}{y3},"ЖЁЛТАЯ","ЗЕЛЁНАЯ")))',
+        F_BLOCK, border=True, fill=YELLOW_BG)
+    r += 2
+
+    note(ws, r, "G",
+         "Красная зона по этой разметке за 36 месяцев загоралась один раз — 01.2024. "
+         "Пробоев не было ни разу, поэтому метод G (калибровка по историческим "
+         "превышениям) на этом ряде неприменим: калибровать не на чем.", 30, F_BODY)
+    r += 1
+    note(ws, r, "G",
+         "ОТКРЫТЫЙ ВОПРОС. Стратегия риск-аппетита, п. 26, задаёт «три предела уровня "
+         "рисков». Разметка выше содержит три зоны и потому с ним совместима — но п. 26 "
+         "у нас процитирован по карте документов и ДОСЛОВНО НЕ РАЗОБРАН. Пока он не "
+         "прочитан, эти три зоны являются нашим предложением, а не соответствием ВНД, "
+         "и заявлять обратное на комитете нельзя.", 48, F_BODY)
+    return checks
+
+
+# ── лист «Две сигмы» ──────────────────────────────────────────────────────
+def sheet_sigmas(wb, calc):
+    ws = wb.create_sheet("Две сигмы")
+    put(ws, "A1", "Две σ в одной таблице методов — и они про разное", F_TITLE)
+    note(ws, 2, "E",
+         "Остаток находки Р-Д1. Третья σ принадлежала методу B, который из книги убран: "
+         "он не защищается на комитете. В DISCLOSURE.md Р-Д1 остаётся целиком — там он "
+         "про чужую опубликованную таблицу, а не про нашу книгу.", 30)
+    for col, w in (("A", 16), ("B", 44), ("C", 13), ("D", 13), ("E", 58)):
         ws.column_dimensions[col].width = w
     for col, t in (("A", "Методы"), ("B", "Какая σ"), ("C", "Значение"),
                    ("D", "К σ_Δ"), ("E", "Что из этого следует")):
         put(ws, f"{col}4", t, F_HEAD, fill=HEAD_BG, border=True)
 
-    base = f"'Расчёт'!{anchors['sigma_d']}"
-    data = [
-        ("D, H", "выборочное с.к.о. приростов, все 35",
-         f"'Расчёт'!{anchors['sigma_d']}", 4.0667,
-         "Базовая. На ней стоят запас M(T) и расстояние D"),
-        ("B", "популяционное с.к.о. приростов без двух, примыкающих к выбросу 01.2024",
-         f"'Расчёт'!{anchors['sigma_B']}", 3.6326,
-         "На 11 % меньше базовой — и метод получает за это более высокую жёлтую линию. "
-         "Основание исключать режимный выброс есть, но в тексте методов оно не написано "
-         "и восстановлено обратным счётом от опубликованных 113,17"),
-        ("М1", "выборочное с.к.о. самих уровней, не приростов",
-         f"'Расчёт'!{anchors['sigma_lvl']}", 6.2201,
-         "Мера разброса уровня за три года, а не месячного хода. С первыми двумя "
-         "несопоставима в принципе"),
-    ]
+    base = f"'Расчёт'!{calc.anchors['sigma_d']}"
+    data = [("D, H", "выборочное с.к.о. приростов, все 35", base, 4.0667,
+             "Базовая. На ней стоят запас M(T), расстояние D и T*"),
+            ("М1", "выборочное с.к.о. самих уровней, не приростов",
+             f"'Расчёт'!{calc.anchors['sigma_lvl']}", 6.2201,
+             "Мера разброса уровня за три года, а не месячного хода. С первой "
+             "несопоставима в принципе: одна про то, где ряд стоял, другая про то, "
+             "как быстро он движется")]
     checks = []
     r = 5
     for meth, what, ref, pub, why in data:
@@ -427,31 +657,24 @@ def sheet_sigmas(wb, anchors):
         put(ws, f"D{r}", f"=C{r}/{base}", F_BODY, "0.0%", border=True)
         put(ws, f"E{r}", why, F_MUTED, align=WRAP, border=True)
         ws.row_dimensions[r].height = 46
-        checks.append(("ТРИ СИГМЫ", f"C{r}", pub, 0.00005))
+        checks.append(("ДВЕ СИГМЫ", f"C{r}", pub, 0.00005))
         r += 1
 
-    r += 1
-    put(ws, f"A{r}",
-        "Что с этим делать. Либо привести все методы к одной σ, либо назвать σ каждого "
-        "прямо в строке таблицы методов. Второе честнее: у метода B есть содержательное "
-        "основание исключать режимный выброс — но основание должно быть написано, "
-        "а не восстанавливаться обратным счётом. Метод, защищаемый в собственных "
-        "терминах, несравним с методом, защищаемым в своих.", F_BODY, align=WRAP)
-    ws.merge_cells(f"A{r}:E{r}")
-    ws.row_dimensions[r].height = 60
+    note(ws, r + 1, "E",
+         "Правило, которое из этого остаётся: σ называется прямо в строке метода. "
+         "Метод, защищаемый в собственных терминах, несравним с методом, защищаемым "
+         "в своих, — и разница в 53 % между этими двумя σ тому иллюстрация.", 44, F_BODY)
     return checks
 
 
 # ── лист «Триггеры» ───────────────────────────────────────────────────────
-def sheet_triggers(wb, first, last):
+def sheet_triggers(wb):
     ws = wb.create_sheet("Триггеры")
     put(ws, "A1", "Триггеры на движение: ΔСК ≤ −3 % или ΔЗайм ≥ +5 % за месяц", F_TITLE)
-    put(ws, "A2",
-        "Срабатывают независимо от зоны. Все 35 приростов показаны целиком — "
-        "выборка из шести строк была бы недоказуема: не видно, что остальные 29 "
-        "условию не отвечают.", F_MUTED, align=WRAP)
-    ws.merge_cells("A2:E2")
-    ws.row_dimensions[2].height = 28
+    note(ws, 2, "E",
+         "Срабатывают независимо от зоны. Все 35 приростов показаны целиком — выборка "
+         "из шести строк недоказуема: по ней не видно, что остальные 29 условию "
+         "не отвечают.", 30)
     for col, w in (("A", 13), ("B", 12), ("C", 12), ("D", 14), ("E", 14)):
         ws.column_dimensions[col].width = w
     for col, t in (("A", "Дата"), ("B", "ΔСК, %"), ("C", "ΔЗайм, %"),
@@ -459,93 +682,113 @@ def sheet_triggers(wb, first, last):
         put(ws, f"{col}4", t, F_HEAD, fill=HEAD_BG, border=True)
 
     r = 5
-    for src in range(first + 1, last + 1):
+    for src in range(FIRST + 1, LAST + 1):
         put(ws, f"A{r}", f"='Ряд'!A{src}", F_BODY, border=True)
-        put(ws, f"B{r}", f"='Ряд'!G{src}", F_BODY, "0.00", border=True)
-        put(ws, f"C{r}", f"='Ряд'!H{src}", F_BODY, "0.00", border=True)
-        put(ws, f"D{r}", f"='Ряд'!E{src}", F_BODY, "0.00", border=True)
-        put(ws, f"E{r}", f"='Ряд'!K{src}", F_BODY, border=True)
+        put(ws, f"B{r}", f"='Ряд'!K{src}", F_BODY, "0.00", border=True)
+        put(ws, f"C{r}", f"='Ряд'!L{src}", F_BODY, "0.00", border=True)
+        put(ws, f"D{r}", f"='Ряд'!H{src}", F_BODY, "0.00", border=True)
+        put(ws, f"E{r}", f"='Ряд'!M{src}", F_BODY, border=True, align=CENTER)
         r += 1
 
-    tot = r + 1
+    tot, rng = r + 1, f"E5:E{r - 1}"
     put(ws, f"A{tot}", "Сработало", F_BLOCK, fill=BLOCK_BG, border=True)
-    rng = f"E5:E{r - 1}"
-    put(ws, f"B{tot}",
-        f'=COUNTIF({rng},"Займ")+COUNTIF({rng},"СК")+COUNTIF({rng},"оба")',
-        F_BLOCK, "0", fill=BLOCK_BG, border=True)
+    put(ws, f"B{tot}", f'=COUNTIF({rng},"Займ")+COUNTIF({rng},"СК")+COUNTIF({rng},"оба")',
+        F_BLOCK, "0", fill=BLOCK_BG, border=True, align=CENTER)
     put(ws, f"C{tot}", f"=B{tot}/{r - 5}*100", F_BLOCK, "0.0", fill=BLOCK_BG, border=True)
     put(ws, f"D{tot}", "из 35 приростов, %", F_MUTED, fill=BLOCK_BG, border=True)
+    put(ws, f"E{tot}", None, fill=BLOCK_BG, border=True)
 
-    note = tot + 2
-    put(ws, f"A{note}",
-        "Строка 01.2026 — та, ради которой триггеры и заводятся: вход сделан капиталом "
-        "(ΔСК = −7,92 %), а не портфелем, и уровневая зона его не предупреждала "
-        "в принципе. Зона смотрит на значение коэффициента, триггер — на его движение; "
-        "это разные инструменты, и один другого не заменяет.", F_BODY, align=WRAP)
-    ws.merge_cells(f"A{note}:E{note}")
-    ws.row_dimensions[note].height = 58
+    note(ws, tot + 2, "E",
+         "Строка 01.2026 — та, ради которой триггеры и заводятся: вход сделан капиталом "
+         "(ΔСК = −7,92 %), а не портфелем, и уровневая зона его не предупреждала "
+         "в принципе. Зона смотрит на значение коэффициента, триггер — на его движение. "
+         "Формула M(T) описывает диффузию, триггер ловит скачок; ни один из двух "
+         "инструментов не заменяет другой.", 58, F_BODY)
     ws.freeze_panes = "A5"
-    return [("ТРИГГЕРЫ", f"B{tot}", 6, 0.5),
-            ("ТРИГГЕРЫ", f"C{tot}", 6 / 35 * 100, 0.05)]
+    return [("ТРИГГЕРЫ", f"B{tot}", 6, 0.5)]
 
 
 # ── лист «Как защищать» ───────────────────────────────────────────────────
 def sheet_guide(wb):
     ws = wb.create_sheet("Как защищать", 0)
-    ws.column_dimensions["A"].width = 40
-    ws.column_dimensions["B"].width = 104
+    ws.column_dimensions["A"].width = 38
+    ws.column_dimensions["B"].width = 106
     put(ws, "A1", "Расчётный лист по топ-20: как им пользоваться на комитете", F_TITLE)
-    put(ws, "A2", "Собрано 14.09.2026 из data/top20_monthly_2023_08_2026_07.csv. "
-                  "Книга собирается build/raschet_list.py — правки вносятся в скрипт, "
-                  "а не в готовый файл.", F_MUTED, align=WRAP)
-    ws.merge_cells("A2:B2")
-    ws.row_dimensions[2].height = 28
+    note(ws, 2, "B",
+         "Редакция 14.09.2026. Собрано из data/top20_monthly_2023_08_2026_07.csv "
+         "сборщиком build/raschet_list.py — правки вносятся в скрипт, а не в готовый "
+         "файл. Сверка: python3 raschet_list.py --verify.", 30)
 
     blocks = [
         ("Что в книге",
-         "Лист «Ряд» — 36 точек и всё, что считается построчно. Лист «Параметры» — "
-         "четыре входа, которые не выводятся из ряда. Лист «Расчёт» — каждое "
-         "опубликованное число живой формулой, рядом напечатанное значение и "
-         "расхождение. Лист «Три сигмы» — ответ на самый неудобный вопрос к таблице "
-         "методов. Лист «Триггеры» — все 35 приростов, а не выбранные шесть."),
+         "«Ряд» — 36 точек и всё, что считается построчно, обе базы капитала рядом. "
+         "«Параметры» — семь входов, из них вычисляются два. «Расчёт» — каждое "
+         "опубликованное число живой формулой против напечатанного. «Обоснование M(T)» — "
+         "четыре проверки допущений формулы буфера. «Зоны» — разметка и где мы сейчас. "
+         "«Две сигмы» — остаток Р-Д1. «Триггеры» — все 35 приростов."),
         ("Главное свойство",
-         "В книге нет ни одного вбитого руками результата. Любое число на слайде "
-         "выделяется в колонке D листа «Расчёт», и в строке формул видно, из чего оно "
-         "получено. Если кто-то не согласен с параметром — он меняется на листе "
-         "«Параметры», и вся книга пересчитывается при нём."),
-        ("Ответ на «откуда 108,63»",
+         "В книге нет ни одного вбитого руками результата, кроме одного помеченного "
+         "(бутстрап). Любое число со слайда выделяется в колонке «Значение», и в строке "
+         "формул видно, из чего оно получено. Несогласный с параметром меняет его "
+         "на листе «Параметры», и вся книга пересчитывается при нём."),
+        ("«Откуда 108,63»",
          "Уровень 95 % задан в регуляторной базе капитала. С 01.01.2026 знаменатель "
-         "метрики — балансовый капитал (Г26), и k = 0,87453 есть отношение баз. "
-         "108,63 — тот же самый уровень, выраженный в новой базе. Второй, независимый "
-         "путь: квантиль 90 % ряда плюс запас на три месяца даёт 108,58. Сходимость "
-         "двух путей на 0,05 пп и есть довод, что уровень не подогнан."),
-        ("Ответ на «почему T = 3»",
-         "Честный: длина цикла решения не измерена и в регламенте не закреплена. "
-         "Это записано как незакрытый пункт, а не спрятано. Поставьте на листе "
-         "«Параметры» T = 2 или T = 4 — видно, что уровень двигается примерно "
-         "на 1,4–1,5 пп за месяц цикла, и станет предметен разговор о том, "
-         "сколько на самом деле занимает решение."),
-        ("Ответ на «а если ничего не менять»",
+         "метрики — балансовый капитал (Г26), k = 0,8745 есть отношение баз. 108,63 — "
+         "тот же уровень в новой базе. Второй, независимый путь: квантиль 90 % ряда "
+         "плюс запас на три месяца даёт 108,58. Сходимость двух путей на 0,05 пп и есть "
+         "довод, что уровень не подогнан."),
+        ("«Почему корень из T»",
+         "Складываются дисперсии, а не с.к.о.: сумма T независимых приростов имеет "
+         "дисперсию T·σ², то есть разброс σ·√T. Держится это ровно на независимости. "
+         "Лист «Обоснование M(T)», блок 1: автокорреляция −0,08 при пороге 0,34; "
+         "фактический разброс трёхмесячных изменений 6,40 против модельных 7,04 — "
+         "модель ЗАВЫШАЕТ, то есть ошибается в безопасную сторону."),
+        ("«Почему нормальное распределение»",
+         "Нужна нормальность не приростов, а их трёхмесячной СУММЫ, к которой буфер и "
+         "применяется. У приростов асимметрия 0,67, у суммы — 0,04. Жарк–Бера на "
+         "приростах 2,70 при критических 5,99. И z(0,90) = 1,28 лежит в теле "
+         "распределения, а не в хвосте: ошибки нормальности бьют на 99 %, не на 90 %. "
+         "Лист «Обоснование M(T)», блок 2."),
+        ("«А буфер не выдуман»",
+         "Три непараметрических способа дают 9,29, 9,35 и 9,37 против модельных 9,03 — "
+         "разброс 3,6 % при собственной погрешности σ в ±1,09. И проверка на факте: "
+         "движение апрель→июль 2026 составило +8,24 пп, то есть 91 % буфера. "
+         "Буфер не подушка на всякий случай — ряд только что прошёл почти ровно такое "
+         "движение."),
+        ("«Почему T = 3»",
+         "Честный ответ: длина цикла решения не измерена и в регламенте не закреплена. "
+         "Это записано как незакрытый пункт, а не спрятано. Поставьте на «Параметрах» "
+         "T = 2 или T = 4 — уровень двигается примерно на 1,4–1,5 пп за месяц цикла."),
+        ("«Почему 90 %, а не 95 или 99»",
+         "Это цена ложного отбоя, а не расчёт. При 90 % один ложный сигнал из десяти. "
+         "Выше — жёлтая опускается и лампа горит почти всегда. Параметр p на листе "
+         "«Параметры» меняется, z пересчитывается сам. Решение комитета, не наше."),
+        ("«Где мы сейчас»",
+         "Лист «Зоны». Текущая точка 101,50 — жёлтая зона. До лимита 7,13 пп = 1,75 σ. "
+         "T* = 1,87 месяца: столько остаётся до лимита при доверии 90 %. Красная зона "
+         "за 36 месяцев загоралась один раз, пробоев не было ни разу."),
+        ("«А если ничего не менять»",
          "Лист «Расчёт», блок 7. При сохранении уровня 95 % жёлтая линия ложится "
          "на 85,97, и выше неё оказывается 31 наблюдение из 36. Светофор с постоянно "
          "горящей лампой не является системой раннего предупреждения."),
-        ("Три места, где книга слаба — сказать самому",
-         "Р-Д1: в таблице методов три разные σ, и у метода B определение восстановлено "
-         "обратным счётом (лист «Три сигмы»). Р-Д2: ряд обрывается на 01.07.2026, "
-         "то есть на дату записки 30.09 факт отстаёт на три месяца. Р-Д3: доля времени "
-         "в процентах от 36 наблюдений читается точнее, чем есть."),
+        ("Четыре слабых места — назвать самому",
+         "1) Ряд обрывается на 01.07.2026: на дату записки факт отстаёт на три месяца. "
+         "2) T = 3 не измерено. 3) k не константа — за 30 месяцев вырос с 0,779 "
+         "до 0,875, и уровень, посчитанный по k одной даты, стареет вместе с ним. "
+         "4) П. 26 Стратегии о трёх пределах уровня рисков дословно не разобран, "
+         "поэтому разметка зон — наше предложение, а не соответствие ВНД."),
         ("Чего книга не доказывает",
          "Что формулы верны по существу. Она доказывает ровно одно: числа получены "
-         "из ряда объявленными формулами. Верна ли формула, тот ли ряд, та ли метрика — "
-         "из воспроизводимости не следует."),
+         "из ряда объявленными формулами, а допущения формулы буфера проверены на этом "
+         "же ряде и не отвергнуты. Верна ли метрика и тот ли это ряд — из "
+         "воспроизводимости не следует."),
     ]
     r = 4
     for title, text in blocks:
         put(ws, f"A{r}", title, F_BLOCK, align=WRAP, fill=BLOCK_BG, border=True)
         put(ws, f"B{r}", text, F_BODY, align=WRAP, border=True)
-        ws.row_dimensions[r].height = max(44, 13 * (len(text) // 95 + 1))
+        ws.row_dimensions[r].height = max(44, 13 * (len(text) // 92 + 1))
         r += 1
-    return ws
 
 
 # ── сборка ────────────────────────────────────────────────────────────────
@@ -553,37 +796,36 @@ def build():
     rows = load_rows()
     wb = Workbook()
     wb.remove(wb.active)
-    first, last, max_row = sheet_series(wb, rows)
-    p = sheet_params(wb)
-    calc_rows, anchors = sheet_calc(wb, first, last)
-    extra = sheet_sigmas(wb, anchors)
-    extra += sheet_triggers(wb, first, last)
+    k_row = sheet_series(wb, rows)
+    p = sheet_params(wb, k_row)
+    calc = sheet_calc(wb)
+    basis = sheet_basis(wb, calc)
+    extra = sheet_zones(wb, calc)
+    extra += sheet_sigmas(wb, calc)
+    extra += sheet_triggers(wb)
     sheet_guide(wb)
 
     names = {
-        "v": f"'Ряд'!$E${first}:$E${last}",
-        "d": f"'Ряд'!$F${first + 1}:$F${last}",
-        "dB": f"'Ряд'!$J${first + 1}:$J${last}",
-        "z_90": f"'Параметры'!${p['z_90'][0]}${p['z_90'][1:]}",
-        "k_G26": f"'Параметры'!${p['k_G26'][0]}${p['k_G26'][1:]}",
-        "L_reg": f"'Параметры'!${p['L_reg'][0]}${p['L_reg'][1:]}",
-        "T_cikl": f"'Параметры'!${p['T_cikl'][0]}${p['T_cikl'][1:]}",
+        "v": f"'Ряд'!$H${FIRST}:$H${LAST}",
+        "d": f"'Ряд'!$J${FIRST + 1}:$J${LAST}",
     }
+    for nm, cell in p.items():
+        names[nm] = f"'Параметры'!${cell[0]}${cell[1:]}"
     for nm, ref in names.items():
         wb.defined_names[nm] = DefinedName(nm, attr_text=ref)
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     wb.save(OUT)
-    return OUT, calc_rows, extra
+    return OUT, calc.checks + basis.checks, extra
 
 
-def verify(path, calc_rows, extra=()):
-    """Пересчитать книгу движком формул и сверить D с E построчно.
+def verify(path, line_checks, extra=()):
+    """Вычислить формулы книги движком `formulas` и сверить с опубликованным.
 
-    Считает не python по своим правилам, а сами формулы книги — то есть проверяется
-    именно то, что увидит Excel. Движок `formulas` в зависимостях репозитория
-    не значится; без него сверка не выполняется и об этом говорится прямо,
-    а не подменяется молчаливым «ок»."""
+    Считает не «то же самое на python», а сами формулы листа — проверяется то,
+    что увидит Excel. Движок в зависимостях репозитория не значится; без него
+    сверка не выполняется и об этом говорится прямо.
+    """
     try:
         import formulas
     except ImportError:
@@ -598,45 +840,40 @@ def verify(path, calc_rows, extra=()):
     sol = xl.calculate()
     book = {}
     for key, val in sol.items():
-        if "!" not in str(key):
+        ks = str(key)
+        if "!" not in ks:
             continue
-        addr = str(key).split("!")[-1]
-        sheet = str(key).split("]")[-1].split("!")[0].rstrip("'")
+        sheet = ks.split("]")[-1].split("!")[0].rstrip("'")
         try:
-            book[(sheet, addr)] = val.value[0, 0]
+            book[(sheet, ks.split("!")[-1])] = val.value[0, 0]
         except Exception:
-            book[(sheet, addr)] = None
+            book[(sheet, ks.split("!")[-1])] = None
 
     bad = []
-    for rr, tol in calc_rows:
-        got = book.get(("РАСЧЁТ", f"D{rr}"))
-        want = book.get(("РАСЧЁТ", f"E{rr}"))
-        label = book.get(("РАСЧЁТ", f"A{rr}"))
+
+    def cmp(sheet, addr, got, want, tol, label):
         if got is None or isinstance(got, str):
-            bad.append(f"  строка {rr} ({label}): формула не вычислилась -> {got!r}")
-            continue
-        if abs(float(got) - float(want)) > tol:
-            bad.append(f"  строка {rr} ({label}): {float(got):.6f} против "
+            bad.append(f"  {sheet}!{addr} ({label}): не вычислилось -> {got!r}")
+        elif abs(float(got) - float(want)) > tol:
+            bad.append(f"  {sheet}!{addr} ({label}): {float(got):.6f} против "
                        f"{float(want):.6f}, допуск {tol}")
 
+    for sheet, rr, tol in line_checks:
+        cmp(sheet, f"D{rr}", book.get((sheet, f"D{rr}")), book.get((sheet, f"E{rr}")),
+            tol, book.get((sheet, f"A{rr}")))
     for sheet, addr, want, tol in extra:
-        got = book.get((sheet, addr))
-        if got is None or isinstance(got, str):
-            bad.append(f"  {sheet}!{addr}: формула не вычислилась -> {got!r}")
-            continue
-        if abs(float(got) - float(want)) > tol:
-            bad.append(f"  {sheet}!{addr}: {float(got):.6f} против {float(want):.6f}, "
-                       f"допуск {tol}")
-    return bad, len(calc_rows) + len(extra), book
+        cmp(sheet, addr, book.get((sheet, addr)), want, tol, "вне листа «Расчёт»")
+    return bad, len(line_checks) + len(extra)
 
 
 def main():
-    path, calc_rows, extra = build()
-    print(f"собрано: {os.path.relpath(path, HERE)}  ({len(calc_rows)} сверяемых чисел)")
+    path, line_checks, extra = build()
+    total = len(line_checks) + len(extra)
+    print(f"собрано: {os.path.relpath(path, HERE)}  ({total} сверяемых чисел)")
     if "--verify" not in sys.argv:
         print("сверка не запускалась — для неё нужен ключ --verify")
         return 0
-    bad, total, _ = verify(path, calc_rows, extra)
+    bad, total = verify(path, line_checks, extra)
     if bad:
         print(f"РАСХОЖДЕНИЙ: {len(bad)} из {total}")
         print("\n".join(bad))
