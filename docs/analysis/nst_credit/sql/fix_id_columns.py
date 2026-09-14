@@ -27,7 +27,7 @@ CSV можно дополнительно получить ключом --csv.
 Запуск (без аргументов — путь тот же, что у nst_fill_2026.py):
   python fix_id_columns.py
   python fix_id_columns.py --work-dir C:\\work        # если %TEMP% на сети
-  python fix_id_columns.py --engine calamine        # если долго идёт чтение
+  python fix_id_columns.py --engine calamine        # чтение 165 -> 60 с
   python fix_id_columns.py --csv                    # ещё и CSV
   python fix_id_columns.py --selftest               # проверить сам скрипт
 """
@@ -168,6 +168,34 @@ def profile(df, sheet, log):
                int(nonempty.str.startswith("0").sum()), lens.min(), lens.max()))
 
 
+def blank_missing(df, log):
+    """Пропуски -> None до записи.
+
+    xlsxwriter определяет тип значения сам. NaT он принимает за дату и падает
+    на ней: «NaTType does not support isocalendar». Проверки `isinstance(v, float)
+    and v != v` для этого мало — NaT не float, как и pd.NA.
+
+    Дешевле и надёжнее заменить пропуски один раз по колонке, чем проверять
+    каждую из 67 млн ячеек. float64/int64 не трогаем: там пропуск — обычный
+    nan, его ловит проверка при записи.
+    """
+    import pandas as pd  # noqa: F401
+    fixed = []
+    for c in df.columns:
+        col = df[c]
+        dt = str(col.dtype)
+        if dt in ("float64", "int64", "float32", "int32"):
+            continue
+        if not col.isna().any():
+            continue
+        df[c] = col.astype(object).where(col.notna(), None)
+        fixed.append("%s [%s]" % (c, dt))
+    if fixed:
+        log("  пропуски приведены к пустой ячейке в %d колонках: %s"
+            % (len(fixed), ", ".join(fixed[:6]) + (" …" if len(fixed) > 6 else "")))
+    return df
+
+
 def write_book(path, frames, log):
     """Книга через xlsxwriter в постоянной памяти: колонки-идентификаторы
     получают текстовый формат '@', остальные пишутся как есть и остаются
@@ -179,6 +207,7 @@ def write_book(path, frames, log):
     fmt_txt = wb.add_format({"num_format": "@"})
     fmt_hdr = wb.add_format({"bold": True})
     for sheet, df in frames:
+        df = blank_missing(df, log)
         ws = wb.add_worksheet(sheet)
         cols = list(df.columns)
         for j, c in enumerate(cols):
@@ -187,11 +216,18 @@ def write_book(path, frames, log):
         ws.write_row(0, 0, cols, fmt_hdr)
         ws.freeze_panes(1, 0)
         t = time.time()
+        n = len(df)
+        step = 100000 if n > 200000 else 0
         for i, row in enumerate(df.itertuples(index=False, name=None), start=1):
             # NaN в числовых колонках -> пустая ячейка
             ws.write_row(i, 0, [None if (isinstance(v, float) and v != v) else v
                                 for v in row])
-        log("  %s: %d строк за %.1f с" % (sheet, len(df), time.time() - t))
+            if step and i % step == 0:
+                el = time.time() - t
+                log("    %s: %d из %d, %.0f с, осталось ~%.0f с"
+                    % (sheet, i, n, el, el * (n - i) / i))
+        log("  %s: %d строк x %d колонок за %.1f с"
+            % (sheet, n, len(cols), time.time() - t))
     wb.close()
 
 
@@ -206,13 +242,38 @@ def main():
                     help="рабочая папка для локальной копии; по умолчанию %TEMP%")
     ap.add_argument("--sheets", nargs="*", default=SHEETS)
     ap.add_argument("--csv", action="store_true", help="дополнительно выгрузить CSV")
+    ap.add_argument("--fresh", action="store_true",
+                    help="скопировать книгу заново, не переиспользуя локальную копию")
+    ap.add_argument("--cols", default=None,
+                    help="оставить только эти колонки (через запятую); "
+                         "идентификаторы добавляются всегда. Резко сокращает "
+                         "время записи и размер книги")
     ap.add_argument("--engine", default=None,
-                    help="движок чтения: calamine быстрее openpyxl в 10-20 раз")
+                    help="движок чтения: calamine. На этой книге 2,7 раза (165 -> 60 с)")
     ap.add_argument("--selftest", action="store_true",
                     help="проверить to_text/to_iin на известных ловушках и выйти")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())
+
+    # Зависимости проверяются ДО работы. Иначе отсутствующий модуль срывает
+    # прогон после копирования и чтения — на реальном файле это 213 секунд,
+    # выброшенных впустую.
+    missing = []
+    try:
+        import xlsxwriter  # noqa: F401
+    except ImportError:
+        missing.append(("xlsxwriter", "pip install xlsxwriter"))
+    if a.engine == "calamine":
+        try:
+            import python_calamine  # noqa: F401
+        except ImportError:
+            missing.append(("python-calamine", "pip install python-calamine"))
+    if missing:
+        print("не хватает модулей:")
+        for name, how in missing:
+            print("  %-18s %s" % (name, how))
+        sys.exit(1)
 
     t0 = time.time()
     import pandas as pd
@@ -234,7 +295,11 @@ def main():
     # 1. на локальный диск: сетевой не должен участвовать в работе
     if a.work_dir:
         os.makedirs(a.work_dir, exist_ok=True)
-    tmpdir = tempfile.mkdtemp(prefix="fixid_", dir=a.work_dir)
+    # Папка постоянная, а не случайная: локальная копия переиспользуется между
+    # запусками. 497 МБ по SMB — это 47 с, платить их повторно незачем.
+    base = a.work_dir or tempfile.gettempdir()
+    tmpdir = os.path.join(base, "fixid_cache")
+    os.makedirs(tmpdir, exist_ok=True)
 
     kind_work = drive_kind(tmpdir)
     log("источник      : %s   [%s]" % (a.src, drive_kind(a.src)))
@@ -248,11 +313,19 @@ def main():
     log("")
 
     local = os.path.join(tmpdir, os.path.basename(a.src))
-    log("копирую на локальный диск...")
-    t = time.time(); shutil.copy2(a.src, local); t_copy_in = time.time() - t
-    mb = os.path.getsize(local) / 2**20
-    rate = ("%.1f МБ/с" % (mb / t_copy_in)) if t_copy_in > 0.05 else "быстрее, чем измеримо"
-    log("  %.1f МБ за %.1f с (%s)" % (mb, t_copy_in, rate))
+    src_size = os.path.getsize(a.src)
+    have = os.path.isfile(local) and os.path.getsize(local) == src_size
+    if have and not a.fresh:
+        log("локальная копия уже есть, размер совпадает — копирование пропущено")
+        log("  %s" % local)
+        log("  (--fresh заставит скопировать заново)")
+        t_copy_in = 0.0
+    else:
+        log("копирую на локальный диск...")
+        t = time.time(); shutil.copy2(a.src, local); t_copy_in = time.time() - t
+        mb = src_size / 2**20
+        rate = ("%.1f МБ/с" % (mb / t_copy_in)) if t_copy_in > 0.05 else "быстрее, чем измеримо"
+        log("  %.1f МБ за %.1f с (%s)" % (mb, t_copy_in, rate))
     stages = [("импорт pandas", t_import), ("копирование с сетевого диска", t_copy_in)]
 
     # Текстом читаются ТОЛЬКО идентификаторы. Числовые колонки остаются
@@ -295,14 +368,27 @@ def main():
             log("  iin_bin дополнено нулями до 12 знаков: %d значений" % padded)
 
         profile(df, sheet, log)
+
+        if a.cols:
+            want = [c.strip() for c in a.cols.split(",") if c.strip()]
+            keep = [c for c in df.columns if c in want or c in ID_COLS]
+            missing = [c for c in want if c not in df.columns]
+            if missing:
+                log("  нет таких колонок: %s" % ", ".join(missing))
+            df = df[keep]
+            log("  оставлено колонок: %d" % len(keep))
+
         frames.append((sheet, df))
 
     if not frames:
         sys.exit("ни один лист не прочитан")
 
     # 2. книга: идентификаторы текстом, остальное числами
+    cells = sum(len(df) * len(df.columns) for _, df in frames)
     log("")
-    log("пишу книгу...")
+    log("пишу книгу: %.1f млн ячеек, ориентировочно %.0f мин"
+        % (cells / 1e6, cells / 190000.0 / 60))
+    log("  (сократить: --cols \"колонка1,колонка2\" — идентификаторы остаются всегда)")
     t = time.time()
     book = os.path.join(tmpdir, a.out_name)
     write_book(book, frames, log)
@@ -352,7 +438,14 @@ def main():
 
     with open(os.path.join(a.out_dir, "fix_id_columns_log.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
-    shutil.rmtree(tmpdir, ignore_errors=True)
+    for src_f, _ in written:
+        try:
+            os.remove(src_f)
+        except OSError:
+            pass
+    log("")
+    log("локальная копия источника оставлена для повторных прогонов:")
+    log("  %s" % local)
 
 
 if __name__ == "__main__":
