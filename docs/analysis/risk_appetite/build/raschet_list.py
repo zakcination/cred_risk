@@ -31,7 +31,10 @@ Excel такие имена не создаёт, и формулы читали 
 
 import csv
 import os
+import re
 import sys
+
+from metrics_data import METRICS, QUARTERS, EXPECTED
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -40,7 +43,7 @@ from openpyxl.workbook.defined_name import DefinedName
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "..", "data", "top20_monthly_2023_08_2026_07.csv")
-OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.1.xlsx")
+OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.2.xlsx")
 
 # ── оформление ────────────────────────────────────────────────────────────
 INK, MUTED = "FF0B0B0B", "FF6B6A66"
@@ -91,7 +94,7 @@ def note(ws, row, last_col, text, height=30, font=F_MUTED):
 class Ledger:
     """Строка вида «формула словами — формула листа — значение — опубликовано»."""
 
-    def __init__(self, ws, start_row, last_col="H"):
+    def __init__(self, ws, start_row, last_col="E"):
         self.ws, self.row, self.last_col = ws, start_row, last_col
         self.checks, self.anchors = [], {}
 
@@ -106,20 +109,23 @@ class Ledger:
         self.row += 1
 
     def line(self, key, label, words, formula, published, fmt, where, sheet_tag):
+        """Строка листа: словами — формулой — значением — где напечатано.
+
+        Колонок сверки («опубликовано», «расхождение», «сходится») на листе нет:
+        автор убрал их из v1.1, чтобы книга читалась на комитете. Проверка от этого
+        не исчезла — опубликованное значение хранится здесь, и `--verify`
+        сравнивает с ним вычисленную формулу. Лист чистый, контроль остался.
+        """
         ws, rr = self.ws, self.row
         put(ws, f"A{rr}", label, F_BODY, align=WRAP, border=True)
         put(ws, f"B{rr}", words, F_BODY, align=WRAP, border=True)
         put(ws, f"C{rr}", formula, F_MONO, align=WRAP, border=True)
         put(ws, f"D{rr}", "=" + formula, F_BLOCK, fmt, border=True)
-        put(ws, f"E{rr}", published, F_BODY, fmt, border=True)
-        put(ws, f"F{rr}", f"=D{rr}-E{rr}", F_BODY, "0.000000", border=True)
+        put(ws, f"E{rr}", where, F_MUTED, align=WRAP, border=True)
         dec = fmt.split(".")[1].count("0") if "." in fmt else 0
-        tol = 0.5 * 10 ** (-dec) + 1e-12
-        put(ws, f"G{rr}", f'=IF(ABS(F{rr})<={tol:.10f},"да","НЕТ")'.replace("0000000000", "0"),
-            F_BODY, border=True, align=CENTER)
-        put(ws, f"H{rr}", where, F_MUTED, align=WRAP, border=True)
         ws.row_dimensions[rr].height = 30
-        self.checks.append((sheet_tag, rr, tol))
+        self.checks.append((sheet_tag, f"D{rr}", published,
+                            0.5 * 10 ** (-dec) + 1e-12))
         if key:
             self.anchors[key] = f"D{rr}"
         self.row += 1
@@ -129,21 +135,6 @@ class Ledger:
             put(self.ws, f"{get_column_letter(i + 1)}4", t, F_HEAD, fill=HEAD_BG,
                 border=True, align=Alignment(wrap_text=True, vertical="bottom"))
         self.ws.row_dimensions[4].height = 30
-
-    def total(self, label):
-        self.row += 1
-        rr = self.row
-        lo, hi = self.checks[0][1], self.checks[-1][1]
-        put(self.ws, f"A{rr}", label, F_BLOCK, fill=BLOCK_BG, border=True)
-        put(self.ws, f"B{rr}", f'=COUNTIF(G{lo}:G{hi},"НЕТ")', F_BLOCK, "0",
-            fill=BLOCK_BG, border=True)
-        put(self.ws, f"C{rr}",
-            "Ноль означает: все опубликованные числа воспроизводятся формулами этой "
-            "книги. Это не означает, что формулы верны по существу — воспроизводимость "
-            "и правильность разные вещи.", F_MUTED, align=WRAP, fill=BLOCK_BG, border=True)
-        self.ws.merge_cells(f"C{rr}:{self.last_col}{rr}")
-        self.ws.row_dimensions[rr].height = 32
-        self.row += 1
 
 
 # ── лист «Ряд» ────────────────────────────────────────────────────────────
@@ -267,17 +258,16 @@ def sheet_params(wb, k_row):
 def sheet_calc(wb):
     ws = wb.create_sheet("Расчёт")
     put(ws, "A1", "Расчётный лист: формула, вход, результат", F_TITLE)
-    note(ws, 2, "H",
+    note(ws, 2, "E",
          "Колонка D считается формулой из листов «Ряд» и «Параметры». Колонка E — то, "
          "что напечатано в DECOMPOSITION § 11.10 и DISCLOSURE § 2. Колонка G должна быть "
          "«да» во всех строках: иначе опубликованное число разошлось с расчётом.", 30)
-    for col, w in (("A", 36), ("B", 44), ("C", 38), ("D", 13),
-                   ("E", 13), ("F", 12), ("G", 10), ("H", 22)):
+    for col, w in (("A", 36), ("B", 46), ("C", 40), ("D", 14), ("E", 22)):
         ws.column_dimensions[col].width = w
 
     L = Ledger(ws, 5)
     L.headers(("Показатель", "Формула словами", "Формула в этой книге", "Значение",
-               "Опубликовано", "Расхождение", "Сходится", "Где напечатано"))
+               "Где напечатано"))
 
     L.block("1. База: что даёт сам ряд")
     L.line("sigma_d", "σ_Δ — с.к.о. месячных приростов",
@@ -297,6 +287,9 @@ def sheet_calc(wb):
     L.line("L", "L — уровень в балансовой базе",
            "действующий уровень 95 %, пересчитанный под балансовый капитал: L_рег / k",
            "L_reg/k_G26", 108.6304, "0.0000", "DISCLOSURE § 2.2", "РАСЧЁТ")
+    L.line("Xpct", "X — жёлтая граница в процентах лимита",
+           "1 − M(T)/L: доля лимита, на которой стоит жёлтая линия",
+           "PLACEHOLDER_X", 91.6902, "0.0000", "новое, 14.09.2026", "РАСЧЁТ")
     L.note("Это одна величина в двух системах измерения, а не два разных лимита. Фраза "
            "«пробит лимит 95 % по балансовому капиталу» — категориальная ошибка: "
            "числитель берётся из одной базы, знаменатель из другой. Значение 108,6304 "
@@ -322,6 +315,12 @@ def sheet_calc(wb):
         L.line(None, f"Доля времени выше жёлтой, T = {T}", "их доля от 36 наблюдений",
                f'COUNTIF(v,">="&{L.anchors[f"Y{T}"]})/COUNT(v)*100', pub_s[T], "0.0",
                "DISCLOSURE § 2.3, Р-Д3", "РАСЧЁТ")
+    # X ссылается на M(3), который считается ниже строки X, — подставляем после
+    xr = L.anchors["Xpct"]
+    f_x = f"(1-{L.anchors['M3']}/{L.anchors['L']})*100"
+    put(ws, f"C{xr[1:]}", f_x, F_MONO, align=WRAP, border=True)
+    put(ws, f"D{xr[1:]}", "=" + f_x, F_BLOCK, "0.0000", border=True)
+
     L.note("Р-Д3: доля в процентах от 36 наблюдений читается точнее, чем есть. 2,8 % — "
            "это одно наблюдение, 11,1 % — четыре. На комитете доля называется только "
            "вместе с числом наблюдений, поэтому строка «Наблюдений» стоит выше строки "
@@ -374,7 +373,6 @@ def sheet_calc(wb):
     L.note("31 наблюдение из 36 — это светофор с постоянно горящей жёлтой лампой. "
            "Именно это число отвечает на предложение «оставить 95 % и ничего не менять».")
 
-    L.total("Строк не сошлось")
     ws.freeze_panes = "A5"
     return L
 
@@ -384,19 +382,18 @@ def sheet_basis(wb, calc):
     """Четыре проверки допущений, на которых стоит M(T) = z·σ·√T."""
     ws = wb.create_sheet("Обоснование M(T)")
     put(ws, "A1", "Обоснование формулы M(T) = z(p) · σ_Δ · √T", F_TITLE)
-    note(ws, 2, "H",
+    note(ws, 2, "E",
          "Формула держится на трёх допущениях: приросты независимы (отсюда √T), "
          "распределение суммы близко к нормальному (отсюда z), дрейфа нет. Ниже каждое "
          "проверено на нашем же ряде. Колонки J–N — служебные: T-месячные изменения, "
          "по которым считаются проверки.", 42)
-    for col, w in (("A", 36), ("B", 44), ("C", 38), ("D", 13),
-                   ("E", 13), ("F", 12), ("G", 10), ("H", 22)):
+    for col, w in (("A", 36), ("B", 46), ("C", 40), ("D", 14), ("E", 22)):
         ws.column_dimensions[col].width = w
 
     # служебные колонки: изменения за T месяцев
     helper = {}
     for idx, T in enumerate((1, 2, 3, 4, 6)):
-        col = get_column_letter(10 + idx)          # J, K, L, M, N
+        col = get_column_letter(7 + idx)           # G, H, I, J, K
         ws.column_dimensions[col].width = 13
         put(ws, f"{col}4", f"Изменение за {T} мес.", F_HEAD, fill=HEAD_BG, border=True,
             align=Alignment(wrap_text=True, vertical="bottom"))
@@ -405,9 +402,9 @@ def sheet_basis(wb, calc):
             put(ws, f"{col}{rr}", f"=Ряд!H{rr + T}-Ряд!H{rr}", F_BODY, "0.0000")
         helper[T] = f"${col}${FIRST}:${col}${end}"
 
-    L = Ledger(ws, 5, last_col="H")
+    L = Ledger(ws, 5, last_col="E")
     L.headers(("Проверка", "Что именно проверяется", "Формула в этой книге", "Значение",
-               "Ожидание", "Расхождение", "Сходится", "Как читать"))
+               "Как читать"))
 
     sd = f"'Расчёт'!{calc.anchors['sigma_d']}"
 
@@ -521,20 +518,33 @@ def sheet_basis(wb, calc):
     L.note("0,10 пп против буфера 9,03 — меньше 1 %. Допущение нулевого дрейфа "
            "безвредно, слагаемое μ·T в формулу не добавляется.")
 
-    L.total("Строк не сошлось")
     ws.freeze_panes = "A5"
     return L
 
 
 # ── лист «Зоны» ───────────────────────────────────────────────────────────
 def sheet_zones(wb, calc):
+    """Три состояния: зелёная — жёлтая с X %% лимита — красная от лимита.
+
+    Разметка выбрана автором 14.09.2026. До этого таблица трактовала пробой
+    внутри красной (строка без верхней границы), а формула текущего состояния
+    различала четыре состояния, включая ПРОБОЙ, — таблица и формула
+    противоречили друг другу. Здесь противоречие снято: красная начинается
+    ровно на лимите, и «красная» есть синоним нарушения.
+
+    Цена решения, названная прямо на листе: красная лампа за 36 месяцев не
+    загоралась ни разу и загорится только в момент нарушения. Вся нагрузка
+    предупреждения ложится на жёлтую границу, то есть на X.
+    """
     ws = wb.create_sheet("Зоны")
-    put(ws, "A1", "Зоны: зелёная, жёлтая, красная", F_TITLE)
+    put(ws, "A1", "Зоны: зелёная — жёлтая — красная", F_TITLE)
     note(ws, 2, "G",
-         "Границы зон — не подобранные числа, а одна и та же формула L − M(T) при разном "
-         "T. Поэтому зона читается как ОСТАТОК ВРЕМЕНИ до лимита, а не как цвет.", 30)
-    for col, w in (("A", 22), ("B", 30), ("C", 13), ("D", 13),
-                   ("E", 13), ("F", 11), ("G", 54)):
+         "Жёлтая граница = X %% лимита, где X = 1 − M(T)/L считается из волатильности "
+         "самой метрики, а не назначается. Красная начинается на лимите. Поэтому "
+         "разметка не содержит ни одного подобранного числа: L приходит из ВНД, "
+         "X — из ряда.", 42)
+    for col, w in (("A", 24), ("B", 30), ("C", 14), ("D", 14),
+                   ("E", 12), ("F", 10), ("G", 54)):
         ws.column_dimensions[col].width = w
     for col, t in (("A", "Зона"), ("B", "Что означает"), ("C", "Нижняя граница"),
                    ("D", "Верхняя граница"), ("E", "Наблюдений"), ("F", "Доля, %"),
@@ -543,21 +553,22 @@ def sheet_zones(wb, calc):
             align=Alignment(wrap_text=True, vertical="bottom"))
     ws.row_dimensions[4].height = 30
 
-    Lc, y1, y3 = calc.anchors["L"], calc.anchors["Y1"], calc.anchors["Y3"]
     R = "'Расчёт'!"
+    Lc, y3 = R + calc.anchors["L"], R + calc.anchors["Y3"]
     rows = [
-        ("Зелёная", "больше трёх месяцев запаса", None, f"{R}{y3}",
-         f'COUNTIF(v,"<"&{R}{y3})', 32, GREEN_BG,
-         "Штатное наблюдение: ежемесячный отчёт, без отдельных действий"),
-        ("Жёлтая", "от одного до трёх месяцев", f"{R}{y3}", f"{R}{y1}",
-         f'COUNTIFS(v,">="&{R}{y3},v,"<"&{R}{y1})', 3, YELLOW_BG,
-         "Ускоренное наблюдение и заранее согласованные меры. Времени на решение "
-         "ещё хватает — в этом весь смысл границы"),
-        ("Красная", "меньше месяца либо пробой", f"{R}{y1}", None,
-         f'COUNTIF(v,">="&{R}{y1})', 1, RED_BG,
-         "Эскалация на уполномоченный орган. Граница стоит НИЖЕ лимита сознательно: "
-         "красная лампа, загорающаяся в момент пробоя, не предупреждает, а "
-         "протоколирует"),
+        ("Зелёная", "в пределах аппетита", None, y3,
+         f'COUNTIF(v,"<"&{y3})', 32, GREEN_BG,
+         "Штатное наблюдение: ежемесячный отчёт, отдельных действий не требуется"),
+        ("Жёлтая", "достигнут уровень, определённый как допустимый", y3, Lc,
+         f'COUNTIFS(v,">="&{y3},v,"<"&{Lc})', 4, YELLOW_BG,
+         "Ускоренное наблюдение и заранее согласованные меры. До лимита ещё есть "
+         "время — в этом и смысл границы. Основание такого порога — Правила № 86, "
+         "п. 18 пп. 2 (в CITED.md дословно не заведён, читать оригинал)"),
+        ("Красная", "нарушение лимита", Lc, None,
+         f'COUNTIF(v,">="&{Lc})', 0, RED_BG,
+         "Эскалация на уполномоченный орган по Политике п. 12-1 и п. 27. "
+         "Конкретных мер и сроков в ВНД нет — это открытый пробел, а не пропуск "
+         "в этой книге"),
     ]
     checks = []
     r = 5
@@ -569,19 +580,19 @@ def sheet_zones(wb, calc):
         put(ws, f"E{r}", f"={cnt}", F_BLOCK, "0", border=True, align=CENTER, fill=bg)
         put(ws, f"F{r}", f"=E{r}/COUNT(v)*100", F_BODY, "0.0", border=True, fill=bg)
         put(ws, f"G{r}", act, F_MUTED, align=WRAP, border=True, fill=bg)
-        ws.row_dimensions[r].height = 46
+        ws.row_dimensions[r].height = 52
         checks.append(("ЗОНЫ", f"E{r}", pub, 0.5))
         r += 1
 
     put(ws, f"A{r}", "Всего", F_BLOCK, border=True, fill=BLOCK_BG)
+    for col in ("B", "C", "D"):
+        put(ws, f"{col}{r}", None, border=True, fill=BLOCK_BG)
     put(ws, f"E{r}", f"=SUM(E5:E{r - 1})", F_BLOCK, "0", border=True, align=CENTER,
         fill=BLOCK_BG)
     put(ws, f"F{r}", f"=E{r}/COUNT(v)*100", F_BODY, "0.0", border=True, fill=BLOCK_BG)
-    put(ws, f"G{r}", "Должно быть 36 и 100,0 % — иначе границы зон не покрывают ряд "
+    put(ws, f"G{r}", "Должно быть 36 и 100,0 %% — иначе границы не покрывают ряд "
                      "целиком либо перекрываются.", F_MUTED, align=WRAP, border=True,
         fill=BLOCK_BG)
-    for col in ("B", "C", "D"):
-        put(ws, f"{col}{r}", None, border=True, fill=BLOCK_BG)
     checks.append(("ЗОНЫ", f"E{r}", N_POINTS, 0.5))
     ws.row_dimensions[r].height = 30
     r += 2
@@ -590,39 +601,38 @@ def sheet_zones(wb, calc):
     r += 1
     cur = [
         ("Текущая точка, 01.07.2026", f"={R}{calc.anchors['v_last']}", 101.5041, "0.0000"),
-        ("Граница жёлтой (3 мес.)", f"={R}{y3}", 99.6034, "0.0000"),
-        ("Граница красной (1 мес.)", f"={R}{y1}", 103.4187, "0.0000"),
-        ("Лимит", f"={R}{Lc}", 108.6304, "0.0000"),
-        ("До лимита, пп", f"={R}{Lc}-{R}{calc.anchors['v_last']}", 7.1263, "0.0000"),
+        ("Жёлтая граница", f"={y3}", 99.6034, "0.0000"),
+        ("X — жёлтая в процентах лимита", f"={R}{calc.anchors['Xpct']}", 91.6902, "0.0000"),
+        ("Лимит (начало красной)", f"={Lc}", 108.6304, "0.0000"),
+        ("До лимита, пп", f"={Lc}-{R}{calc.anchors['v_last']}", 7.1263, "0.0000"),
         ("T* — остаток времени, мес.", f"={R}{calc.anchors['Tstar']}", 1.8697, "0.0000"),
     ]
     for label, formula, pub, fmt in cur:
         put(ws, f"A{r}", label, F_BODY, border=True)
         put(ws, f"B{r}", formula, F_BLOCK, fmt, border=True)
-        put(ws, f"C{r}", pub, F_MUTED, fmt, border=True)
-        put(ws, f"D{r}", "опубликовано", F_MUTED, border=True)
         checks.append(("ЗОНЫ", f"B{r}", pub, 0.00005))
         r += 1
-
-    put(ws, f"A{r}", "Зона текущей точки", F_BODY, border=True)
+    put(ws, f"A{r}", "Состояние текущей точки", F_BODY, border=True)
     put(ws, f"B{r}",
-        f'=IF({R}{calc.anchors["v_last"]}>={R}{Lc},"ПРОБОЙ",'
-        f'IF({R}{calc.anchors["v_last"]}>={R}{y1},"КРАСНАЯ",'
-        f'IF({R}{calc.anchors["v_last"]}>={R}{y3},"ЖЁЛТАЯ","ЗЕЛЁНАЯ")))',
+        f'=IF({R}{calc.anchors["v_last"]}>={Lc},"КРАСНАЯ — нарушение",'
+        f'IF({R}{calc.anchors["v_last"]}>={y3},"ЖЁЛТАЯ","ЗЕЛЁНАЯ"))',
         F_BLOCK, border=True, fill=YELLOW_BG)
     r += 2
 
     note(ws, r, "G",
-         "Красная зона по этой разметке за 36 месяцев загоралась один раз — 01.2024. "
-         "Пробоев не было ни разу, поэтому метод G (калибровка по историческим "
-         "превышениям) на этом ряде неприменим: калибровать не на чем.", 30, F_BODY)
+         "Цена этой разметки, названная прямо: красная зона за 36 месяцев не "
+         "загоралась НИ РАЗУ и загорится только в момент нарушения лимита. "
+         "Предупреждение целиком держится на жёлтой границе. Поэтому метод G "
+         "(калибровка по историческим превышениям) на этом ряде неприменим — "
+         "превышений ноль, калибровать не на чем.", 44, F_BODY)
     r += 1
     note(ws, r, "G",
-         "ОТКРЫТЫЙ ВОПРОС. Стратегия риск-аппетита, п. 26, задаёт «три предела уровня "
-         "рисков». Разметка выше содержит три зоны и потому с ним совместима — но п. 26 "
-         "у нас процитирован по карте документов и ДОСЛОВНО НЕ РАЗОБРАН. Пока он не "
-         "прочитан, эти три зоны являются нашим предложением, а не соответствием ВНД, "
-         "и заявлять обратное на комитете нельзя.", 48, F_BODY)
+         "ОТКРЫТЫЙ ВОПРОС. Стратегия риск-аппетита, п. 26, задаёт «три предела "
+         "уровня рисков». Три предела дают четыре состояния, здесь их три — значит "
+         "один из пределов либо совпадает с лимитом, либо не используется. Пункт "
+         "дословно НЕ РАЗОБРАН. Отдельно неизвестно, каким из трёх пределов "
+         "являются наши 95 %%: если это «допустимый уровень», а не предельный, "
+         "то буфер вычитается не из того числа.", 52, F_BODY)
     return checks
 
 
@@ -791,6 +801,146 @@ def sheet_guide(wb):
         r += 1
 
 
+
+# ── лист «Метрики» ────────────────────────────────────────────────────────
+def sheet_metrics(wb, calc):
+    """Та же методика на остальных кредитных метриках риск-аппетита.
+
+    Ключевая величина — X = 1 − z(p)·σ_Δ·√T / L: доля лимита, на которой стоит
+    жёлтая граница. Это σ-метод, выраженный в процентах лимита, поэтому X не
+    назначается, а вычисляется из волатильности самой метрики.
+
+    Главный вывод листа виден в колонке X: она разбегается от 64 %% до 99 %%.
+    Единого «правильного процента» не существует — у метрики с крошечной σ
+    жёлтая стоит вплотную к лимиту, у волатильной сильно ниже. Любое единое
+    число (85 %%, 90 %%) есть компромисс, а не калибровка.
+    """
+    ws = wb.create_sheet("Метрики")
+    put(ws, "A1", "Масштабирование: X = 1 − z(p)·σ_Δ·√T / L по кредитным метрикам",
+        F_TITLE)
+    note(ws, 2, "G",
+         "Колонки D–L — квартальный ряд формы № 50 (лист 50-5), N–U — приросты, "
+         "W–AG — расчёт. Топ-20 в первой строке взят из месячного ряда листа «Ряд»: "
+         "его квартальная строка в форме склеивает две базы капитала и даёт "
+         "завышенную σ. T = 3 месяца, поэтому на квартальном шаге √T = 1.", 44)
+
+    heads = [("A", "Метрика", 30), ("B", "Сегмент", 9), ("C", "Лимит L", 10)]
+    for i, qt in enumerate(QUARTERS):
+        heads.append((get_column_letter(4 + i), qt, 10))
+    heads.append(("M", " ", 2))
+    for i in range(8):
+        heads.append((get_column_letter(14 + i), f"Δ{i + 1}", 9))
+    heads.append(("V", " ", 2))
+    for col, t, w in (("W", "Точек", 7), ("X", "Шаг, мес", 8), ("Y", "T, шагов", 8),
+                      ("Z", "σ_Δ", 9), ("AA", "M(T)", 9), ("AB", "X, % лимита", 11),
+                      ("AC", "Жёлтая = L·X", 12), ("AD", "Факт", 10),
+                      ("AE", "Зона", 11), ("AF", "D, σ", 9), ("AG", "SE(σ)", 9)):
+        heads.append((col, t, w))
+    for col, t, w in heads:
+        put(ws, f"{col}4", t, F_HEAD, fill=HEAD_BG, border=True,
+            align=Alignment(wrap_text=True, vertical="bottom"))
+        ws.column_dimensions[col].width = w
+    ws.row_dimensions[4].height = 34
+
+    checks = []
+    R = "'Расчёт'!"
+
+    # строка топ-20 — ссылками на уже защищённый месячный расчёт
+    r = 5
+    put(ws, f"A{r}", "Топ-20 / собственный капитал", F_BLOCK, border=True, fill=BLOCK_BG)
+    put(ws, f"B{r}", "KB", F_BODY, border=True, fill=BLOCK_BG)
+    put(ws, f"C{r}", f"={R}{calc.anchors['L']}", F_BODY, "0.0000", border=True,
+        fill=BLOCK_BG)
+    put(ws, f"D{r}", "месячный ряд листа «Ряд», 36 точек — здесь не дублируется",
+        F_MUTED, align=WRAP, fill=BLOCK_BG)
+    ws.merge_cells(f"D{r}:U{r}")
+    for col, formula, fmt, pub in (
+            ("W", f"={R}{calc.anchors['n_pts']}", "0", 36),
+            ("X", "=1", "0", 1),
+            ("Y", "=T_cikl/X5", "0.0", 3.0),
+            ("Z", f"={R}{calc.anchors['sigma_d']}", "0.0000", 4.0667),
+            ("AA", f"={R}{calc.anchors['M3']}", "0.0000", 9.0270),
+            ("AB", f"={R}{calc.anchors['Xpct']}", "0.0000", 91.6902),
+            ("AC", f"={R}{calc.anchors['Y3']}", "0.0000", 99.6034),
+            ("AD", f"={R}{calc.anchors['v_last']}", "0.0000", 101.5041),
+            ("AF", "=(C5-AD5)/Z5", "0.00", 1.75),
+            ("AG", "=Z5/SQRT(2*(W5-2))", "0.0000", 0.4932)):
+        put(ws, f"{col}{r}", formula, F_BODY, fmt, border=True, fill=BLOCK_BG)
+        checks.append(("МЕТРИКИ", f"{col}{r}", pub, 0.5 * 10 ** (-len(fmt.split(".")[1])
+                                                                if "." in fmt else 0)
+                       + 1e-12))
+    put(ws, f"AE{r}", '=IF(AD5>=C5,"КРАСНАЯ",IF(AD5>=AC5,"ЖЁЛТАЯ","зелёная"))',
+        F_BLOCK, border=True, align=CENTER, fill=YELLOW_BG)
+
+    # одиннадцать квартальных метрик
+    for code, title, seg, lim, vals in METRICS:
+        r += 1
+        put(ws, f"A{r}", title, F_BODY, align=WRAP, border=True)
+        put(ws, f"B{r}", seg, F_BODY, border=True, align=CENTER)
+        put(ws, f"C{r}", lim, F_BODY, "0.00", border=True)
+        for i, x in enumerate(vals):
+            put(ws, f"{get_column_letter(4 + i)}{r}", x, F_BODY, "0.0000", border=True)
+        for i in range(8):
+            a, b = get_column_letter(4 + i), get_column_letter(5 + i)
+            put(ws, f"{get_column_letter(14 + i)}{r}", f"={b}{r}-{a}{r}", F_BODY,
+                "0.0000", border=True)
+        put(ws, f"W{r}", f"=COUNT(D{r}:L{r})", F_BODY, "0", border=True)
+        put(ws, f"X{r}", 3, F_BODY, "0", border=True)
+        put(ws, f"Y{r}", f"=T_cikl/X{r}", F_BODY, "0.0", border=True)
+        put(ws, f"Z{r}", f"=STDEV(N{r}:U{r})", F_BODY, "0.0000", border=True)
+        put(ws, f"AA{r}", f"=z_p*Z{r}*SQRT(Y{r})", F_BODY, "0.0000", border=True)
+        put(ws, f"AB{r}", f"=(1-AA{r}/C{r})*100", F_BLOCK, "0.0000", border=True)
+        put(ws, f"AC{r}", f"=C{r}*AB{r}/100", F_BODY, "0.0000", border=True)
+        put(ws, f"AD{r}", f"=L{r}", F_BODY, "0.0000", border=True)
+        put(ws, f"AE{r}", f'=IF(AD{r}>=C{r},"КРАСНАЯ",IF(AD{r}>=AC{r},"ЖЁЛТАЯ","зелёная"))',
+            F_BODY, border=True, align=CENTER, fill=GREEN_BG)
+        put(ws, f"AF{r}", f"=(C{r}-AD{r})/Z{r}", F_BODY, "0.00", border=True)
+        put(ws, f"AG{r}", f"=Z{r}/SQRT(2*(W{r}-2))", F_BODY, "0.0000", border=True)
+        ws.row_dimensions[r].height = 28
+        sg, xp, yl, dd = EXPECTED[(code, seg)]
+        checks.append(("МЕТРИКИ", f"Z{r}", sg, 0.00005))
+        checks.append(("МЕТРИКИ", f"AB{r}", xp, 0.005))
+        checks.append(("МЕТРИКИ", f"AC{r}", yl, 0.00005))
+        checks.append(("МЕТРИКИ", f"AF{r}", dd, 0.005))
+
+    last = r
+    r += 2
+    put(ws, f"A{r}", "Что из этого следует", F_BLOCK)
+    r += 1
+    for title, text in (
+        ("Единого X не существует",
+         "Колонка AB разбегается от 63,6 %% (CoR) до 99,2 %% (PD необеспеченных). "
+         "X = 1 − z·σ·√T/L зависит от волатильности относительно лимита: у PD и EL "
+         "σ крошечная, им жёлтая нужна вплотную к лимиту; у CoR и топ-20 σ большая. "
+         "Единый порог 85 %% для CoR поздний, для PD ранний в десять раз."),
+        ("Одиннадцать метрик из двенадцати — зелёные, и это правда",
+         "Колонка AF: расстояние до лимита 8,6–84,8 σ. Это не пробел в наблюдении, "
+         "а факт: метрики не могут дойти до своих лимитов. Панель из одиннадцати "
+         "зелёных ламп надо подавать именно так, а не как «всё под контролем»."),
+        ("σ известна с точностью ±25 %%",
+         "Колонка AG — стандартная ошибка σ. При восьми приростах она составляет "
+         "около четверти самой σ, тогда как на месячном ряде топ-20 — 12 %%. "
+         "Жёлтая граница у квартальных метрик известна с той же точностью."),
+        ("Дрейф, которого формула не учитывает",
+         "У PD необеспеченных средний квартальный прирост по модулю превышает весь "
+         "буфер M(T). Ряды не блуждают, а падают монотонно; для тренда σ приростов "
+         "измеряет наклон, а не волатильность. Допущение нулевого дрейфа, безвредное "
+         "на топ-20, здесь не выполняется."),
+        ("Чего на этом листе нет",
+         "Лимитов-полов. У кредитных метрик все лимиты — потолки, и формула верна. "
+         "Для k1, LCR, NSFR опасность в падении, и жёлтая должна считаться как "
+         "L·(1 + M/L), а не L·(1 − M/L). Если панель станет общей по всем рискам, "
+         "формула обязана знать направление метрики."),
+    ):
+        put(ws, f"A{r}", title, F_BLOCK, align=WRAP, fill=BLOCK_BG, border=True)
+        put(ws, f"B{r}", text, F_BODY, align=WRAP, border=True)
+        ws.merge_cells(f"B{r}:L{r}")
+        ws.row_dimensions[r].height = max(40, 13 * (len(text) // 105 + 1))
+        r += 1
+    ws.freeze_panes = "D5"
+    return checks
+
+
 # ── сборка ────────────────────────────────────────────────────────────────
 def build():
     rows = load_rows()
@@ -803,6 +953,7 @@ def build():
     extra = sheet_zones(wb, calc)
     extra += sheet_sigmas(wb, calc)
     extra += sheet_triggers(wb)
+    extra += sheet_metrics(wb, calc)
     sheet_guide(wb)
 
     names = {
@@ -816,14 +967,16 @@ def build():
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     wb.save(OUT)
-    return OUT, calc.checks + basis.checks, extra
+    return OUT, calc.checks + basis.checks + extra
 
 
-def verify(path, line_checks, extra=()):
+def verify(path, checks):
     """Вычислить формулы книги движком `formulas` и сверить с опубликованным.
 
     Считает не «то же самое на python», а сами формулы листа — проверяется то,
-    что увидит Excel. Движок в зависимостях репозитория не значится; без него
+    что увидит Excel. Опубликованные значения хранятся здесь, а не в ячейках:
+    колонки сверки с листов убраны, чтобы книга читалась на комитете, но контроль
+    от этого не исчез. Движок в зависимостях репозитория не значится; без него
     сверка не выполняется и об этом говорится прямо.
     """
     try:
@@ -850,30 +1003,27 @@ def verify(path, line_checks, extra=()):
             book[(sheet, ks.split("!")[-1])] = None
 
     bad = []
-
-    def cmp(sheet, addr, got, want, tol, label):
+    for sheet, addr, want, tol in checks:
+        got = book.get((sheet, addr))
+        row_no = re.sub(r"^[A-Z]+", "", addr)
+        label = book.get((sheet, "A" + row_no)) if row_no else None
         if got is None or isinstance(got, str):
             bad.append(f"  {sheet}!{addr} ({label}): не вычислилось -> {got!r}")
-        elif abs(float(got) - float(want)) > tol:
+            continue
+        if abs(float(got) - float(want)) > tol:
             bad.append(f"  {sheet}!{addr} ({label}): {float(got):.6f} против "
                        f"{float(want):.6f}, допуск {tol}")
-
-    for sheet, rr, tol in line_checks:
-        cmp(sheet, f"D{rr}", book.get((sheet, f"D{rr}")), book.get((sheet, f"E{rr}")),
-            tol, book.get((sheet, f"A{rr}")))
-    for sheet, addr, want, tol in extra:
-        cmp(sheet, addr, book.get((sheet, addr)), want, tol, "вне листа «Расчёт»")
-    return bad, len(line_checks) + len(extra)
+    return bad, len(checks)
 
 
 def main():
-    path, line_checks, extra = build()
-    total = len(line_checks) + len(extra)
+    path, checks = build()
+    total = len(checks)
     print(f"собрано: {os.path.relpath(path, HERE)}  ({total} сверяемых чисел)")
     if "--verify" not in sys.argv:
         print("сверка не запускалась — для неё нужен ключ --verify")
         return 0
-    bad, total = verify(path, line_checks, extra)
+    bad, total = verify(path, checks)
     if bad:
         print(f"РАСХОЖДЕНИЙ: {len(bad)} из {total}")
         print("\n".join(bad))
