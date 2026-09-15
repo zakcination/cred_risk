@@ -15,6 +15,16 @@
 Сверка считает не «то же самое на python», а сами формулы листа — иначе проверялась
 бы вторая реализация, а не книга. Допуск — половина последнего напечатанного разряда.
 
+Редакция 15.09.2026, пятая:
+  • ВСЕ двенадцать кредитных метрик переведены на месячные ряды по 36 точек.
+    EL и PD взяты с листа `Monthly` книги Приложения № 3 — он был получен
+    04.09.2026 и описан в DECOMPOSITION § 10.1 как «заполнены, 36/36», но
+    в data/ не выгружался, и первые редакции считали их на девяти квартальных
+    точках. Погрешность σ упала с ±27 % до ±12 %, выводы по девяти розничным
+    метрикам не изменились: все зелёные, расстояние до лимита 19,2–103,9 σ.
+  • Вставлены пять иллюстраций. Те, что разошлись с числами книги, сознательно
+    пропущены — перечень и причины в словаре IMAGES.
+
 Редакция 15.09.2026, четвёртая — исправление:
   • CoR по КБ/ПБ и по МСБ переведены с квартального ряда (9 точек) на месячный
     (36 точек). Обе колонки всё это время лежали в том же файле, что и топ-20,
@@ -55,17 +65,19 @@ import os
 import re
 import sys
 
-from metrics_data import (METRICS, QUARTERS, EXPECTED_LADDER, EXPECTED_PCT,
-                          MONTHLY_METRICS, EXPECTED_MONTHLY)
+from metrics_data import (DATES, METRICS_RB, METRICS_COR,
+                          EXPECTED_RB, EXPECTED_COR)
 
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.defined_name import DefinedName
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+VIZ = os.path.join(HERE, "..", "viz")
 DATA = os.path.join(HERE, "..", "data", "top20_monthly_2023_08_2026_07.csv")
-OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.4.xlsx")
+OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.5.xlsx")
 
 # ── оформление ────────────────────────────────────────────────────────────
 INK, MUTED = "FF0B0B0B", "FF6B6A66"
@@ -989,61 +1001,73 @@ def sheet_guide(wb):
 
 # ── листы «Метрики — ряд» и «Метрики» ─────────────────────────────────────
 def sheet_metrics_data(wb):
-    """Квартальный ряд одиннадцати метрик и приросты по нему.
+    """Месячный ряд девяти розничных метрик и приросты по нему, 36 точек.
 
-    Вынесен с расчётного листа отдельно: там девять колонок кварталов и восемь
-    приростов заслоняли то, ради чего лист сделан. Здесь они живут как данные,
-    а лист «Метрики» ссылается на них формулами — вбитых значений расчёта
-    по-прежнему нет нигде.
+    Вынесен отдельно от расчётного листа: тридцать шесть колонок значений и
+    тридцать пять приростов заслоняли бы то, ради чего лист сделан. Здесь они
+    живут как данные, а лист «Метрики» ссылается на них формулами.
+
+    Топ-20 и CoR сюда не входят — их месячный ряд уже лежит на листе «Ряд».
     """
     ws = wb.create_sheet("Метрики — ряд")
-    put(ws, "A1", "Квартальный ряд кредитных метрик риск-аппетита", F_TITLE)
-    note(ws, 2, "U",
-         "Источник: форма № 50 Приложения № 2 к Инструкции по формированию "
-         "управленческой и финансовой отчётности, лист «Выводы» (форма 50-5), "
-         "отчётная дата 01.07.2026. Строка топ-20 из той же формы сюда НЕ перенесена: "
-         "она склеивает две базы капитала (скачок 75,6 → 92,7 на Q1 2026 есть смена "
-         "знаменателя, а не движение риска), и σ по ней завышена вдвое. Топ-20 берётся "
-         "из месячного ряда листа «Ряд».", 46)
-    heads = [("A", "Метрика", 30), ("B", "Сегмент", 9), ("C", "Лимит L", 10)]
-    for i, qt in enumerate(QUARTERS):
-        heads.append((get_column_letter(4 + i), qt, 10))
-    heads.append(("M", " ", 2))
-    for i in range(8):
-        heads.append((get_column_letter(14 + i), f"Δ{i + 1}", 9))
-    for col, t, w in heads:
-        put(ws, f"{col}4", t, F_HEAD, fill=HEAD_BG, border=True,
+    put(ws, "A1", "Месячный ряд розничных метрик: 36 точек, 01.08.2023 — 01.07.2026",
+        F_TITLE)
+    note(ws, 2, "L",
+         "Источник: лист Monthly книги Приложения № 3 к Политике, получен 04.09.2026. "
+         "Значения в процентах — в исходном листе они долями. Сверено с квартальной "
+         "формой № 50 на 01.07.2026: максимальное расхождение 0,0009 пп. ОГОВОРКА "
+         "(DECOMPOSITION § 10.2): из 36 месяцев с отчётностью сверены 20, первые 16 — "
+         "реконструкция, величин уполномоченный орган не видел.", 46)
+
+    put(ws, "A4", "Метрика", F_HEAD, fill=HEAD_BG, border=True)
+    put(ws, "B4", "Сегмент", F_HEAD, fill=HEAD_BG, border=True)
+    put(ws, "C4", "Лимит L", F_HEAD, fill=HEAD_BG, border=True)
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 9
+    ws.column_dimensions["C"].width = 9
+    for i, dt in enumerate(DATES):
+        col = get_column_letter(4 + i)
+        put(ws, f"{col}4", dt[:7], F_HEAD, fill=HEAD_BG, border=True,
             align=Alignment(wrap_text=True, vertical="bottom"))
-        ws.column_dimensions[col].width = w
+        ws.column_dimensions[col].width = 9
+    put(ws, f"{get_column_letter(40)}4", " ", F_HEAD, fill=HEAD_BG)
+    ws.column_dimensions[get_column_letter(40)].width = 2
+    for i in range(len(DATES) - 1):
+        col = get_column_letter(41 + i)
+        put(ws, f"{col}4", f"Δ{i + 1}", F_HEAD, fill=HEAD_BG, border=True)
+        ws.column_dimensions[col].width = 8
     ws.row_dimensions[4].height = 30
+
     r = 5
-    for code, title, seg, lim, vals in METRICS:
+    for code, title, seg, lim, vals in METRICS_RB:
         put(ws, f"A{r}", title, F_BODY, align=WRAP, border=True)
         put(ws, f"B{r}", seg, F_BODY, border=True, align=CENTER)
         put(ws, f"C{r}", lim, F_BODY, "0.00", border=True)
         for i, x in enumerate(vals):
             put(ws, f"{get_column_letter(4 + i)}{r}", x, F_BODY, "0.0000", border=True)
-        for i in range(8):
+        for i in range(len(vals) - 1):
             a, b = get_column_letter(4 + i), get_column_letter(5 + i)
-            put(ws, f"{get_column_letter(14 + i)}{r}", f"={b}{r}-{a}{r}", F_BODY,
+            put(ws, f"{get_column_letter(41 + i)}{r}", f"={b}{r}-{a}{r}", F_BODY,
                 "0.0000", border=True)
         r += 1
     ws.freeze_panes = "D5"
-    return r - 1          # последняя строка данных
+    return 5, r - 1
 
 
-def sheet_metrics(wb, calc, last_data_row):
-    """Лестница на остальных кредитных метриках: только расчёт, без ряда.
+def sheet_metrics(wb, calc, rb_first):
+    """Лестница на всех двенадцати кредитных метриках — только расчёт.
 
-    T задан в месяцах, шаг квартального ряда — три месяца, поэтому число шагов
-    равно T/3 и √T пересчитывается соответственно. У топ-20 шаг месячный.
+    Все ряды месячные, поэтому шаг везде один месяц и M(T) = z·σ·√T без
+    пересчёта числа шагов. Так было не всегда: первые две редакции считали
+    девять розничных метрик и CoR на квартальном ряде из девяти точек, потому
+    что месячные ряды не были найдены. См. metrics_data.py.
     """
     ws = wb.create_sheet("Метрики")
-    put(ws, "A1", "Зоны по остальным кредитным метрикам", F_TITLE)
-    note(ws, 2, "N",
+    put(ws, "A1", "Зоны по всем кредитным метрикам, месячные ряды по 36 точек", F_TITLE)
+    note(ws, 2, "P",
          "Границы те же, что на листе «Зоны»: зелёная до L − M(4), жёлтая до L − M(1), "
-         "красная до лимита. Колонки «% лимита» — та же граница, выраженная как "
-         "X = 1 − M(T)/L. Ряд и приросты — на листе «Метрики — ряд».", 36)
+         "красная до лимита. Колонки «% лимита» — та же граница как X = 1 − M(T)/L. "
+         "Ряд топ-20 и CoR — на листе «Ряд», розничных метрик — на «Метрики — ряд».", 36)
     cols = [("A", "Метрика", 30), ("B", "Сегмент", 9), ("C", "Лимит L", 10),
             ("D", "Точек", 7), ("E", "Шаг, мес", 8), ("F", "σ_Δ", 9),
             ("G", "M(4 мес)", 10), ("H", "M(1 мес)", 10),
@@ -1058,6 +1082,12 @@ def sheet_metrics(wb, calc, last_data_row):
 
     checks = []
     R = "'Расчёт'!"
+
+    def zone_formula(rr):
+        return (f'=IF(M{rr}>=C{rr},"НАРУШЕНИЕ",IF(M{rr}>=J{rr},"КРАСНАЯ",'
+                f'IF(M{rr}>=I{rr},"ЖЁЛТАЯ","зелёная")))')
+
+    # топ-20 — ссылками на уже защищённый расчёт
     r = 5
     put(ws, f"A{r}", "Топ-20 / собственный капитал", F_BLOCK, border=True, fill=BLOCK_BG)
     put(ws, f"B{r}", "KB", F_BODY, border=True, align=CENTER, fill=BLOCK_BG)
@@ -1078,113 +1108,69 @@ def sheet_metrics(wb, calc, last_data_row):
         put(ws, f"{col}{r}", formula, F_BODY, fmt, border=True, fill=BLOCK_BG)
         dec = len(fmt.split(".")[1]) if "." in fmt else 0
         checks.append(("МЕТРИКИ", f"{col}{r}", pub, 0.5 * 10 ** (-dec) + 1e-12))
-    put(ws, f"N{r}",
-        '=IF(M5>=C5,"НАРУШЕНИЕ",IF(M5>=J5,"КРАСНАЯ",IF(M5>=I5,"ЖЁЛТАЯ","зелёная")))',
-        F_BLOCK, border=True, align=CENTER, fill=YELLOW_BG)
+    put(ws, f"N{r}", zone_formula(r), F_BLOCK, border=True, align=CENTER, fill=YELLOW_BG)
 
-    # ── CoR: тоже месячный ряд, ссылки на лист «Ряд» ────────────────────
-    RANGES = {"cor_kb_pb": ("cor_kb", "d_cor_kb", "O"),
-              "cor_msb": ("cor_ms", "d_cor_ms", "R")}
-    for code, title, seg, lim, _col in MONTHLY_METRICS:
+    # CoR — месячный ряд с листа «Ряд»
+    RNG = {"cor_kb_pb": ("cor_kb", "d_cor_kb"), "cor_msb": ("cor_ms", "d_cor_ms")}
+    for code, title, seg, lim, letter in METRICS_COR:
         r += 1
-        rng, drng, letter = RANGES[code]
-        put(ws, f"A{r}", f"{title} ({seg})", F_BODY, align=WRAP, border=True,
-            fill=BLOCK_BG)
-        put(ws, f"B{r}", seg, F_BODY, border=True, align=CENTER, fill=BLOCK_BG)
-        put(ws, f"C{r}", lim, F_BODY, "0.00", border=True, fill=BLOCK_BG)
-        put(ws, f"D{r}", f"=COUNT({rng})", F_BODY, "0", border=True, fill=BLOCK_BG)
-        put(ws, f"E{r}", 1, F_BODY, "0", border=True, fill=BLOCK_BG)
-        put(ws, f"F{r}", f"=STDEV({drng})", F_BODY, "0.0000", border=True, fill=BLOCK_BG)
-        put(ws, f"G{r}", f"=z_p*F{r}*SQRT(4/E{r})", F_BODY, "0.0000", border=True,
-            fill=BLOCK_BG)
-        put(ws, f"H{r}", f"=z_p*F{r}*SQRT(1/E{r})", F_BODY, "0.0000", border=True,
-            fill=BLOCK_BG)
-        put(ws, f"I{r}", f"=C{r}-G{r}", F_BODY, "0.0000", border=True, fill=BLOCK_BG)
-        put(ws, f"J{r}", f"=C{r}-H{r}", F_BODY, "0.0000", border=True, fill=BLOCK_BG)
-        put(ws, f"K{r}", f"=I{r}/C{r}*100", F_BLOCK, "0.0000", border=True, fill=BLOCK_BG)
-        put(ws, f"L{r}", f"=J{r}/C{r}*100", F_BLOCK, "0.0000", border=True, fill=BLOCK_BG)
-        put(ws, f"M{r}", f"='Ряд'!{letter}{LAST}", F_BODY, "0.0000", border=True,
-            fill=BLOCK_BG)
-        put(ws, f"N{r}",
-            f'=IF(M{r}>=C{r},"НАРУШЕНИЕ",IF(M{r}>=J{r},"КРАСНАЯ",'
-            f'IF(M{r}>=I{r},"ЖЁЛТАЯ","зелёная")))',
-            F_BLOCK, border=True, align=CENTER,
-            fill=(YELLOW_BG if code == "cor_kb_pb" else GREEN_BG))
-        put(ws, f"O{r}", f"=(C{r}-M{r})/F{r}", F_BODY, "0.00", border=True, fill=BLOCK_BG)
-        put(ws, f"P{r}", f"=F{r}/SQRT(2*(D{r}-2))", F_BODY, "0.0000", border=True,
-            fill=BLOCK_BG)
-        ws.row_dimensions[r].height = 26
-        sg, m4, gb, yb, kp, lp, fact, dd, se = EXPECTED_MONTHLY[(code, seg)]
-        for col, pub, tol in (("F", sg, 0.00005), ("G", m4, 0.00005), ("I", gb, 0.00005),
-                              ("J", yb, 0.00005), ("K", kp, 0.00005), ("L", lp, 0.00005),
-                              ("M", fact, 0.00005), ("O", dd, 0.005), ("P", se, 0.00005)):
-            checks.append(("МЕТРИКИ", f"{col}{r}", pub, tol))
+        rng, drng = RNG[code]
+        put(ws, f"A{r}", f"{title} ({seg})", F_BODY, align=WRAP, border=True)
+        put(ws, f"B{r}", seg, F_BODY, border=True, align=CENTER)
+        put(ws, f"C{r}", lim, F_BODY, "0.00", border=True)
+        put(ws, f"D{r}", f"=COUNT({rng})", F_BODY, "0", border=True)
+        put(ws, f"E{r}", 1, F_BODY, "0", border=True)
+        put(ws, f"F{r}", f"=STDEV({drng})", F_BODY, "0.0000", border=True)
+        put(ws, f"M{r}", f"='Ряд'!{letter}{LAST}", F_BODY, "0.0000", border=True)
+        _fill_ladder(ws, r, checks, EXPECTED_COR[(code, seg)], zone_formula,
+                     YELLOW_BG if code == "cor_kb_pb" else GREEN_BG)
 
-    src = 5
-    for code, title, seg, lim, vals in METRICS:
+    # девять розничных — месячный ряд с листа «Метрики — ряд»
+    D = "'Метрики — ряд'!"
+    last_val = get_column_letter(3 + len(DATES))
+    d_first, d_last = get_column_letter(41), get_column_letter(40 + len(DATES) - 1)
+    src = rb_first
+    for code, title, seg, lim, vals in METRICS_RB:
         r += 1
-        D = "'Метрики — ряд'!"
         put(ws, f"A{r}", f"={D}A{src}", F_BODY, align=WRAP, border=True)
         put(ws, f"B{r}", f"={D}B{src}", F_BODY, border=True, align=CENTER)
         put(ws, f"C{r}", f"={D}C{src}", F_BODY, "0.00", border=True)
-        put(ws, f"D{r}", f"=COUNT({D}D{src}:L{src})", F_BODY, "0", border=True)
-        put(ws, f"E{r}", 3, F_BODY, "0", border=True)
-        put(ws, f"F{r}", f"=STDEV({D}N{src}:U{src})", F_BODY, "0.0000", border=True)
-        put(ws, f"G{r}", f"=z_p*F{r}*SQRT(4/E{r})", F_BODY, "0.0000", border=True)
-        put(ws, f"H{r}", f"=z_p*F{r}*SQRT(1/E{r})", F_BODY, "0.0000", border=True)
-        put(ws, f"I{r}", f"=C{r}-G{r}", F_BODY, "0.0000", border=True)
-        put(ws, f"J{r}", f"=C{r}-H{r}", F_BODY, "0.0000", border=True)
-        put(ws, f"K{r}", f"=I{r}/C{r}*100", F_BLOCK, "0.0000", border=True)
-        put(ws, f"L{r}", f"=J{r}/C{r}*100", F_BLOCK, "0.0000", border=True)
-        put(ws, f"M{r}", f"={D}L{src}", F_BODY, "0.0000", border=True)
-        put(ws, f"N{r}",
-            f'=IF(M{r}>=C{r},"НАРУШЕНИЕ",IF(M{r}>=J{r},"КРАСНАЯ",'
-            f'IF(M{r}>=I{r},"ЖЁЛТАЯ","зелёная")))',
-            F_BODY, border=True, align=CENTER, fill=GREEN_BG)
-        put(ws, f"O{r}", f"=(C{r}-M{r})/F{r}", F_BODY, "0.00", border=True)
-        put(ws, f"P{r}", f"=F{r}/SQRT(2*(D{r}-2))", F_BODY, "0.0000", border=True)
-        ws.row_dimensions[r].height = 26
-        sg, m4, gb, yb = EXPECTED_LADDER[(code, seg)]
-        kp, lp = EXPECTED_PCT[(code, seg)]
-        checks.append(("МЕТРИКИ", f"F{r}", sg, 0.00005))
-        checks.append(("МЕТРИКИ", f"G{r}", m4, 0.00005))
-        checks.append(("МЕТРИКИ", f"I{r}", gb, 0.00005))
-        checks.append(("МЕТРИКИ", f"J{r}", yb, 0.00005))
-        checks.append(("МЕТРИКИ", f"K{r}", kp, 0.00005))
-        checks.append(("МЕТРИКИ", f"L{r}", lp, 0.00005))
+        put(ws, f"D{r}", f"=COUNT({D}D{src}:{last_val}{src})", F_BODY, "0", border=True)
+        put(ws, f"E{r}", 1, F_BODY, "0", border=True)
+        put(ws, f"F{r}", f"=STDEV({D}{d_first}{src}:{d_last}{src})", F_BODY, "0.0000",
+            border=True)
+        put(ws, f"M{r}", f"={D}{last_val}{src}", F_BODY, "0.0000", border=True)
+        _fill_ladder(ws, r, checks, EXPECTED_RB[(code, seg)], zone_formula, GREEN_BG)
         src += 1
 
     r += 2
     for title, text in (
+        ("Все двенадцать метрик — на месячных рядах по 36 точек",
+         "Так стало с 15.09.2026. Первые две редакции листа считали девять розничных "
+         "метрик и CoR на квартальном ряде из девяти точек, хотя месячные существовали: "
+         "CoR — в том же файле, что и топ-20, EL и PD — на листе Monthly. Цена ошибки "
+         "видна на CoR КБ/ПБ: σ 0,8514 вместо 1,2817, и метрика была показана зелёной, "
+         "хотя она жёлтая."),
         ("У CoR КБ/ПБ буфер больше самого лимита",
          "M(4) = 3,2850 при лимите 3,00, поэтому граница зелёной уходит в минус "
-         "(−0,2850) и колонка K показывает −9,5 %. Это не ошибка расчёта, а свойство "
-         "метрики: за четыре месяца CoR проходит больше, чем весь её лимит. Зелёной "
-         "зоны у неё практически нет — 25 наблюдений из 36 ниже границы только потому, "
-         "что граница отрицательная. Вместе с топ-20 это единственная метрика, где "
-         "светофор реально переключается: 25 / 9 / 2 / 0."),
+         "(−0,2850), и колонка K показывает −9,5 %. Это не ошибка расчёта, а свойство "
+         "метрики: за четыре месяца CoR проходит больше, чем весь её лимит. Вместе "
+         "с топ-20 это единственная метрика, где светофор переключается: 25 / 9 / 2 / 0."),
         ("Единого процента не существует",
-         "Колонка K разбегается от −9,5 %% (CoR КБ/ПБ) до 99,1 %% (PD необеспеченных). "
-         "X = 1 − M(T)/L зависит от волатильности относительно лимита: у PD и EL "
-         "σ крошечная, им граница нужна вплотную к лимиту; у CoR и топ-20 σ большая. "
-         "Единый порог 85 %% для CoR поздний, для PD ранний в десять раз."),
-        ("Одиннадцать метрик зелёные, и это правда",
-         "Колонка O: расстояние до лимита 8,6–84,8 σ. Это не пробел в наблюдении, "
-         "а факт — метрики не могут дойти до своих лимитов. Панель из одиннадцати "
-         "зелёных ламп надо подавать именно так, а не как «всё под контролем»."),
-        ("σ известна с точностью около ±25 %%",
-         "Колонка P — стандартная ошибка σ. При восьми приростах она около четверти "
-         "самой σ, против 12 %% на месячном ряде топ-20. Границы у квартальных метрик "
-         "известны с той же точностью."),
-        ("Дрейф, которого формула не учитывает",
-         "У PD необеспеченных средний квартальный прирост по модулю превышает весь "
-         "буфер M(T). Ряды не блуждают, а падают монотонно; для тренда σ приростов "
-         "измеряет наклон, а не волатильность. Допущение нулевого дрейфа, безвредное "
-         "на топ-20, здесь не выполняется."),
-        ("Лимитов-полов формула не умеет",
-         "У кредитных метрик все лимиты — потолки, и расчёт верен. Для k1, LCR, NSFR "
-         "опасность в падении, и границы должны считаться как L + M(T), а не L − M(T). "
-         "Если панель станет общей по всем рискам, формула обязана знать направление."),
+         "Колонка K разбегается от −9,5 % (CoR КБ/ПБ) до 99,1 % (PD необеспеченные "
+         "товарные). X = 1 − M(T)/L зависит от волатильности относительно лимита: "
+         "у PD и EL σ крошечная, им граница нужна вплотную к лимиту; у CoR и топ-20 "
+         "σ большая. Любой единый порог — компромисс, а не калибровка."),
+        ("Девять розничных метрик зелёные, и теперь это доказано на нормальных данных",
+         "Колонка O: расстояние до лимита 19,2–103,9 σ. На квартальном ряде было "
+         "8,6–84,8 σ при погрешности σ ±27 %; на месячном погрешность 12 %, и вывод "
+         "тот же. Метрики не могут дойти до своих лимитов — панель из девяти зелёных "
+         "ламп надо подавать именно так, а не как «всё под контролем»."),
+        ("Что по-прежнему не доказано",
+         "Из 36 месяцев с отчётностью сверены 20; первые 16 — реконструкция "
+         "(DECOMPOSITION § 10.2). И формула не умеет лимиты-полы: у k1, LCR, NSFR "
+         "опасность в падении, границы там считаются как L + M(T). Если панель станет "
+         "общей по всем рискам, формула обязана знать направление метрики."),
     ):
         put(ws, f"A{r}", title, F_BLOCK, align=WRAP, fill=BLOCK_BG, border=True)
         put(ws, f"B{r}", text, F_BODY, align=WRAP, border=True)
@@ -1193,6 +1179,82 @@ def sheet_metrics(wb, calc, last_data_row):
         r += 1
     ws.freeze_panes = "C5"
     return checks
+
+
+def _fill_ladder(ws, r, checks, expected, zone_formula, bg):
+    """Общая часть строки: M(4), M(1), границы, проценты, зона, D, SE."""
+    put(ws, f"G{r}", f"=z_p*F{r}*SQRT(4/E{r})", F_BODY, "0.0000", border=True)
+    put(ws, f"H{r}", f"=z_p*F{r}*SQRT(1/E{r})", F_BODY, "0.0000", border=True)
+    put(ws, f"I{r}", f"=C{r}-G{r}", F_BODY, "0.0000", border=True)
+    put(ws, f"J{r}", f"=C{r}-H{r}", F_BODY, "0.0000", border=True)
+    put(ws, f"K{r}", f"=I{r}/C{r}*100", F_BLOCK, "0.0000", border=True)
+    put(ws, f"L{r}", f"=J{r}/C{r}*100", F_BLOCK, "0.0000", border=True)
+    put(ws, f"N{r}", zone_formula(r), F_BODY, border=True, align=CENTER, fill=bg)
+    put(ws, f"O{r}", f"=(C{r}-M{r})/F{r}", F_BODY, "0.00", border=True)
+    put(ws, f"P{r}", f"=F{r}/SQRT(2*(D{r}-2))", F_BODY, "0.0000", border=True)
+    ws.row_dimensions[r].height = 26
+    sg, m4, gb, yb, kp, lp, fact, dd, se = expected
+    for col, pub, tol in (("F", sg, 0.00005), ("G", m4, 0.00005), ("I", gb, 0.00005),
+                          ("J", yb, 0.00005), ("K", kp, 0.00005), ("L", lp, 0.00005),
+                          ("M", fact, 0.00005), ("O", dd, 0.005), ("P", se, 0.00005)):
+        checks.append(("МЕТРИКИ", f"{col}{r}", pub, tol))
+
+
+
+
+# ── иллюстрации ───────────────────────────────────────────────────────────
+# Вставляются только те, что не разошлись с числами книги. Пропущены сознательно:
+#   ex3_sigma_vs_utilisation.png — посчитан на квартальном ряде (расстояния
+#     24–45 σ); на месячном они 19,2–103,9 σ, и картинка противоречила бы листу;
+#   zone_series / zone_methods / zone_cycle / zone_triggers — SVG, который Excel
+#     не вставляет, и нарисованы под прежнюю разметку с одной жёлтой линией;
+#   info_chain.png, info_wall.png — разделители глав записки, без единой цифры;
+#     в расчётном листе им делать нечего.
+# Картинка, показывающая другие числа, чем лист, хуже её отсутствия.
+IMAGES = {
+    "Зоны": [("zone_ladder.png", "A44", 1100,
+              "Ряд и лестница зон. Собрано viz/zone_ladder.py из того же CSV, "
+              "что и расчёт, — границы на картинке и в таблице совпадают по построению."),
+             ("ex6_zone_inversion.png", "A80", 1000,
+              "Находка Р1: у восьми метрик, где зоны уже установлены, порог красной "
+              "стоит ЗА уровнем риск-аппетита. Это довод за лестницу, и он не наш — "
+              "так уже сделано в Банке.")],
+    "Ряд": [("ex1_episodes_timeline.png", "A45", 1000,
+             "Уровень не ограничивал показатель 8 лет 6 месяцев: шесть эпизодов "
+             "превышения относительно уровня, действовавшего на дату.")],
+    "Обоснование M(T)": [("ex4_threshold_calibration.png", "A44", 1000,
+                          "Калибровка порога: выше 89 % лимита сигнальный уровень "
+                          "теряет две трети запаса времени. Данные не затронуты "
+                          "переходом на лестницу — считаны по top20_signal_calibration.csv.")],
+    "Как защищать": [("chain.png", "A18", 900,
+                      "Цепочка «риск-ёмкость → риск-аппетит → лимит → допустимый "
+                      "уровень → мера реагирования → контроль» и её фактические "
+                      "разрывы: целиком есть одно звено из шести.")],
+}
+
+
+def add_images(wb):
+    """Вставить иллюстрации на листы. Отсутствующий файл пропускается молча."""
+    placed = []
+    for sheet, items in IMAGES.items():
+        if sheet not in wb.sheetnames:
+            continue
+        ws = wb[sheet]
+        for name, anchor, width_px, caption in items:
+            path = os.path.join(VIZ, name)
+            if not os.path.exists(path):
+                continue
+            cap_row = int("".join(ch for ch in anchor if ch.isdigit())) - 1
+            put(ws, f"A{cap_row}", caption, F_MUTED, align=WRAP)
+            ws.merge_cells(f"A{cap_row}:G{cap_row}")
+            ws.row_dimensions[cap_row].height = 32
+            img = XLImage(path)
+            k = width_px / img.width
+            img.width, img.height = int(img.width * k), int(img.height * k)
+            img.anchor = anchor
+            ws.add_image(img)
+            placed.append(f"{sheet}: {name}")
+    return placed
 
 
 # ── сборка ────────────────────────────────────────────────────────────────
@@ -1207,9 +1269,10 @@ def build():
     extra = sheet_zones(wb, calc)
     extra += sheet_sigmas(wb, calc)
     extra += sheet_triggers(wb)
-    last_data = sheet_metrics_data(wb)
-    extra += sheet_metrics(wb, calc, last_data)
+    rb_first, _ = sheet_metrics_data(wb)
+    extra += sheet_metrics(wb, calc, rb_first)
     sheet_guide(wb)
+    placed = add_images(wb)
 
     names = {
         "v": f"'Ряд'!$H${FIRST}:$H${LAST}",
@@ -1226,7 +1289,7 @@ def build():
 
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     wb.save(OUT)
-    return OUT, calc.checks + basis.checks + extra
+    return OUT, calc.checks + basis.checks + extra, placed
 
 
 def verify(path, checks):
@@ -1276,9 +1339,11 @@ def verify(path, checks):
 
 
 def main():
-    path, checks = build()
+    path, checks, placed = build()
     total = len(checks)
     print(f"собрано: {os.path.relpath(path, HERE)}  ({total} сверяемых чисел)")
+    print(f"иллюстраций вставлено: {len(placed)}" +
+          ("  — " + "; ".join(placed) if placed else ""))
     if "--verify" not in sys.argv:
         print("сверка не запускалась — для неё нужен ключ --verify")
         return 0
