@@ -15,6 +15,15 @@
 Сверка считает не «то же самое на python», а сами формулы листа — иначе проверялась
 бы вторая реализация, а не книга. Допуск — половина последнего напечатанного разряда.
 
+Редакция 15.09.2026, четвёртая — исправление:
+  • CoR по КБ/ПБ и по МСБ переведены с квартального ряда (9 точек) на месячный
+    (36 точек). Обе колонки всё это время лежали в том же файле, что и топ-20,
+    заполненные 36 из 36, и были пропущены при сборке листа «Метрики».
+    Последствие не косметическое: σ по КБ/ПБ равна 1,2817 против 0,8514,
+    и метрика оказывается в ЖЁЛТОЙ зоне, а не в зелёной, как было показано в v1.3.
+  • У CoR КБ/ПБ буфер M(4) = 3,2850 превышает сам лимит 3,00 — граница зелёной
+    уходит в минус. Записано на листе как свойство метрики, а не как ошибка.
+
 Редакция 15.09.2026, третья:
   • зоны переведены на лестницу: зелёная до L − M(4), жёлтая до L − M(1), красная
     до лимита, нарушение лимита — четвёртое состояние. Основание — формулировка
@@ -46,7 +55,8 @@ import os
 import re
 import sys
 
-from metrics_data import (METRICS, QUARTERS, EXPECTED_LADDER, EXPECTED_PCT)
+from metrics_data import (METRICS, QUARTERS, EXPECTED_LADDER, EXPECTED_PCT,
+                          MONTHLY_METRICS, EXPECTED_MONTHLY)
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -55,7 +65,7 @@ from openpyxl.workbook.defined_name import DefinedName
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "..", "data", "top20_monthly_2023_08_2026_07.csv")
-OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.3.xlsx")
+OUT = os.path.join(HERE, "..", "out", "Raschetny_list_RA_top20_v1.4.xlsx")
 
 # ── оформление ────────────────────────────────────────────────────────────
 INK, MUTED = "FF0B0B0B", "FF6B6A66"
@@ -153,12 +163,12 @@ class Ledger:
 def sheet_series(wb, rows):
     ws = wb.create_sheet("Ряд")
     put(ws, "A1", "Ряд топ-20: 36 месячных точек, 01.08.2023 — 01.07.2026", F_TITLE)
-    note(ws, 2, "M",
+    note(ws, 2, "S",
          "Источник: data/top20_monthly_2023_08_2026_07.csv, дамп листа Monthly рабочей "
          "книги 08.09.2026 (DECOMPOSITION § 11.7). Колонки A–D — как в выгрузке, "
          "E–M — расчёт. С 01.02.2026 регуляторный капитал в выгрузке отсутствует: "
          "метрика ведётся только в балансовой базе, поэтому C, E, F и I у последних "
-         "шести дат пусты. Это не пропуск данных, а следствие смены базы (Г26).", 42)
+         "шести дат пусты. Это не пропуск данных, а следствие смены базы (Г26). Колонки N–S — CoR по КБ/ПБ и по МСБ из того же файла, 36 из 36: в первой сборке листа «Метрики» они были ошибочно взяты из квартального ряда.", 52)
 
     heads = [("A", "Дата", 12), ("B", "Займ топ-20, млн ₸", 16),
              ("C", "СК регуляторный, млн ₸", 17), ("D", "СК балансовый, млн ₸", 17),
@@ -166,7 +176,10 @@ def sheet_series(wb, rows):
              ("G", "coef_new (доля)", 13), ("H", "v_new = coef_new × 100", 15),
              ("I", "Разрыв баз: v_new − v_reg", 15),
              ("J", "Δ = v_new(t) − v_new(t−1)", 15),
-             ("K", "ΔСК балансовый, %", 12), ("L", "ΔЗайм, %", 11), ("M", "Триггер", 13)]
+             ("K", "ΔСК балансовый, %", 12), ("L", "ΔЗайм, %", 11), ("M", "Триггер", 13),
+             ("N", "cor_kb_pb (доля)", 13), ("O", "CoR КБ/ПБ, %", 12),
+             ("P", "Δ CoR КБ/ПБ", 12),
+             ("Q", "cor_msb (доля)", 13), ("R", "CoR МСБ, %", 12), ("S", "Δ CoR МСБ", 12)]
     for col, title, width in heads:
         put(ws, f"{col}4", title, F_HEAD, fill=HEAD_BG, border=True,
             align=Alignment(wrap_text=True, vertical="bottom"))
@@ -189,8 +202,12 @@ def sheet_series(wb, rows):
         put(ws, f"G{rr}", f"=B{rr}/D{rr}", F_BODY, "0.00000000", border=True)
         put(ws, f"H{rr}", f"=G{rr}*100", F_BODY, "0.0000", border=True)
         put(ws, f"I{rr}", f'=IF(F{rr}="","",H{rr}-F{rr})', F_BODY, "0.0000", border=True)
+        put(ws, f"N{rr}", float(r["cor_kb_pb"]), F_BODY, "0.00000000", border=True)
+        put(ws, f"O{rr}", f"=N{rr}*100", F_BODY, "0.0000", border=True)
+        put(ws, f"Q{rr}", float(r["cor_msb"]), F_BODY, "0.00000000", border=True)
+        put(ws, f"R{rr}", f"=Q{rr}*100", F_BODY, "0.0000", border=True)
         if i == 0:
-            for col in ("J", "K", "L", "M"):
+            for col in ("J", "K", "L", "M", "P", "S"):
                 put(ws, f"{col}{rr}", "—", F_MUTED, border=True, align=CENTER)
             continue
         p = rr - 1
@@ -201,8 +218,10 @@ def sheet_series(wb, rows):
             f'=IF(AND(K{rr}<=por_sk,L{rr}>=por_zaim),"оба",'
             f'IF(K{rr}<=por_sk,"СК",IF(L{rr}>=por_zaim,"Займ","")))',
             F_BODY, border=True, align=CENTER)
+        put(ws, f"P{rr}", f"=O{rr}-O{p}", F_BODY, "0.0000", border=True)
+        put(ws, f"S{rr}", f"=R{rr}-R{p}", F_BODY, "0.0000", border=True)
 
-    note(ws, LAST + 2, "M",
+    note(ws, LAST + 2, "S",
          "Колонка I — разрыв двух баз на одну дату, а не движение во времени. "
          "Через неё видно, что k не постоянен: разрыв сузился с 22,2 пп в 08.2023 "
          "до 12,0 пп в 01.2026. Уровень L = L_рег / k, посчитанный по k одной даты, "
@@ -1063,6 +1082,44 @@ def sheet_metrics(wb, calc, last_data_row):
         '=IF(M5>=C5,"НАРУШЕНИЕ",IF(M5>=J5,"КРАСНАЯ",IF(M5>=I5,"ЖЁЛТАЯ","зелёная")))',
         F_BLOCK, border=True, align=CENTER, fill=YELLOW_BG)
 
+    # ── CoR: тоже месячный ряд, ссылки на лист «Ряд» ────────────────────
+    RANGES = {"cor_kb_pb": ("cor_kb", "d_cor_kb", "O"),
+              "cor_msb": ("cor_ms", "d_cor_ms", "R")}
+    for code, title, seg, lim, _col in MONTHLY_METRICS:
+        r += 1
+        rng, drng, letter = RANGES[code]
+        put(ws, f"A{r}", f"{title} ({seg})", F_BODY, align=WRAP, border=True,
+            fill=BLOCK_BG)
+        put(ws, f"B{r}", seg, F_BODY, border=True, align=CENTER, fill=BLOCK_BG)
+        put(ws, f"C{r}", lim, F_BODY, "0.00", border=True, fill=BLOCK_BG)
+        put(ws, f"D{r}", f"=COUNT({rng})", F_BODY, "0", border=True, fill=BLOCK_BG)
+        put(ws, f"E{r}", 1, F_BODY, "0", border=True, fill=BLOCK_BG)
+        put(ws, f"F{r}", f"=STDEV({drng})", F_BODY, "0.0000", border=True, fill=BLOCK_BG)
+        put(ws, f"G{r}", f"=z_p*F{r}*SQRT(4/E{r})", F_BODY, "0.0000", border=True,
+            fill=BLOCK_BG)
+        put(ws, f"H{r}", f"=z_p*F{r}*SQRT(1/E{r})", F_BODY, "0.0000", border=True,
+            fill=BLOCK_BG)
+        put(ws, f"I{r}", f"=C{r}-G{r}", F_BODY, "0.0000", border=True, fill=BLOCK_BG)
+        put(ws, f"J{r}", f"=C{r}-H{r}", F_BODY, "0.0000", border=True, fill=BLOCK_BG)
+        put(ws, f"K{r}", f"=I{r}/C{r}*100", F_BLOCK, "0.0000", border=True, fill=BLOCK_BG)
+        put(ws, f"L{r}", f"=J{r}/C{r}*100", F_BLOCK, "0.0000", border=True, fill=BLOCK_BG)
+        put(ws, f"M{r}", f"='Ряд'!{letter}{LAST}", F_BODY, "0.0000", border=True,
+            fill=BLOCK_BG)
+        put(ws, f"N{r}",
+            f'=IF(M{r}>=C{r},"НАРУШЕНИЕ",IF(M{r}>=J{r},"КРАСНАЯ",'
+            f'IF(M{r}>=I{r},"ЖЁЛТАЯ","зелёная")))',
+            F_BLOCK, border=True, align=CENTER,
+            fill=(YELLOW_BG if code == "cor_kb_pb" else GREEN_BG))
+        put(ws, f"O{r}", f"=(C{r}-M{r})/F{r}", F_BODY, "0.00", border=True, fill=BLOCK_BG)
+        put(ws, f"P{r}", f"=F{r}/SQRT(2*(D{r}-2))", F_BODY, "0.0000", border=True,
+            fill=BLOCK_BG)
+        ws.row_dimensions[r].height = 26
+        sg, m4, gb, yb, kp, lp, fact, dd, se = EXPECTED_MONTHLY[(code, seg)]
+        for col, pub, tol in (("F", sg, 0.00005), ("G", m4, 0.00005), ("I", gb, 0.00005),
+                              ("J", yb, 0.00005), ("K", kp, 0.00005), ("L", lp, 0.00005),
+                              ("M", fact, 0.00005), ("O", dd, 0.005), ("P", se, 0.00005)):
+            checks.append(("МЕТРИКИ", f"{col}{r}", pub, tol))
+
     src = 5
     for code, title, seg, lim, vals in METRICS:
         r += 1
@@ -1099,8 +1156,15 @@ def sheet_metrics(wb, calc, last_data_row):
 
     r += 2
     for title, text in (
+        ("У CoR КБ/ПБ буфер больше самого лимита",
+         "M(4) = 3,2850 при лимите 3,00, поэтому граница зелёной уходит в минус "
+         "(−0,2850) и колонка K показывает −9,5 %. Это не ошибка расчёта, а свойство "
+         "метрики: за четыре месяца CoR проходит больше, чем весь её лимит. Зелёной "
+         "зоны у неё практически нет — 25 наблюдений из 36 ниже границы только потому, "
+         "что граница отрицательная. Вместе с топ-20 это единственная метрика, где "
+         "светофор реально переключается: 25 / 9 / 2 / 0."),
         ("Единого процента не существует",
-         "Колонка K разбегается от 58,0 %% (CoR) до 99,1 %% (PD необеспеченных). "
+         "Колонка K разбегается от −9,5 %% (CoR КБ/ПБ) до 99,1 %% (PD необеспеченных). "
          "X = 1 − M(T)/L зависит от волатильности относительно лимита: у PD и EL "
          "σ крошечная, им граница нужна вплотную к лимиту; у CoR и топ-20 σ большая. "
          "Единый порог 85 %% для CoR поздний, для PD ранний в десять раз."),
@@ -1150,6 +1214,10 @@ def build():
     names = {
         "v": f"'Ряд'!$H${FIRST}:$H${LAST}",
         "d": f"'Ряд'!$J${FIRST + 1}:$J${LAST}",
+        "cor_kb": f"'Ряд'!$O${FIRST}:$O${LAST}",
+        "d_cor_kb": f"'Ряд'!$P${FIRST + 1}:$P${LAST}",
+        "cor_ms": f"'Ряд'!$R${FIRST}:$R${LAST}",
+        "d_cor_ms": f"'Ряд'!$S${FIRST + 1}:$S${LAST}",
     }
     for nm, cell in p.items():
         names[nm] = f"'Параметры'!${cell[0]}${cell[1:]}"
