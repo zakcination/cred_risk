@@ -20,7 +20,7 @@ DATA = os.path.join(HERE, "..", "data", "top20_monthly_2023_08_2026_07.csv")
 VIZ  = os.path.join(HERE, "..", "viz")
 
 Z90 = 1.2815515655446004          # квантиль стандартного нормального для 0,90
-K_G26 = 0.87453                   # E_бал / E_рег на 01.01.2026 (Г26)
+K_DATE = "2026-01-01"             # последняя дата, где есть обе базы капитала
 L_REG = 95.0                      # уровень в регуляторной базе
 
 # палитра — та же, что в viz/charts.py
@@ -39,9 +39,24 @@ def load():
             "date": r["date"],
             "zaim": float(r["zaim_mln"]),
             "sk":   float(r["sk_new_mln"]),
+            "sk_reg": float(r["sk_old_mln"]) if r["sk_old_mln"].strip() else None,
             "coef": float(r["coef_new"]) * 100.0,
         })
     return out
+
+
+def k_g26(rows):
+    """Отношение баз капитала — считается из ряда, а не вбивается константой.
+
+    До 14.09.2026 здесь стояло 0,87453 — округление до пяти знаков. Оно давало
+    L = 108,6298 против 108,6304 от точного отношения: 0,00065 пп, по существу
+    ничего, но это два разных значения k в одном репозитории. Расчётный лист
+    Excel считает k формулой из того же ряда — теперь считают оба одинаково.
+    """
+    for r in rows:
+        if r["date"] == K_DATE:
+            return r["sk"] / r["sk_reg"]
+    raise ValueError(f"в ряде нет даты {K_DATE}: k посчитать не из чего")
 
 
 # ── числа ─────────────────────────────────────────────────────────────────
@@ -57,7 +72,7 @@ def ledger(rows):
     d_wo = [x for j, x in enumerate(d) if j not in (i_max - 1, i_max)]
     sigma_wo = st.pstdev(d_wo)
 
-    L = L_REG / K_G26                          # пересчёт уровня под балансовую базу
+    L = L_REG / k_g26(rows)                    # пересчёт уровня под балансовую базу
     q = lambda p: quantile(v, p)
     share = lambda x: sum(1 for t in v if t >= x) / len(v)
     margin = lambda T: Z90 * sigma * math.sqrt(T)
