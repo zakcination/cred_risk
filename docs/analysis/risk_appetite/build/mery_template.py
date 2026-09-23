@@ -154,10 +154,10 @@ def sheet_howto(wb):
         "поперёк состояний. «Пороги» — справочно: границы зон и триггеров по каждой "
         "из двенадцати метрик.",
         "",
-        "ОГОВОРКА, КОТОРУЮ НАДО ЗНАТЬ. Две метрики CoR размечены предварительно: "
-        "неизвестно, чем является их ряд — расходом за период или годовым уровнем. "
-        "До ответа владельца расчёта зоны по ним недействительны. На листе «Пороги» "
-        "они помечены.",
+        "ОГОВОРКА, КОТОРУЮ НАДО ЗНАТЬ. Две метрики CoR размечены замещающим методом "
+        "(90-й процентиль значений за 36 месяцев) и предварительно: формула расчёта "
+        "ряда не подтверждена. Граница красной зоны и пороги триггеров по ним — "
+        "предложение. На листе «Пороги» они помечены.",
     ]
     r = 4
     for t in text:
@@ -266,28 +266,28 @@ def sheet_rules(wb):
 
 
 def sheet_thresholds(wb):
-    """Справочный лист: границы зон и пороги триггеров по каждой метрике."""
-    import csv
-    import statistics as st
-    here = os.path.dirname(os.path.abspath(__file__))
-    sys.path.insert(0, here)
-    import metrics_data as md
+    """Справочный лист: границы зон и пороги триггеров по каждой метрике.
 
-    Z = 1.2815515655446004
+    Источник — `calib/method_selection.py`: метод выбирается правилом К1–К3,
+    десять метрик на запасе времени, две CoR на замещающем методе.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    sys.path.insert(0, os.path.join(here, "..", "calib"))
+    import method_selection as ms
+
+    _dates, res = ms.evaluate()
+    res.sort(key=lambda r: (r["method"] != "M(T)", not r["code"] == "top20"))
     rows = []
-    with open(os.path.join(here, "..", "data",
-                           "top20_monthly_2023_08_2026_07.csv"),
-              encoding="utf-8") as fh:
-        top = list(csv.DictReader(fh, delimiter=";"))
-    rows.append(("Топ-20 / СК", 108.6304,
-                 [float(x["coef_new"]) * 100 for x in top], ""))
-    for code, title, _seg, lim, vals in md.METRICS_RB:
-        rows.append((title.replace("ожидаемые потери, ", ""), lim, list(vals), ""))
-    for code, _t, _seg, lim, _col in md.METRICS_COR:
-        key = "cor_kb_pb" if code == "cor_kb_pb" else "cor_msb"
-        rows.append((f"CoR — {key[4:].upper().replace('_', '/')}", lim,
-                     [float(x[key]) * 100 for x in top],
-                     "ПРЕДВАРИТЕЛЬНО — источник ряда не установлен"))
+    for r in res:
+        if r["method"] == "M(T)":
+            name, note = r["name"], "запас времени M(T)"
+        else:
+            name = f"CoR — {r['name'][4:].replace('_', '/')}"
+            note = ("замещающий метод: 90-й процентиль значений. ПРЕДВАРИТЕЛЬНО — "
+                    "формула CoR не подтверждена; граница жёлтой/красной и T1/T2 — "
+                    "предложение")
+        rows.append((name, r["L"], r["c"]["sigma"], r["green"], r["yellow"],
+                     r["t1"], r["t2"], note))
 
     ws = wb.create_sheet("Пороги")
     put(ws, "A1", "Справочно: границы зон и пороги триггеров по двенадцати метрикам",
@@ -300,17 +300,14 @@ def sheet_thresholds(wb):
         put(ws, f"{col}3", t, HEAD, HEAD_BG, CENTER)
         ws.column_dimensions[col].width = w
     ws.row_dimensions[3].height = 30
-    for i, (name, lim, vals, note) in enumerate(rows):
+    for i, (name, lim, s, g, y, t1, t2, note) in enumerate(rows):
         r = 4 + i
-        d = [vals[k] - vals[k - 1] for k in range(1, len(vals))]
-        s = st.stdev(d)
-        m1, m4 = Z * s, Z * s * 2
         put(ws, f"A{r}", name, BODY)
-        for col, v in (("B", lim), ("C", s), ("D", lim - m4), ("E", lim - m1),
-                       ("F", m1), ("G", m4)):
+        for col, v in (("B", lim), ("C", s), ("D", g), ("E", y),
+                       ("F", t1), ("G", t2)):
             c = put(ws, f"{col}{r}", v, BODY, align=CENTER)
             c.number_format = "0.0000"
-        put(ws, f"H{r}", note, MUTED if note else BODY)
+        put(ws, f"H{r}", note, MUTED if "CoR" in name else BODY)
     r = 4 + len(rows) + 1
     put(ws, f"A{r}",
         "Границы: зелёная — значение ниже «Границы зелёной»; жёлтая — между ней "
@@ -374,6 +371,13 @@ def selftest():
         cor = [r[0].value for r in wb["Пороги"].iter_rows(min_row=4, max_row=15)
                if r[0].value and "CoR" in r[0].value]
         check("обе метрики CoR помечены оговоркой", len(cor) == 2)
+        # Записка размечает CoR замещающим методом: граница зелёной — процентиль
+        # значений, она положительна. Отрицательная означала бы, что лист снова
+        # считает CoR запасом времени и расходится с запиской.
+        cor_green = [r[3].value for r in wb["Пороги"].iter_rows(min_row=4, max_row=15)
+                     if r[0].value and "CoR" in r[0].value]
+        check("границы зелёной по CoR — замещающим методом, совпадают с запиской",
+              [round(g, 2) for g in cor_green] == [0.52, 0.24], str(cor_green))
     return ok
 
 
