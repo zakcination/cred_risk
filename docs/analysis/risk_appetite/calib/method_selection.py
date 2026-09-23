@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Правило выбора метода разметки зон и разметка всех двенадцати кредитных метрик.
 
-Источник всех чисел раздела `INSERT_11_metrik.md`. Заменяет `zones_all12.py`.
+Источник всех чисел `DOPOLNENIE_zapiska.md`. Заменяет `zones_all12.py`.
 
 ЕДИНЫЙ ПОДХОД. Для всех двенадцати показателей общие: уровень доверия 90 %,
 окно — 36 месячных наблюдений (08.2023 — 07.2026), четыре зоны Приложения № 2,
@@ -31,13 +31,18 @@
 работает с суммой T приращений, и достаточность буфера проверяется прямо (К3).
 
 ЗАМЕЩАЮЩИЙ МЕТОД — для показателя, не выполнившего хотя бы одно условие.
-Та же доверительная вероятность, то же окно, оценка непараметрическая:
-  граница зелёной  = 90-й процентиль значений показателя за 36 месяцев
-                     после отсечения выбросов по правилу Тьюки (1,5 × IQR);
-  граница красной  = L − Q90 месячного изменения (эмпирический аналог M(1));
-  порог T1 / T2    = Q90 месячного / четырёхмесячного изменения.
-Граница зелёной — решение автора. Граница красной и пороги триггеров —
-предложение, требующее подтверждения; печатается с этой пометкой.
+Та же лестница L − M(4) / L − M(1), но число z·σ заменено эмпирическим
+90-м процентилем фактических изменений (решение автора), и выборка —
+только обычные месяцы, без окна годового закрытия (февраль–март):
+  M(1) = Q90 месячных изменений вне февраля–марта — 35 − 6 = 29 точек;
+  M(4) = Q90 четырёхмесячных изменений по окнам, не задевающим
+         февраль–март, — 17 окон; не меньше M(1);
+  пороги T1 / T2 = M(1) / M(4).
+Шесть изменений окна закрытия исключаются потому, что у двух CoR на них
+приходится 81–82 % всей изменчивости (К2): оставленные, они удваивают
+оценку хода на весь год. Отдельную границу для окна не строим — по шести
+точкам 90-й процентиль есть фактически максимум. Скачки вверх в окне
+закрытия ловит триггер T1; прогон показывает, все ли.
 
     python3 method_selection.py              # все таблицы
     python3 method_selection.py --csv        # + ../data/zones_all12.csv
@@ -50,8 +55,12 @@ import statistics as st
 import sys
 from collections import Counter
 
+import warnings
+
 import numpy as np
 from scipy import stats
+
+warnings.filterwarnings("ignore", category=FutureWarning)   # scipy.stats.anderson
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -62,7 +71,6 @@ P = 0.90
 TOL = 0.25                  # К3: 2·SE(σ) на 35 приращениях
 ALPHA = 0.05                # К2: уровень теста Левене
 CLOSE = ("02", "03")        # месяцы годового закрытия
-IQR_K = 1.5                 # правило Тьюки
 OUT = os.path.join(HERE, "..", "data", "zones_all12.csv")
 RETAIL = ("el_", "pd_")
 
@@ -108,22 +116,27 @@ def criteria(v, L, dates):
                 k3=k3, ok=k1 and k2 and k3)
 
 
-def tukey_trim(v):
-    """Значения внутри заборов Тьюки и отсечённые (индекс, значение)."""
-    q1, q3 = np.quantile(v, [0.25, 0.75])
-    lo, hi = q1 - IQR_K * (q3 - q1), q3 + IQR_K * (q3 - q1)
-    keep = [x for x in v if lo <= x <= hi]
-    cut = [(i, x) for i, x in enumerate(v) if not lo <= x <= hi]
-    return keep, cut
+def ordinary(v, dates):
+    """Изменения обычных месяцев: 1-месячные и 4-месячные окна без фев–мар."""
+    d1 = [v[i + 1] - v[i] for i in range(len(v) - 1)
+          if dates[i + 1][5:7] not in CLOSE]
+    d4 = [v[i + 4] - v[i] for i in range(len(v) - 4)
+          if not any(m[5:7] in CLOSE for m in dates[i + 1:i + 5])]
+    return d1, d4
 
 
-def empirical(v, L):
-    """Замещающий метод. Возвращает границы, пороги и отсечённые точки."""
-    keep, cut = tukey_trim(v)
-    g = q90(keep)
-    q1m, q4m = q90(tsum(v, 1)), q90(tsum(v, 4))
-    return dict(green=g, green_raw=q90(v), yellow=L - q1m, t1=q1m,
-                t2=max(q4m, q1m), cut=cut)
+def empirical(v, L, dates):
+    """Замещающий метод: лестница на эмпирическом Q90 обычных месяцев."""
+    d1, d4 = ordinary(v, dates)
+    q1 = q90(d1)
+    q4 = max(q90(d4), q1)
+    s29 = float(np.std(d1, ddof=1))
+    closing = [(dates[i + 1], v[i + 1] - v[i]) for i in range(len(v) - 1)
+               if dates[i + 1][5:7] in CLOSE]
+    return dict(green=L - q4, yellow=L - q1, t1=q1, t2=q4, n1=len(d1),
+                n4=len(d4), d1=d1, sigma29=s29,
+                green_f29=L - Z * s29 * 2, yellow_f29=L - Z * s29,
+                closing=closing)
 
 
 def zone_of(x, g, y, L):
@@ -153,12 +166,11 @@ def evaluate():
                  retail=code.startswith(RETAIL))
         if c["ok"]:
             r.update(method="M(T)", green=c["green"], yellow=c["yellow"],
-                     t1=c["m1"], t2=c["m4"], cut=[], proposal=False)
+                     t1=c["m1"], t2=c["m4"], proposal=False)
         else:
-            e = empirical(v, L)
-            r.update(method="эмпирический", green=e["green"], yellow=e["yellow"],
-                     t1=e["t1"], t2=e["t2"], cut=e["cut"], green_raw=e["green_raw"],
-                     proposal=True)
+            e = empirical(v, L, dates)
+            r.update(method="квантиль", green=e["green"], yellow=e["yellow"],
+                     t1=e["t1"], t2=e["t2"], emp=e, proposal=False)
         r["zone"] = ZN[zone_of(r["fact"], r["green"], r["yellow"], L)]
         r["load"], r["n_t1"], r["n_t2"], r["zones"] = fsm_load(
             v, r["green"], r["yellow"], L, r["t1"], r["t2"])
@@ -209,40 +221,42 @@ def run(dump=False):
         dist = (r["L"] - r["fact"]) / r["c"]["sigma"]
         print(f"{r['name']:<32}{r['method']:>13}{r['L']:>9.2f}{r['fact']:>9.2f}"
               f"{r['green']:>9.3f}{r['yellow']:>9.3f}{r['zone']:>10}"
-              f"{room:>+11.2f}{dist:>7.1f}{r['fact'] / r['L']:>7.0%}"
-              + ("  *" if r["proposal"] else ""))
-    print("«запас, пп» — до границы зелёной; «в σ» — (уровень − факт)/σ_Δ; "
-          "* — граница красной — предложение.")
+              f"{room:>+11.2f}{dist:>7.1f}{r['fact'] / r['L']:>7.0%}")
+    print("«запас, пп» — до границы зелёной; «в σ» — (уровень − факт)/σ_Δ.")
 
     print("\n3. ЗАМЕЩАЮЩИЙ МЕТОД — ПОДРОБНО\n")
     for r in rows:
         if r["method"] == "M(T)":
             continue
-        v = r["v"]
-        cut = ", ".join(f"{dates[i]}: {x:+.2f}" for i, x in r["cut"]) or "нет"
-        above = [(dates[i], x) for i, x in enumerate(v) if x >= r["green"]]
-        pos = [dates[i] for i, x in enumerate(v) if x > 0]
-        d = np.diff(v)
-        i_mx = int(np.argmax(d))
+        v, e, c = r["v"], r["emp"], r["c"]
+        d1 = np.array(e["d1"])
+        nonzero = [(dates[i], x) for i, x in enumerate(v)
+                   if zone_of(x, r["green"], r["yellow"], r["L"]) > 0]
         print(f"── {r['name']}, уровень {r['L']:.2f}, факт {r['fact']:+.3f} → {r['zone']}")
-        print(f"   отсечено по Тьюки: {cut}")
-        print(f"   граница зелёной {r['green']:+.3f} ({r['green'] / r['L']:.1%} уровня); "
-              f"без отсечения {r['green_raw']:+.3f} — сдвиг "
-              f"{r['green'] - r['green_raw']:+.3f} пп")
-        print(f"   граница красной L − Q90(1 мес) = {r['yellow']:.3f}   "
-              f"пороги T1 {r['t1']:.3f}, T2 {r['t2']:.3f}   [предложение]")
-        print(f"   месяцев не ниже границы зелёной: {len(above)} из {len(v)} — "
-              + ", ".join(f"{m} {x:+.2f}" for m, x in above))
-        print(f"   наибольшее месячное повышение: {dates[i_mx + 1]} {d[i_mx]:+.3f} пп "
-              f"= {d[i_mx] / r['L']:.0%} уровня")
-        print(f"   месяцев с положительным значением: {len(pos)}"
-              + (f" — {pos[0]} … {pos[-1]}" if pos else ""))
+        print(f"   формула по всем 35: σ {c['sigma']:.4f}, граница зелёной "
+              f"{c['green']:+.4f}")
+        print(f"   выборка: {e['n1']} месячных изменений вне фев–мар, "
+              f"{e['n4']} четырёхмесячных окон")
+        print(f"   квантиль: M(1) {e['t1']:.4f}, M(4) {e['t2']:.4f} → "
+              f"зелёная < {r['green']:.4f} ≤ жёлтая < {r['yellow']:.4f} ≤ красная")
+        print(f"   для сверки — формула на тех же {e['n1']}: σ {e['sigma29']:.4f}, "
+              f"границы {e['green_f29']:.4f} / {e['yellow_f29']:.4f}")
+        print(f"   нормальность {e['n1']} точек: Шапиро p {stats.shapiro(d1).pvalue:.3f}, "
+              f"Жарк-Бера p {stats.jarque_bera(d1).pvalue:.3f}, "
+              f"Андерсон A² {stats.anderson(d1, dist='norm').statistic:.3f}")
+        print("   окно закрытия: " + ", ".join(
+            f"{m} {x:+.2f}{' T1' if x >= r['t1'] else ''}" for m, x in e["closing"]))
+        up = [x for _m, x in e["closing"] if x > 0]
+        print(f"   скачков вверх в окне закрытия {len(up)}, поймано T1 "
+              f"{sum(1 for x in up if x >= r['t1'])}")
+        print(f"   месяцев вне зелёной за 36: {len(nonzero)}"
+              + (" — " + ", ".join(f"{m} {x:+.2f}" for m, x in nonzero) if nonzero else ""))
         print()
 
     print("4. НАГРУЗКА МАШИНЫ МЕР, 32 месяца × показатель\n")
     groups = (("девять розничных", [r for r in rows if r["retail"]]),
               ("топ-20", [r for r in rows if r["code"] == "top20"]),
-              ("две CoR [пороги — предложение]",
+              ("две CoR",
                [r for r in rows if r["method"] != "M(T)"]))
     for title, sel in groups:
         tot = sum((r["load"] for r in sel), Counter())
@@ -266,7 +280,7 @@ def run(dump=False):
                         "k1_green_mt", "k2_ratio", "k2_levene_p", "k2_f_p",
                         "k3_dev_t1", "k3_dev_t4", "green_bound", "red_bound",
                         "t1", "t2", "zone", "dist_sigma", "utilisation",
-                        "red_bound_is_proposal"])
+                        "sample_1m"])
             for r in rows:
                 c = r["c"]
                 w.writerow([r["name"], r["method"], f"{r['L']:.4f}",
@@ -277,7 +291,8 @@ def run(dump=False):
                             f"{r['green']:.4f}", f"{r['yellow']:.4f}",
                             f"{r['t1']:.4f}", f"{r['t2']:.4f}", r["zone"],
                             f"{(r['L'] - r['fact']) / c['sigma']:.2f}",
-                            f"{r['fact'] / r['L']:.4f}", int(r["proposal"])])
+                            f"{r['fact'] / r['L']:.4f}",
+                            r["emp"]["n1"] if r["method"] != "M(T)" else 35])
         print(f"\nвыгружено: {os.path.normpath(OUT)}")
     return rows
 
@@ -312,11 +327,10 @@ def selftest():
     check("К1 отклоняет ряд, у которого M(4) больше уровня",
           not criteria(noisy, 3.0, dates)["k1"])
 
-    # Тьюки: отсекает подложенный выброс, не трогает остальное
-    base = list(np.linspace(0.0, 1.0, 35)) + [-9.0]
-    keep, cut = tukey_trim(base)
-    check("Тьюки отсекает ровно подложенный выброс",
-          len(cut) == 1 and cut[0][1] == -9.0, f"отсечено {len(cut)}")
+    # выборка обычных месяцев: 35 − 6 = 29 месячных, 17 четырёхмесячных окон
+    d1, d4 = ordinary(list(range(36)), dates)
+    check("обычных месяцев 29, окон 17", (len(d1), len(d4)) == (29, 17),
+          f"{len(d1)} / {len(d4)}")
 
     # реальные данные
     _dates, rows = evaluate()
@@ -340,6 +354,14 @@ def selftest():
     check("лестница CoR монотонна: зелёная < красная < уровень",
           all(r["green"] < r["yellow"] < r["L"] for r in rows
               if r["method"] != "M(T)"))
+    kb, msb = by["cor_kb_pb"], by["cor_msb"]
+    check("границы CoR совпадают с книгой v1.8: 1,5727 / 2,2817 и 2,4859 / 3,1257",
+          [round(x, 4) for x in (kb["green"], kb["yellow"], msb["green"], msb["yellow"])]
+          == [1.5727, 2.2817, 2.4859, 3.1257])
+    up = [(r["name"], x) for r in (kb, msb) for _m, x in r["emp"]["closing"] if x > 0]
+    check("все скачки вверх в окне закрытия ловит T1",
+          all(x >= by[c]["t1"] for c in ("cor_kb_pb", "cor_msb")
+              for _m, x in by[c]["emp"]["closing"] if x > 0), f"скачков {len(up)}")
     ret = sum((r["load"] for r in rows if r["retail"]), Counter())
     check("нагрузка по розничным: R0 259, R1 24, R2 5",
           (ret["R0"], ret["R1"], ret["R2"], ret["R3"]) == (259, 24, 5, 0), str(dict(ret)))
