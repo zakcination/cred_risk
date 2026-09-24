@@ -21,6 +21,15 @@
      — S17 Т (смысл неизвестен) в погашения не входит, идёт своей колонкой;
      — доля досрочных считается только там, где есть плановая дата: у S02 её нет.
 
+   Р-4 (RPT_G, 24.09.2026): у S17 в декабре 2025 «закрыто» 35 679 договоров, из
+   них 86,2 % были просрочены на начало месяца (обычно 8–10 %), и 55 % закрыто
+   одним днём. Это выбытие портфелем, записанное статусом «Закрыт», а не
+   погашение. Статус его не отличает — поэтому закрытия делятся по признаку:
+   был ли у договора на 1-е число месяца закрытия открытый счёт с просрочкой
+   по 1424. Колонки closed_overdue_* — эта часть; «чистые» погашения = все
+   минус она. Признак есть с 01.2025: раньше срезов loan_account нет, и
+   закрытия 09–12.2024 все попадают в «чистые».
+
    product_key (виток 2): S03 и S17 — l_product_type|l_subproduct_type,
    S01 — l_segment (бизнес-линия), S02 — карты целиком. Расшифровка ключа —
    таблица dim_product в POWERBI.md.
@@ -32,7 +41,8 @@ WITH w AS (
     FROM    [Dictionaries].[risk_analytics].[loans] AS l
 )
 , base AS (
-    SELECT  l.l_source
+    SELECT  l.l_gid
+          , l.l_source
           , l.l_funding_date
           , l.l_actual_closure_date
           , l.l_scheduled_closure_date
@@ -61,6 +71,18 @@ WITH w AS (
                 ELSE N'прочие'
             END                                                         AS cls
     FROM    [Dictionaries].[risk_analytics].[loans] AS l
+)
+, od AS (           /* открытые счета с просрочкой по 1424 на 1-е число месяца — для Р-4 */
+    SELECT DISTINCT
+            la.la_source
+          , la.la_gid
+          , la.la_reporting_date
+    FROM    [Dictionaries].[risk_analytics].[loan_account] AS la
+    CROSS JOIN w
+    WHERE   la.la_status = N'Открыт'
+      AND   ISNULL(la.la_account_1424, 0) <> 0
+      AND   la.la_reporting_date >= DATEADD(month, -24, w.snap)
+      AND   la.la_reporting_date <  w.snap
 )
 , iss AS (          /* 2-1: выдачи по месяцу l_funding_date */
     SELECT  DATEFROMPARTS(YEAR(b.l_funding_date), MONTH(b.l_funding_date), 1)                AS month_start
@@ -93,11 +115,28 @@ WITH w AS (
                      ELSE 0 END)                                                              AS closed_days_sum
           , SUM(CASE WHEN b.cls = N'закрыт' AND b.l_actual_closure_date >= b.l_funding_date
                      THEN 1 ELSE 0 END)                                                       AS closed_days_cnt
+          , SUM(CASE WHEN b.cls = N'закрыт' AND o.la_gid IS NOT NULL THEN 1 ELSE 0 END)      AS closed_overdue_cnt
+          , SUM(CASE WHEN b.cls = N'закрыт' AND o.la_gid IS NOT NULL
+                          AND b.l_scheduled_closure_date IS NOT NULL THEN 1 ELSE 0 END)      AS closed_overdue_sched_cnt
+          , SUM(CASE WHEN b.cls = N'закрыт' AND o.la_gid IS NOT NULL
+                          AND b.l_actual_closure_date < b.l_scheduled_closure_date
+                     THEN 1 ELSE 0 END)                                                       AS closed_overdue_early_cnt
+          , SUM(CASE WHEN b.cls = N'закрыт' AND o.la_gid IS NOT NULL
+                          AND b.l_actual_closure_date >= b.l_funding_date
+                     THEN CAST(DATEDIFF(day, b.l_funding_date, b.l_actual_closure_date) AS bigint)
+                     ELSE 0 END)                                                              AS closed_overdue_days_sum
+          , SUM(CASE WHEN b.cls = N'закрыт' AND o.la_gid IS NOT NULL
+                          AND b.l_actual_closure_date >= b.l_funding_date
+                     THEN 1 ELSE 0 END)                                                       AS closed_overdue_days_cnt
           , SUM(CASE WHEN b.cls = N'S17 Т'      THEN 1 ELSE 0 END)                           AS closed_t_cnt
           , SUM(CASE WHEN b.cls = N'списан'     THEN 1 ELSE 0 END)                           AS writeoff_cnt
           , SUM(CASE WHEN b.cls = N'расторгнут' THEN 1 ELSE 0 END)                           AS terminated_cnt
     FROM    base AS b
     CROSS JOIN w
+    LEFT JOIN od AS o
+           ON  o.la_gid            = b.l_gid
+           AND o.la_source         = b.l_source
+           AND o.la_reporting_date = DATEFROMPARTS(YEAR(b.l_actual_closure_date), MONTH(b.l_actual_closure_date), 1)
     WHERE   b.l_actual_closure_date >= DATEADD(month, -24, w.snap)
       AND   b.l_actual_closure_date <  w.snap
     GROUP BY DATEFROMPARTS(YEAR(b.l_actual_closure_date), MONTH(b.l_actual_closure_date), 1), b.l_source, b.product_key
@@ -121,6 +160,11 @@ SELECT    k.month_start
         , ISNULL(c.closed_early_cnt, 0)        AS closed_early_cnt
         , ISNULL(c.closed_days_sum, 0)         AS closed_days_sum
         , ISNULL(c.closed_days_cnt, 0)         AS closed_days_cnt
+        , ISNULL(c.closed_overdue_cnt, 0)       AS closed_overdue_cnt
+        , ISNULL(c.closed_overdue_sched_cnt, 0) AS closed_overdue_sched_cnt
+        , ISNULL(c.closed_overdue_early_cnt, 0) AS closed_overdue_early_cnt
+        , ISNULL(c.closed_overdue_days_sum, 0)  AS closed_overdue_days_sum
+        , ISNULL(c.closed_overdue_days_cnt, 0)  AS closed_overdue_days_cnt
         , ISNULL(c.closed_t_cnt, 0)            AS closed_t_cnt
         , ISNULL(c.writeoff_cnt, 0)            AS writeoff_cnt
         , ISNULL(c.terminated_cnt, 0)          AS terminated_cnt
