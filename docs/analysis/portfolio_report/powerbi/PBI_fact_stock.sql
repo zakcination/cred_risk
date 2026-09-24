@@ -2,7 +2,8 @@
    PBI_fact_stock — таблица фактов ЗАПАСА и РИСКА для Power BI
                     (разделы 3, 4-1 ③, 5 и покрытие провизиями).
 
-   Зерно: месяц × источник. Строка месяца M — срез loan_account на первое число
+   Зерно: месяц × источник × продукт (product_key, виток 2). Строка месяца M —
+   срез loan_account на первое число
    месяца M+1, то есть запас на КОНЕЦ месяца M. Так запас включает выдачи месяца,
    и поток с запасом в одной строке отчёта сходятся (REPORT_STRUCTURE.md).
 
@@ -13,9 +14,14 @@
 
    Как подключить — как PBI_fact_flow.sql: Импорт, Инструкция SQL, файл целиком.
 
-   Заёмщиков с остатком — НЕ складываются между источниками: один человек в
-   двух системах имеет два разных l_borrower_id. В модели мера показывает их
-   только на уровне одного источника (см. POWERBI.md).
+   Заёмщиков с остатком — считаются на зерне «источник × продукт» и НЕ
+   складываются ни между продуктами (у человека бывает и POS, и зарплатный),
+   ни между источниками (номер системный). Для уровня источника — отдельный
+   факт PBI_fact_borrowers.sql. Логика выбора — мера в POWERBI.md.
+
+   Счёт без договора в loans (прогон 24.09.2026: у S17 открытых счетов на 6 284
+   больше, чем договоров со счётом) получает ключ «<источник>|нет договора» —
+   отдельной строкой, а не в «не размечено».
 
    Провизии: la_account_1428 + la_account_1845 + la_account_18771
    (risk_analytics_data_model.md). Просрочка — остаток счёта 1424, не дни:
@@ -46,6 +52,14 @@ WITH w AS (
 SELECT    a.month_start
         , a.snapshot_date
         , a.l_source
+        , CASE
+              WHEN l.l_gid IS NULL    THEN CONVERT(nvarchar(10), a.l_source) + N'|нет договора'
+              WHEN a.l_source = 'S01' THEN N'S01|' + ISNULL(CONVERT(nvarchar(100), l.l_segment), N'—')
+              WHEN a.l_source = 'S02' THEN N'S02|CARD'
+              ELSE CONVERT(nvarchar(10), a.l_source)
+                   + N'|' + ISNULL(CONVERT(nvarchar(255), l.l_product_type),    N'—')
+                   + N'|' + ISNULL(CONVERT(nvarchar(255), l.l_subproduct_type), N'—')
+          END                                                                          AS product_key
         , COUNT_BIG(*)                                                                 AS accounts_open
         , COUNT(DISTINCT CASE WHEN a.bal <> 0 THEN a.la_gid END)                       AS contracts_with_balance
         , SUM(a.bal)                                                                   AS balance
@@ -59,4 +73,12 @@ LEFT JOIN [Dictionaries].[risk_analytics].[loans] AS l
        ON  l.l_gid    = a.la_gid
        AND l.l_source = a.l_source
 GROUP BY  a.month_start, a.snapshot_date, a.l_source
+        , CASE
+              WHEN l.l_gid IS NULL    THEN CONVERT(nvarchar(10), a.l_source) + N'|нет договора'
+              WHEN a.l_source = 'S01' THEN N'S01|' + ISNULL(CONVERT(nvarchar(100), l.l_segment), N'—')
+              WHEN a.l_source = 'S02' THEN N'S02|CARD'
+              ELSE CONVERT(nvarchar(10), a.l_source)
+                   + N'|' + ISNULL(CONVERT(nvarchar(255), l.l_product_type),    N'—')
+                   + N'|' + ISNULL(CONVERT(nvarchar(255), l.l_subproduct_type), N'—')
+          END
 OPTION (MAXDOP 1);
