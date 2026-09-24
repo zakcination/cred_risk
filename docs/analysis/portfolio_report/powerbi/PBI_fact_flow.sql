@@ -17,6 +17,9 @@
      — «не договор» (черновики, отказы, отмены) в выдачи не входит;
      — объём по S02 — установленные лимиты, отдельной колонкой: по картам
        l_loan_amount = l_limit в 99,9 % строк, выдачи в витрине нет;
+     — по S02 — ещё число карт с лимитом > 0, card_limit_pos_cnt (К-1, вариант Б,
+       решение автора 24.09.2026): 71–99 % выданных карт без лимита (RPT_H), и
+       «выдано карт» без этой строки читается как выдача кредитных карт;
      — средняя сумма считается по договорам с ненулевой суммой;
      — S17 Т (смысл неизвестен) в погашения не входит, идёт своей колонкой;
      — доля досрочных считается только там, где есть плановая дата: у S02 её нет.
@@ -92,6 +95,7 @@ WITH w AS (
           , SUM(CASE WHEN b.l_source <> 'S02' AND b.amt > 0 THEN 1 ELSE 0 END)                AS issued_cnt_amount_pos
           , SUM(CASE WHEN b.l_source <> 'S02' THEN b.amt ELSE 0 END)                          AS issued_amount
           , SUM(CASE WHEN b.l_source =  'S02' THEN b.amt ELSE 0 END)                          AS card_limit_amount
+          , SUM(CASE WHEN b.l_source =  'S02' AND b.amt > 0 THEN 1 ELSE 0 END)                AS card_limit_pos_cnt
           , SUM(CASE WHEN b.term > 0 THEN CAST(b.term AS bigint) ELSE 0 END)                  AS term_sum
           , SUM(CASE WHEN b.term > 0 THEN 1 ELSE 0 END)                                       AS term_cnt
     FROM    base AS b
@@ -153,6 +157,7 @@ SELECT    k.month_start
         , ISNULL(i.issued_cnt_amount_pos, 0)   AS issued_cnt_amount_pos
         , ISNULL(i.issued_amount, 0)           AS issued_amount
         , ISNULL(i.card_limit_amount, 0)       AS card_limit_amount
+        , ISNULL(i.card_limit_pos_cnt, 0)      AS card_limit_pos_cnt
         , ISNULL(i.term_sum, 0)                AS term_sum
         , ISNULL(i.term_cnt, 0)                AS term_cnt
         , ISNULL(c.closed_cnt, 0)              AS closed_cnt
