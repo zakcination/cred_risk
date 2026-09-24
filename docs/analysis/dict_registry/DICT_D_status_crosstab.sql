@@ -51,12 +51,16 @@ SELECT la_source, last_dt FROM #dictd_lastdate ORDER BY la_source;
 
 /* ─────────────────────────────────────────────────────────────────────────
    1. Кросс-таблица: статус договора × статус счёта.
-      la_status IS NULL означает «счёта на дату нет» — это не пропуск,
-      а содержательный исход: по картам счёт есть у меньшинства договоров.
+      Два исхода разведены намеренно. Редакция 23.09.2026 писала оба как
+      «(счёта нет)» через ISNULL(la_status) — и склеивала отсутствие счёта
+      со счётом, у которого пуст статус. Прогон 24.09.2026 показал вторых
+      в блоке 2: 28 договоров по S17 и 11 по S02.
    ───────────────────────────────────────────────────────────────────────── */
 SELECT    l.l_source
         , l.l_loan_status
-        , ISNULL(la.la_status, N'(счёта нет)')                               AS la_status
+        , CASE WHEN la.la_gid    IS NULL THEN N'(счёта нет)'
+               WHEN la.la_status IS NULL THEN N'(счёт есть, статус пуст)'
+               ELSE la.la_status END                                         AS la_status
         , COUNT(DISTINCT l.l_gid)                                            AS loans_distinct
         , COUNT_BIG(*)                                                       AS rows_joined
 FROM      [Dictionaries].[risk_analytics].[loans] AS l
@@ -67,7 +71,10 @@ LEFT JOIN [Dictionaries].[risk_analytics].[loan_account] AS la
        AND la.la_source         = l.l_source
        AND la.la_reporting_date = d.last_dt
 WHERE     l.l_source IN ('S02', 'S17')
-GROUP BY  l.l_source, l.l_loan_status, ISNULL(la.la_status, N'(счёта нет)')
+GROUP BY  l.l_source, l.l_loan_status
+        , CASE WHEN la.la_gid    IS NULL THEN N'(счёта нет)'
+               WHEN la.la_status IS NULL THEN N'(счёт есть, статус пуст)'
+               ELSE la.la_status END
 ORDER BY  l.l_source, l.l_loan_status, loans_distinct DESC
 OPTION (MAXDOP 1);
 
@@ -95,17 +102,27 @@ ORDER BY  t.l_source, t.statuses_per_loan
 OPTION (MAXDOP 1);
 
 /* ─────────────────────────────────────────────────────────────────────────
-   3. РЕШАЮЩИЙ. S17 статус Т — 23 786 договоров неизвестного смысла.
-      Сравнивается с О (действующий) и З (закрыт) на одних и тех же
-      величинах: есть ли счёт, открыт ли он, есть ли остаток и просрочка.
-      Т, ведущий себя как О, — действующий договор вне периметра.
-      Т, ведущий себя как З, — закрытый, и текущий отбор верен.
+   3. Поведение статусов на одних величинах: есть ли счёт, открыт ли он,
+      остаток, просрочка, провизии.
+      Прогон 24.09.2026 (только S17) закрыл вопрос Т: счёт у 28 из 23 786,
+      открытых 0, остаток 0 — Т в портфель не входит.
+      Редакция 24.09.2026 расширена на S02 и отделяет остаток по ОТКРЫТЫМ
+      счетам от прочих. Зачем:
+        — S02 Account Expenses Blocked (4 024 счёта): решение о включении
+          в портфель принимается по остатку, а он не измерялся;
+        — S17 З (гипотеза Р-1): 289 договоров «Закрыт» с открытым счётом.
+          Остаток 101,2 млн ₸ считался по всем 3 245 счетам статуса —
+          сколько из него на 289 открытых, неизвестно.
    ───────────────────────────────────────────────────────────────────────── */
-SELECT    l.l_loan_status
+SELECT    l.l_source
+        , l.l_loan_status
         , COUNT(DISTINCT l.l_gid)                                            AS loans_distinct
         , SUM(CASE WHEN la.la_gid IS NOT NULL THEN 1 ELSE 0 END)             AS with_account
         , SUM(CASE WHEN la.la_status = N'Открыт' THEN 1 ELSE 0 END)          AS acc_open
         , SUM(CAST(ISNULL(la.total_balance_debt,0) AS decimal(38,2)))        AS balance
+        , SUM(CASE WHEN la.la_status = N'Открыт'
+                   THEN CAST(ISNULL(la.total_balance_debt,0) AS decimal(38,2))
+                   ELSE 0 END)                                               AS balance_open_acc
         , SUM(CAST(ISNULL(la.la_account_1424,0)    AS decimal(38,2)))        AS overdue_principal
         , SUM(CAST(ISNULL(la.la_account_1428,0) + ISNULL(la.la_account_1845,0)
                  + ISNULL(la.la_account_18771,0) AS decimal(38,2)))          AS provisions
@@ -116,9 +133,9 @@ LEFT JOIN [Dictionaries].[risk_analytics].[loan_account] AS la
        ON  la.la_gid            = l.l_gid
        AND la.la_source         = l.l_source
        AND la.la_reporting_date = d.last_dt
-WHERE     l.l_source = 'S17'
-GROUP BY  l.l_loan_status
-ORDER BY  loans_distinct DESC
+WHERE     l.l_source IN ('S02', 'S17')
+GROUP BY  l.l_source, l.l_loan_status
+ORDER BY  l.l_source, loans_distinct DESC
 OPTION (MAXDOP 1);
 
 DROP TABLE #dictd_lastdate;
