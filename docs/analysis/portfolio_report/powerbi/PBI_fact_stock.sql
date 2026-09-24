@@ -24,7 +24,14 @@
    отдельной строкой, а не в «не размечено».
 
    Провизии: la_account_1428 + la_account_1845 + la_account_18771
-   (risk_analytics_data_model.md). Просрочка — остаток счёта 1424, не дни:
+   (risk_analytics_data_model.md).
+
+   Р-5 (RPT_G, 24.09.2026): в июне 2026 на S03 появились с нуля счета 1484
+   (+29,6 млрд) и 1485 (+29,1 млрд), одновременно 1428, 1860 и 1434 упали
+   сверх обычного сокращения — перенос остатков между счетами. Смысл 1484/1485
+   по плану счетов не установлен, в risk_analytics_data_model.md их нет.
+   Поэтому они выводятся ОТДЕЛЬНЫМИ колонками и в формулу провизий не входят,
+   пока бухгалтерия не ответит. Имена — из живого аудита (RPT_G блок 2). Просрочка — остаток счёта 1424, не дни:
    delinquency_bucket и days_past_due для этого непригодны (README контура).
 
    Read-only. На выходе только агрегаты.
@@ -42,6 +49,8 @@ WITH w AS (
           , CAST(ISNULL(la.la_account_1424, 0)    AS decimal(38,2))                    AS od1424
           , CAST(ISNULL(la.la_account_1428, 0) + ISNULL(la.la_account_1845, 0)
                + ISNULL(la.la_account_18771, 0)   AS decimal(38,2))                    AS prov
+          , CAST(ISNULL(la.la_account_1484, 0)    AS decimal(38,2))                    AS a1484
+          , CAST(ISNULL(la.la_account_1485, 0)    AS decimal(38,2))                    AS a1485
     FROM    [Dictionaries].[risk_analytics].[loan_account] AS la
     CROSS JOIN w
     WHERE   la.la_status = N'Открыт'
@@ -67,6 +76,8 @@ SELECT    a.month_start
         , COUNT(DISTINCT CASE WHEN a.od1424 <> 0 THEN a.la_gid END)                    AS overdue_contracts
         , SUM(CASE WHEN a.od1424 <> 0 THEN a.bal ELSE 0 END)                           AS balance_of_overdue
         , SUM(a.prov)                                                                  AS provisions
+        , SUM(a.a1484)                                                                 AS acc_1484
+        , SUM(a.a1485)                                                                 AS acc_1485
         , COUNT(DISTINCT CASE WHEN a.bal <> 0 THEN l.l_borrower_id END)                AS borrowers_with_balance
 FROM      acc AS a
 LEFT JOIN [Dictionaries].[risk_analytics].[loans] AS l
