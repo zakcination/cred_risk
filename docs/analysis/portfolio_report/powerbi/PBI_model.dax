@@ -116,8 +116,10 @@ DATATABLE (
 _Остаток (сумма) = SUM ( fact_stock[balance] )
 
 // ── 2-1 Новые выдачи ─────────────────────────────────────────────────────────
-// МЕРА
-Объём выдач, млрд ₸ = DIVIDE ( SUM ( fact_flow[issued_amount] ), 1000000000 )
+// МЕРА. Карты (S02) — пусто, а не 0,0: у карт выдача — лимит, он в своей мере
+Объём выдач, млрд ₸ =
+CALCULATE ( DIVIDE ( SUM ( fact_flow[issued_amount] ), 1000000000 ),
+            KEEPFILTERS ( fact_flow[l_source] <> "S02" ) )
 
 // МЕРА
 Количество выдач = SUM ( fact_flow[issued_cnt] )
@@ -129,8 +131,12 @@ DIVIDE ( SUM ( fact_flow[issued_amount] ), SUM ( fact_flow[issued_cnt_amount_pos
 // МЕРА
 Срок по договору, мес = DIVIDE ( SUM ( fact_flow[term_sum] ), SUM ( fact_flow[term_cnt] ) )
 
-// МЕРА
-Лимиты по картам, млн ₸ = DIVIDE ( SUM ( fact_flow[card_limit_amount] ), 1000000 )
+// МЕРА. Только S02 — у прочих источников пусто, а не 0,0.
+// l_loan_amount S02 берётся из снимка loans на 01.09.2026 — текущий лимит, не лимит
+// при выдаче (Р-8)
+Лимиты по картам, млн ₸ =
+CALCULATE ( DIVIDE ( SUM ( fact_flow[card_limit_amount] ), 1000000 ),
+            KEEPFILTERS ( fact_flow[l_source] = "S02" ) )
 
 // ── 2-3 Погашения: без договоров, просроченных на начало месяца (Р-4) ─────────
 // МЕРА
