@@ -125,11 +125,18 @@ DATATABLE (
         { "В дефолте, млрд ₸",                          "7 Дефолт 90+",     40, "#,0.0"  },
         { "Доля в дефолте (остаток)",                   "7 Дефолт 90+",     41, "0.0%"   },
         { "Выздоровело, шт",                            "7 Дефолт 90+",     42, "#,0"    },
-        { "Stage 3, млрд ₸",                            "8 Стадии",         43, "#,0.0"  },
-        { "POCI, млрд ₸",                               "8 Стадии",         44, "#,0.0"  },
-        { "Stage 3 + 4, млрд ₸",                        "8 Стадии",         45, "#,0.0"  },
-        { "Доля Stage 3 + 4",                           "8 Стадии",         46, "0.0%"   },
-        { "Stage 3 + 4, шт",                            "8 Стадии",         47, "#,0"    }
+        { "Stage 1, млрд ₸",                            "8 Стадии",         43, "#,0.0"  },
+        { "Stage 2, млрд ₸",                            "8 Стадии",         44, "#,0.0"  },
+        { "Доля Stage 2",                               "8 Стадии",         45, "0.0%"   },
+        { "Stage 3, млрд ₸",                            "8 Стадии",         46, "#,0.0"  },
+        { "POCI, млрд ₸",                               "8 Стадии",         47, "#,0.0"  },
+        { "Stage 3 + 4, млрд ₸",                        "8 Стадии",         48, "#,0.0"  },
+        { "Доля Stage 3 + 4",                           "8 Стадии",         49, "0.0%"   },
+        { "Stage 3 + 4, шт",                            "8 Стадии",         50, "#,0"    },
+        { "Покрытие Stage 1",                           "8 Стадии",         51, "0.0%"   },
+        { "Покрытие Stage 2",                           "8 Стадии",         52, "0.0%"   },
+        { "Покрытие Stage 3 + 4",                       "8 Стадии",         53, "0.0%"   },
+        { "Без стадии, млрд ₸",                         "8 Стадии",         54, "#,0.00" }
     }
 )
 
@@ -370,7 +377,23 @@ DIVIDE (
 // МЕРА. 6-й чистый срез подряд после дефолта (Прил. 4 Методики МСФО)
 Выздоровело, шт = SUM ( fact_default[cured_cnt] )
 
-// ── 8 Стадии (fact_stage: стадия из CL_PORTFOLIO, деньги — витрина, открытые счета) ──
+// ── 8 Стадии (fact_stage: стадия из CL_PORTFOLIO, деньги и провизии — витрина,
+//    открытые счета). Все четыре стадии с 28.09.2026. Запас — на конец месяца.
+// МЕРА
+Stage 1, млрд ₸ =
+CALCULATE ( SUM ( fact_stage[stage1_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+// МЕРА
+Stage 2, млрд ₸ =
+CALCULATE ( SUM ( fact_stage[stage2_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+// МЕРА. Доля SICR в остатке — весь остаток, все источники
+Доля Stage 2 =
+DIVIDE (
+    CALCULATE ( SUM ( fact_stage[stage2_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+    CALCULATE ( [_Остаток (сумма)],                 LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+)
+
 // МЕРА
 Stage 3, млрд ₸ =
 CALCULATE ( SUM ( fact_stage[stage3_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
@@ -393,6 +416,32 @@ DIVIDE (
     CALCULATE ( SUM ( fact_stage[stage3_balance] ) + SUM ( fact_stage[poci_balance] ),
                 LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
     CALCULATE ( [_Остаток (сумма)], LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+)
+
+// МЕРА. Покрытие провизиями по стадиям (МСФО 7 п. 35H): провизии стадии / остаток стадии
+Покрытие Stage 1 =
+CALCULATE ( DIVIDE ( SUM ( fact_stage[stage1_prov] ), SUM ( fact_stage[stage1_balance] ) ),
+            LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+// МЕРА
+Покрытие Stage 2 =
+CALCULATE ( DIVIDE ( SUM ( fact_stage[stage2_prov] ), SUM ( fact_stage[stage2_balance] ) ),
+            LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+// МЕРА. POCI вместе с Stage 3: у POCI ожидаемые убытки заложены в ставку, покрытие низкое
+Покрытие Stage 3 + 4 =
+CALCULATE ( DIVIDE ( SUM ( fact_stage[stage3_prov] ) + SUM ( fact_stage[poci_prov] ),
+                     SUM ( fact_stage[stage3_balance] ) + SUM ( fact_stage[poci_balance] ) ),
+            LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+// МЕРА. Остаток, не нашедший стадию: у S02 34–105 млн ₸ на срез, у прочих ~0
+Без стадии, млрд ₸ =
+DIVIDE (
+    CALCULATE ( [_Остаток (сумма)]
+                - SUM ( fact_stage[stage1_balance] ) - SUM ( fact_stage[stage2_balance] )
+                - SUM ( fact_stage[stage3_balance] ) - SUM ( fact_stage[poci_balance] ),
+                LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+    1000000000
 )
 
 // ── Поколения (fact_vintage) — в переключатель не входят: свой визуал, ось — возраст ──
@@ -462,11 +511,18 @@ SWITCH (
     "В дефолте, млрд ₸",                         [В дефолте, млрд ₸],
     "Доля в дефолте (остаток)",                  [Доля в дефолте (остаток)],
     "Выздоровело, шт",                           [Выздоровело, шт],
+    "Stage 1, млрд ₸",                           [Stage 1, млрд ₸],
+    "Stage 2, млрд ₸",                           [Stage 2, млрд ₸],
+    "Доля Stage 2",                              [Доля Stage 2],
     "Stage 3, млрд ₸",                           [Stage 3, млрд ₸],
     "POCI, млрд ₸",                              [POCI, млрд ₸],
     "Stage 3 + 4, млрд ₸",                       [Stage 3 + 4, млрд ₸],
     "Доля Stage 3 + 4",                          [Доля Stage 3 + 4],
-    "Stage 3 + 4, шт",                           [Stage 3 + 4, шт]
+    "Stage 3 + 4, шт",                           [Stage 3 + 4, шт],
+    "Покрытие Stage 1",                          [Покрытие Stage 1],
+    "Покрытие Stage 2",                          [Покрытие Stage 2],
+    "Покрытие Stage 3 + 4",                      [Покрытие Stage 3 + 4],
+    "Без стадии, млрд ₸",                        [Без стадии, млрд ₸]
 )
 
 // ДИНАМИЧЕСКАЯ СТРОКА ФОРМАТА для меры [Значение]

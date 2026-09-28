@@ -1,5 +1,6 @@
 /* =============================================================================
-   PBI_fact_stage — таблица фактов STAGE 3 + 4 для Power BI.
+   PBI_fact_stage — таблица фактов СТАДИЙ 1–4 для Power BI: остаток, счета и
+   провизии по стадиям (Stage 1, Stage 2, Stage 3, POCI).
 
    Зерно: месяц × источник × продукт (product_key как в PBI_fact_stock.sql).
    Месяц — срез 1-го числа − 1 месяц, как у запаса.
@@ -27,36 +28,44 @@
        CL_PORTFOLIO — 12–33 счёта.
 
    Контроль (Н22), месяц 2026-07 (срез 01.08.2026) — повтор STG_0 блоков 4–5,
-   stage3_balance + poci_balance, млн ₸: S03 105 479,8; S01 47 276,0;
-   S17 3 770,3; S02 16,5.
+   млн ₸:         Stage 1       Stage 2      Stage 3     POCI
+          S01   556 383,4      6 780,8     41 605,5    5 670,5
+          S03   684 334,1     22 201,1    105 285,4      194,4
+          S17   115 911,4      1 072,2      3 769,8        0,5
+          S02     2 789,5          0,1         16,5        0
+   Stage 3 + POCI — как в прежней редакции (прогон 28.09.2026 сошёлся).
 
-   Сначала отбираются строки стадий 3 и 4 старой ветки (десятки тысяч на срез),
-   потом — связь с витриной. Ветки UNION ALL в st помечены константой src:
+   Редакция 28.09.2026 (запрос автора): все четыре стадии, а не только 3 и 4, и
+   провизии (1428 + 1845 + 18771) по стадиям — покрытие по стадиям, МСФО 7 п. 35H.
+   Строк старой ветки теперь ~620 тыс. на срез вместо ~80 тыс. — прогон дольше.
+   «Без стадии» (счета, не нашедшие стадию: у S02 34–105 млн ₸ на срез) в факт не
+   входят — в модели это остаток fact_stock минус сумма стадий.
+   Строки старой ветки связываются с витриной через ключ. Ветки UNION ALL в st помечены константой src:
    условие src = … в следующих звеньях отсекает лишние таблицы при компиляции. Ключи — сырые, без нормализации в JOIN
    (risk_dwh_reconciliation/CLAUDE.md). Имена колонок — из живого аудита STG_0
    (блок 0а). Режим ИМПОРТ, один оператор. Read-only. На выходе только агрегаты.
    ============================================================================= */
-WITH st AS (        /* стадии 3 и 4 старой ветки: источник × срез × ключ */
+WITH st AS (        /* стадии 1–4 старой ветки: источник × срез × ключ */
     SELECT  'S03' AS src, x.[date] AS d
           , CONVERT(varchar(100), x.contract_number)                                     AS k
           , CAST(x.[category] AS int)                                                    AS stage
     FROM    [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] AS x
     WHERE   x.[date] >= '20250101' AND DAY(x.[date]) = 1
-      AND   x.[category] IN (3, 4)
+      AND   x.[category] IN (1, 2, 3, 4)
     UNION ALL
     SELECT  'S01', x.actual_date
           , CONVERT(varchar(100), x.contract_id)
           , CAST(TRY_CAST(x.Basket AS decimal(9,4)) AS int)
     FROM    [CL_PORTFOLIO].[dbo].[PORTFOLIO_RS] AS x
     WHERE   x.actual_date >= '20250101' AND DAY(x.actual_date) = 1
-      AND   TRY_CAST(x.Basket AS decimal(9,4)) IN (3, 4)
+      AND   TRY_CAST(x.Basket AS decimal(9,4)) IN (1, 2, 3, 4)
     UNION ALL
     SELECT  'S17', x.actual_date
           , CONVERT(varchar(100), x.contractnumber)
           , CAST(TRY_CAST(x.Basket AS decimal(9,4)) AS int)
     FROM    [CL_PORTFOLIO].[dbo].[PORTFOLIO_Fenix] AS x
     WHERE   x.actual_date >= '20250101' AND DAY(x.actual_date) = 1
-      AND   TRY_CAST(x.Basket AS decimal(9,4)) IN (3, 4)
+      AND   TRY_CAST(x.Basket AS decimal(9,4)) IN (1, 2, 3, 4)
     UNION ALL
     SELECT  'S02', c.d, c.k, MAX(c.stage)
     FROM (
@@ -64,19 +73,19 @@ WITH st AS (        /* стадии 3 и 4 старой ветки: источн
              , CAST(TRY_CAST(x.[category] AS decimal(9,4)) AS int) AS stage
         FROM   [CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_WAY4] AS x
         WHERE  x.[date] >= '20250101' AND DAY(x.[date]) = 1
-          AND  TRY_CAST(x.[category] AS decimal(9,4)) IN (3, 4)
+          AND  TRY_CAST(x.[category] AS decimal(9,4)) IN (1, 2, 3, 4)
         UNION ALL
         SELECT x.[date], CONVERT(varchar(100), x.contract_number)
              , CAST(TRY_CAST(x.[category] AS decimal(9,4)) AS int)
         FROM   [CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_MIGR_WAY4] AS x
         WHERE  x.[date] >= '20250101' AND DAY(x.[date]) = 1
-          AND  TRY_CAST(x.[category] AS decimal(9,4)) IN (3, 4)
+          AND  TRY_CAST(x.[category] AS decimal(9,4)) IN (1, 2, 3, 4)
         UNION ALL
         SELECT x.[date], CONVERT(varchar(100), x.contract_number)
              , CAST(TRY_CAST(x.[category] AS decimal(9,4)) AS int)
         FROM   [CL_PORTFOLIO].[dbo].[PORTFOLIO_CREDITCARDS_SMART_CARD] AS x
         WHERE  x.[date] >= '20250101' AND DAY(x.[date]) = 1
-          AND  TRY_CAST(x.[category] AS decimal(9,4)) IN (3, 4)
+          AND  TRY_CAST(x.[category] AS decimal(9,4)) IN (1, 2, 3, 4)
     ) AS c
     GROUP BY c.d, c.k
 )
@@ -96,7 +105,7 @@ WITH st AS (        /* стадии 3 и 4 старой ветки: источн
            AND l.l_loan_id = CONVERT(nvarchar(100), st.k)
     WHERE   st.src = 'S01'
 )
-, a AS (            /* открытые счета витрины со стадией 3 / 4 на том же срезе */
+, a AS (            /* открытые счета витрины со стадией на том же срезе */
     SELECT  gk.src, gk.d, gk.stage
           , CASE
                 WHEN gk.l_source = 'S01' THEN N'S01|' + ISNULL(CONVERT(nvarchar(100), gk.l_segment), N'—')
@@ -106,6 +115,8 @@ WITH st AS (        /* стадии 3 и 4 старой ветки: источн
                      + N'|' + ISNULL(CONVERT(nvarchar(255), gk.l_subproduct_type), N'—')
             END                                                                          AS product_key
           , CAST(ISNULL(la.total_balance_debt, 0) AS decimal(38,2))                      AS bal
+          , CAST(ISNULL(la.la_account_1428, 0) + ISNULL(la.la_account_1845, 0)
+                 + ISNULL(la.la_account_18771, 0) AS decimal(38,2))                      AS prov
     FROM    gk
     JOIN    [Dictionaries].[risk_analytics].[loan_account] AS la
            ON  la.la_gid            = gk.l_gid
@@ -119,6 +130,8 @@ WITH st AS (        /* стадии 3 и 4 старой ветки: источн
                    + N'|' + ISNULL(CONVERT(nvarchar(255), l.l_subproduct_type), N'—'),
                    N'S17|нет договора')
           , CAST(ISNULL(la.total_balance_debt, 0) AS decimal(38,2))
+          , CAST(ISNULL(la.la_account_1428, 0) + ISNULL(la.la_account_1845, 0)
+                 + ISNULL(la.la_account_18771, 0) AS decimal(38,2))
     FROM    st
     JOIN    [Dictionaries].[risk_analytics].[loan_account] AS la
            ON  la.la_dog_num        = CONVERT(nvarchar(100), st.k)
@@ -133,10 +146,18 @@ WITH st AS (        /* стадии 3 и 4 старой ветки: источн
 SELECT    DATEADD(month, -1, a.d)                                                        AS month_start
         , CONVERT(nvarchar(10), a.src)                                                   AS l_source
         , a.product_key
-        , SUM(CASE WHEN a.stage = 3 THEN 1     ELSE 0 END)                               AS stage3_cnt
-        , SUM(CASE WHEN a.stage = 3 THEN a.bal ELSE 0 END)                               AS stage3_balance
-        , SUM(CASE WHEN a.stage = 4 THEN 1     ELSE 0 END)                               AS poci_cnt
-        , SUM(CASE WHEN a.stage = 4 THEN a.bal ELSE 0 END)                               AS poci_balance
+        , SUM(CASE WHEN a.stage = 1 THEN 1      ELSE 0 END)                              AS stage1_cnt
+        , SUM(CASE WHEN a.stage = 1 THEN a.bal  ELSE 0 END)                              AS stage1_balance
+        , SUM(CASE WHEN a.stage = 1 THEN a.prov ELSE 0 END)                              AS stage1_prov
+        , SUM(CASE WHEN a.stage = 2 THEN 1      ELSE 0 END)                              AS stage2_cnt
+        , SUM(CASE WHEN a.stage = 2 THEN a.bal  ELSE 0 END)                              AS stage2_balance
+        , SUM(CASE WHEN a.stage = 2 THEN a.prov ELSE 0 END)                              AS stage2_prov
+        , SUM(CASE WHEN a.stage = 3 THEN 1      ELSE 0 END)                              AS stage3_cnt
+        , SUM(CASE WHEN a.stage = 3 THEN a.bal  ELSE 0 END)                              AS stage3_balance
+        , SUM(CASE WHEN a.stage = 3 THEN a.prov ELSE 0 END)                              AS stage3_prov
+        , SUM(CASE WHEN a.stage = 4 THEN 1      ELSE 0 END)                              AS poci_cnt
+        , SUM(CASE WHEN a.stage = 4 THEN a.bal  ELSE 0 END)                              AS poci_balance
+        , SUM(CASE WHEN a.stage = 4 THEN a.prov ELSE 0 END)                              AS poci_prov
 FROM      a
 GROUP BY  DATEADD(month, -1, a.d), a.src, a.product_key
 OPTION (MAXDOP 1);
