@@ -33,24 +33,43 @@
        рвёт серию чистых срезов: «не наблюдён» ≠ «чистый».
 
    Окно: месяцы 01.2025 … (последний срез − 1 месяц). 12.2024 отрезан: на его
-   начало среза нет, и «новых» за него не бывает по построению.
+   начало среза нет, и «новых» за него не бывает по построению. Выздоровевшие
+   могут попасть в месяц за окном — отсекаются связью с dim_month.
 
    Колонки:
-     base_cnt, base_balance            — открытые счета S01/S03/S17 на конец месяца (знаменатель доли)
-     in_def_cnt, in_def_balance        — из них в дефолте по правилу на конец месяца
-     new_def_cnt, new_def_balance      — вошли в дефолт за месяц (новые)
-     perf_start_cnt                    — не в дефолте на НАЧАЛО месяца (знаменатель уровня новых дефолтов)
+     in_def_cnt, in_def_balance        — открытые счета в дефолте по правилу на конец месяца
+     new_def_cnt, new_def_balance      — вошли в дефолт за месяц (новые), остаток на срезе входа
      cured_cnt                         — вышли из дефолта в этом месяце (6-й чистый срез)
+   Знаменатели — из fact_stock (счета и остаток S01/S03/S17), в DAX:
+     доля в дефолте              = in_def_balance / остаток;
+     уровень новых дефолтов (мес) = new_def_cnt(M) / (открытые счета(M−1) − in_def_cnt(M−1)).
+
+   ПРОИЗВОДИТЕЛЬНОСТЬ (редакция 28.09.2026 после прогона, который не дождались).
+   Дефолт возможен только у счёта, хоть раз бывшего в 90+ при 1424 <> 0. Первым
+   проходом выбираются такие счета (dd), вторым — только их история; оконные
+   функции идут по ней, а не по ~10 млн строк всего портфеля. Знаменатели из
+   факта убраны — они уже есть в fact_stock.
+   SQL Server не хранит CTE: каждое обращение — новый расчёт. Поэтому цепочка
+   построена так, что каждое звено читается ровно один раз: выход из дефолта и
+   «новый» считаются оконными функциями, без повторного обращения и без EXISTS.
 
    Контроли — DEFAULT_PLAN.md, §5; первый: in_def_cnt ≤ счетов с 1424 <> 0
    в fact_stock того же месяца и источника (по построению).
 
    Имена колонок — из живого аудита DEF_0 (блок 0а, 28.09.2026). Режим ИМПОРТ,
-   один оператор. Тяжёлый: оконные функции по ~10 млн строк — в Power BI
-   задать «Время ожидания команды» 30 мин (Дополнительные параметры).
+   один оператор. В Power BI — «Время ожидания команды» 30 мин
+   (Дополнительные параметры), до замера в SSMS.
    Read-only. На выходе только агрегаты.
    ============================================================================= */
-WITH a AS (         /* состояние счёта на срезе; GROUP BY — страховка от дублей счёта на срезе */
+WITH dd AS (        /* счета, хоть раз в дефолте по правилу в окне — только у них события */
+    SELECT DISTINCT la.la_source, la.la_gid
+    FROM   [Dictionaries].[risk_analytics].[loan_account] AS la
+    WHERE  la.la_status = N'Открыт'
+      AND  la.la_source IN ('S01', 'S03', 'S17')
+      AND  la.la_account_1424 <> 0
+      AND  la.days_past_due_principal > 90
+)
+, a AS (            /* вся история этих счетов; GROUP BY — страховка от дублей счёта на срезе */
     SELECT  la.la_source
           , la.la_gid
           , la.la_reporting_date                                                        AS d
@@ -60,40 +79,49 @@ WITH a AS (         /* состояние счёта на срезе; GROUP BY �
                       AND la.days_past_due_principal > 90 THEN 1 ELSE 0 END)           AS dflt
           , MIN(CASE WHEN ISNULL(la.la_account_1424, 0) = 0 THEN 1 ELSE 0 END)          AS clean
     FROM    [Dictionaries].[risk_analytics].[loan_account] AS la
+    JOIN    dd
+           ON  dd.la_gid    = la.la_gid
+           AND dd.la_source = la.la_source
     WHERE   la.la_status = N'Открыт'
-      AND   la.la_source IN ('S01', 'S03', 'S17')
     GROUP BY la.la_source, la.la_gid, la.la_reporting_date
 )
-, p AS (            /* предыдущий наблюдённый срез и последний дефолт до среза */
+, p1 AS (           /* предыдущий наблюдённый срез, последний дефолт до среза, номер острова */
     SELECT  a.la_source, a.la_gid, a.d, a.m, a.bal, a.dflt, a.clean
           , LAG(a.dflt) OVER (PARTITION BY a.la_source, a.la_gid ORDER BY a.m)          AS dflt_prev
           , MAX(CASE WHEN a.dflt = 1 THEN a.m END)
                 OVER (PARTITION BY a.la_source, a.la_gid ORDER BY a.m
                       ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)                 AS last_def_m
+          , a.m - ROW_NUMBER() OVER (PARTITION BY a.la_source, a.la_gid, a.clean
+                                     ORDER BY a.m)                                      AS grp
     FROM    a
 )
-, isl AS (          /* острова чистых срезов подряд; пропуск месяца рвёт остров */
-    SELECT  la_source, la_gid, m, last_def_m
-          , m - ROW_NUMBER() OVER (PARTITION BY la_source, la_gid ORDER BY m)           AS g
-    FROM    p
-    WHERE   clean = 1
+, p2 AS (           /* длина серии чистых срезов подряд до текущего; пропуск месяца рвёт серию */
+    SELECT  p1.la_source, p1.la_gid, p1.d, p1.m, p1.bal, p1.dflt, p1.dflt_prev, p1.last_def_m
+          , CASE WHEN p1.clean = 1
+                  AND p1.last_def_m IS NOT NULL
+                  AND ROW_NUMBER() OVER (PARTITION BY p1.la_source, p1.la_gid, p1.clean, p1.grp
+                                         ORDER BY p1.m) = 6
+                 THEN 1 ELSE 0 END                                                      AS cured          /* 6-й чистый срез после дефолта */
+    FROM    p1
 )
-, runs AS (         /* выход: 6+ чистых срезов подряд; def_before — был ли дефолт до острова */
-    SELECT  la_source, la_gid, MIN(m) AS m_start, MAX(last_def_m) AS def_before
-    FROM    isl
-    GROUP BY la_source, la_gid, g
-    HAVING  COUNT(*) >= 6
+, p3 AS (           /* последний выход до среза */
+    SELECT  p2.la_source, p2.la_gid, p2.d, p2.bal, p2.dflt, p2.dflt_prev, p2.last_def_m, p2.cured
+          , MAX(CASE WHEN p2.cured = 1 THEN p2.m END)
+                OVER (PARTITION BY p2.la_source, p2.la_gid ORDER BY p2.m
+                      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING)                 AS last_cure_m
+    FROM    p2
 )
-, ev AS (
-    SELECT  p.la_source, p.la_gid, p.d, p.bal, p.dflt
-          , CASE WHEN p.dflt = 1 AND p.dflt_prev = 0
-                  AND (   p.last_def_m IS NULL
-                       OR EXISTS (SELECT 1 FROM runs AS r
-                                  WHERE r.la_source = p.la_source AND r.la_gid = p.la_gid
-                                    AND r.m_start > p.last_def_m
-                                    AND r.m_start + 5 < p.m) )
+, ev AS (           /* новый: вход из «не в дефолте»; раньше дефолта не было или после него был выход */
+    SELECT  p3.la_source, p3.la_gid
+          , DATEADD(month, -1, p3.d)                                                    AS month_start      /* срез t → месяц t−1 */
+          , p3.dflt
+          , CASE WHEN p3.dflt = 1 THEN p3.bal ELSE 0 END                                AS in_def_bal
+          , CASE WHEN p3.dflt = 1 AND p3.dflt_prev = 0
+                  AND (p3.last_def_m IS NULL OR p3.last_cure_m > p3.last_def_m)
                  THEN 1 ELSE 0 END                                                      AS is_new
-    FROM    p
+          , p3.cured
+    FROM    p3
+    WHERE   p3.dflt = 1 OR p3.cured = 1
 )
 , prod AS (         /* ключ продукта — строка в строку как в PBI_fact_flow.sql / PBI_fact_stock.sql */
     SELECT  l.l_gid, l.l_source
@@ -106,46 +134,19 @@ WITH a AS (         /* состояние счёта на срезе; GROUP BY �
     FROM    [Dictionaries].[risk_analytics].[loans] AS l
     WHERE   l.l_source IN ('S01', 'S03', 'S17')
 )
-, u AS (            /* срез t даёт конец месяца t−1 и начало месяца t */
-    SELECT  DATEADD(month, -1, ev.d) AS month_start, ev.la_source, ev.la_gid
-          , 1 AS base, ev.bal AS base_bal
-          , ev.dflt AS in_def, CASE WHEN ev.dflt = 1 THEN ev.bal ELSE 0 END AS in_def_bal
-          , ev.is_new AS new_def, CASE WHEN ev.is_new = 1 THEN ev.bal ELSE 0 END AS new_def_bal
-          , 0 AS perf_start, 0 AS cured
-    FROM    ev
-    UNION ALL
-    SELECT  ev.d, ev.la_source, ev.la_gid
-          , 0, 0, 0, 0, 0, 0
-          , CASE WHEN ev.dflt = 0 THEN 1 ELSE 0 END, 0
-    FROM    ev
-    UNION ALL
-    SELECT  DATEADD(month, r.m_start + 4, CAST('20250101' AS date)), r.la_source, r.la_gid   /* 6-й чистый срез m_start+5 → месяц m_start+4 */
-          , 0, 0, 0, 0, 0, 0, 0, 1
-    FROM    runs AS r
-    WHERE   r.def_before IS NOT NULL
-)
-, w AS (
-    SELECT  MAX(la_reporting_date) AS last_slice
-    FROM    [Dictionaries].[risk_analytics].[loan_account]
-)
-SELECT    u.month_start
-        , u.la_source                                                                   AS l_source
-        , ISNULL(pr.product_key, CONVERT(nvarchar(10), u.la_source) + N'|нет договора') AS product_key
-        , SUM(u.base)                                                                   AS base_cnt
-        , SUM(u.base_bal)                                                               AS base_balance
-        , SUM(u.in_def)                                                                 AS in_def_cnt
-        , SUM(u.in_def_bal)                                                             AS in_def_balance
-        , SUM(u.new_def)                                                                AS new_def_cnt
-        , SUM(u.new_def_bal)                                                            AS new_def_balance
-        , SUM(u.perf_start)                                                             AS perf_start_cnt
-        , SUM(u.cured)                                                                  AS cured_cnt
-FROM      u
-CROSS JOIN w
+SELECT    ev.month_start
+        , ev.la_source                                                                  AS l_source
+        , ISNULL(pr.product_key, CONVERT(nvarchar(10), ev.la_source) + N'|нет договора') AS product_key
+        , SUM(ev.dflt)                                                                  AS in_def_cnt
+        , SUM(ev.in_def_bal)                                                            AS in_def_balance
+        , SUM(ev.is_new)                                                                AS new_def_cnt
+        , SUM(CASE WHEN ev.is_new = 1 THEN ev.in_def_bal ELSE 0 END)                    AS new_def_balance
+        , SUM(ev.cured)                                                                 AS cured_cnt
+FROM      ev
 LEFT JOIN prod AS pr
-       ON  pr.l_gid    = u.la_gid
-       AND pr.l_source = u.la_source
-WHERE     u.month_start >= '20250101'                        /* 12.2024: конец есть, начала нет — новые дефолты не наблюдаемы */
-  AND     u.month_start <= DATEADD(month, -1, w.last_slice)  /* последний месяц с концом */
-GROUP BY  u.month_start, u.la_source
-        , ISNULL(pr.product_key, CONVERT(nvarchar(10), u.la_source) + N'|нет договора')
+       ON  pr.l_gid    = ev.la_gid
+       AND pr.l_source = ev.la_source
+WHERE     ev.month_start >= '20250101'                         /* 12.2024: новых дефолтов не наблюдаемо — начала месяца нет */
+GROUP BY  ev.month_start, ev.la_source
+        , ISNULL(pr.product_key, CONVERT(nvarchar(10), ev.la_source) + N'|нет договора')
 OPTION (MAXDOP 1);

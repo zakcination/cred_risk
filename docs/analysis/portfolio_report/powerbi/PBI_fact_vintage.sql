@@ -33,14 +33,18 @@
    Контроль (Н22): Σ cohort_cnt по когортам = Σ issued_cnt из fact_flow по тем же
    месяцам и источникам S01, S03, S17 (фильтр «не договор» — строка в строку).
 
+   ПРОИЗВОДИТЕЛЬНОСТЬ (редакция 28.09.2026 после прогона, который не дождались).
+   Оба исхода требуют la_account_1424 <> 0, поэтому договоры когорт связываются
+   только с просроченными строками loan_account, и первый дефолт / первая
+   просрочка берутся одним MIN без агрегации по срезам. Накопление по возрасту —
+   прямо в сетке «договор × наблюдаемый возраст» (~1,5 млн строк — дёшево).
+   SQL Server не хранит CTE: каждое обращение — новый расчёт. Цепочка построена
+   так, что связь с loan_account читается ровно один раз.
+
    Имена колонок — из живого аудита DEF_0 и фактов Power BI. Режим ИМПОРТ,
    один оператор. Read-only. На выходе только агрегаты.
    ============================================================================= */
-WITH w AS (
-    SELECT  MAX(la_reporting_date) AS last_slice
-    FROM    [Dictionaries].[risk_analytics].[loan_account]
-)
-, c AS (            /* договоры когорт: выданные, без «не договора» — как в PBI_fact_flow.sql */
+WITH c AS (         /* договоры когорт: выданные, без «не договора» — как в PBI_fact_flow.sql */
     SELECT  l.l_gid
           , l.l_source
           , DATEFROMPARTS(YEAR(l.l_funding_date), MONTH(l.l_funding_date), 1)          AS cm
@@ -52,98 +56,86 @@ WITH w AS (
                      + N'|' + ISNULL(CONVERT(nvarchar(255), l.l_subproduct_type), N'—')
             END                                                                         AS product_key
     FROM    [Dictionaries].[risk_analytics].[loans] AS l
-    CROSS JOIN w
     WHERE   l.l_source IN ('S01', 'S03', 'S17')
       AND   NOT (l.l_source = 'S01' AND ISNULL(l.l_loan_status, '') = N'Ч')    /* CP1251 215 — не договор; NULL — «прочие», входит, как в fact_flow */
       AND   NOT (l.l_source = 'S03' AND ISNULL(l.l_loan_status, '') IN ('A', 'N'))   /* латиница — не договор */
-      AND   l.l_funding_date >= '20241201'
-      AND   l.l_funding_date <  w.last_slice                                    /* у когорты есть возраст 1: срез месяца c + 1 */
+      AND   l.l_funding_date >= '20241201'           /* когорты без наблюдаемого возраста 1 отпадут в сетке */
 )
-, s AS (            /* состояние на срезе: дефолт по правилу и просрочка */
-    SELECT  la.la_source
-          , la.la_gid
-          , la.la_reporting_date                                                        AS d
-          , MAX(CASE WHEN ISNULL(la.la_account_1424, 0) <> 0
-                      AND la.days_past_due_principal > 90 THEN 1 ELSE 0 END)           AS dflt
-          , MAX(CASE WHEN ISNULL(la.la_account_1424, 0) <> 0 THEN 1 ELSE 0 END)         AS od
-    FROM    [Dictionaries].[risk_analytics].[loan_account] AS la
-    WHERE   la.la_status = N'Открыт'
-      AND   la.la_source IN ('S01', 'S03', 'S17')
-      AND   la.la_reporting_date >= '20250101'
-    GROUP BY la.la_source, la.la_gid, la.la_reporting_date
-)
-, f AS (            /* первый дефолт и первая просрочка договора */
+, f AS (            /* первый дефолт и первая просрочка. Оба исхода требуют 1424 <> 0 —
+                       связь только с просроченными строками */
     SELECT  c.l_gid, c.l_source, c.cm, c.amt, c.product_key
-          , MIN(CASE WHEN s.dflt = 1 THEN s.d END)                                      AS first_def
-          , MIN(CASE WHEN s.od   = 1 THEN s.d END)                                      AS first_od
+          , MIN(CASE WHEN la.days_past_due_principal > 90 THEN la.la_reporting_date END) AS first_def
+          , MIN(la.la_reporting_date)                                                   AS first_od
     FROM    c
-    LEFT JOIN s
-           ON  s.la_gid    = c.l_gid
-           AND s.la_source = c.l_source
+    LEFT JOIN [Dictionaries].[risk_analytics].[loan_account] AS la
+           ON  la.la_gid    = c.l_gid
+           AND la.la_source = c.l_source
+           AND la.la_status = N'Открыт'
+           AND la.la_account_1424 <> 0
+           AND la.la_reporting_date >= '20250101'
     GROUP BY c.l_gid, c.l_source, c.cm, c.amt, c.product_key
 )
-, sz AS (           /* размер когорты месяц × продукт — для слияния в квартал */
-    SELECT  cm, product_key, COUNT_BIG(*) AS n
+, f2 AS (           /* размер когорты месяц × продукт — окном, без второго обращения к f */
+    SELECT  f.l_source, f.product_key, f.amt, f.cm, f.first_def, f.first_od
+          , COUNT_BIG(*) OVER (PARTITION BY f.cm, f.product_key)                        AS n_month
     FROM    f
-    GROUP BY cm, product_key
 )
-, f2 AS (
-    SELECT  f.l_source, f.product_key, f.amt, f.cm
-          , CASE WHEN sz.n < 300
-                 THEN DATEFROMPARTS(YEAR(f.cm), ((MONTH(f.cm) - 1) / 3) * 3 + 1, 1)
-                 ELSE f.cm END                                                          AS cohort_start
-          , CASE WHEN sz.n < 300 THEN N'квартал' ELSE N'месяц' END                      AS cohort_type
-          , CASE WHEN f.first_def IS NULL THEN NULL
-                 WHEN DATEDIFF(month, f.cm, f.first_def) < 1 THEN 1
-                 ELSE DATEDIFF(month, f.cm, f.first_def) END                            AS k_def
-          , CASE WHEN f.first_od IS NULL THEN NULL
-                 WHEN DATEDIFF(month, f.cm, f.first_od) < 1 THEN 1
-                 ELSE DATEDIFF(month, f.cm, f.first_od) END                             AS k_od
-    FROM    f
-    JOIN    sz ON sz.cm = f.cm AND sz.product_key = f.product_key
-)
-, coh AS (          /* когорта: размер, сумма, наблюдаемый возраст — по самому молодому месяцу */
-    SELECT  f2.l_source, f2.product_key, f2.cohort_start, f2.cohort_type
-          , COUNT_BIG(*)                                                                AS cohort_cnt
-          , SUM(f2.amt)                                                                 AS cohort_amount
-          , MIN(DATEDIFF(month, f2.cm, w.last_slice))                                   AS max_k
+, f3 AS (
+    SELECT  f2.l_source, f2.product_key, f2.amt, f2.cm
+          , CASE WHEN f2.n_month < 300
+                 THEN DATEFROMPARTS(YEAR(f2.cm), ((MONTH(f2.cm) - 1) / 3) * 3 + 1, 1)
+                 ELSE f2.cm END                                                         AS cohort_start
+          , CASE WHEN f2.n_month < 300 THEN N'квартал' ELSE N'месяц' END                AS cohort_type
+          , CASE WHEN f2.first_def IS NULL THEN NULL
+                 WHEN DATEDIFF(month, f2.cm, f2.first_def) < 1 THEN 1
+                 ELSE DATEDIFF(month, f2.cm, f2.first_def) END                          AS k_def
+          , CASE WHEN f2.first_od IS NULL THEN NULL
+                 WHEN DATEDIFF(month, f2.cm, f2.first_od) < 1 THEN 1
+                 ELSE DATEDIFF(month, f2.cm, f2.first_od) END                           AS k_od
+          , DATEDIFF(month, f2.cm, x.last_slice)                                        AS age_obs
     FROM    f2
-    CROSS JOIN w
-    GROUP BY f2.l_source, f2.product_key, f2.cohort_start, f2.cohort_type
+    CROSS JOIN (SELECT MAX(la_reporting_date) AS last_slice
+                FROM   [Dictionaries].[risk_analytics].[loan_account]) AS x
 )
-, ages AS (
-    SELECT  k
-    FROM    (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),
-                    (13),(14),(15),(16),(17),(18),(19),(20),(21),(22),(23),(24)) AS v(k)
+, g AS (            /* договор × каждый наблюдаемый возраст; накопленный исход — сразу */
+    SELECT  f3.l_source, f3.product_key, f3.cohort_start, f3.cohort_type, v.k
+          , COUNT_BIG(*)                                                                AS obs_cnt
+          , SUM(f3.amt)                                                                 AS obs_amt
+          , MIN(f3.age_obs)                                                             AS min_age_obs
+          , SUM(CASE WHEN f3.k_def <= v.k THEN 1      ELSE 0 END)                       AS ever_def_cnt
+          , SUM(CASE WHEN f3.k_def <= v.k THEN f3.amt ELSE 0 END)                       AS ever_def_amount
+          , SUM(CASE WHEN f3.k_od  <= v.k THEN 1      ELSE 0 END)                       AS ever_od_cnt
+          , SUM(CASE WHEN f3.k_od  <= v.k THEN f3.amt ELSE 0 END)                       AS ever_od_amount
+    FROM    f3
+    JOIN   (VALUES (1),(2),(3),(4),(5),(6),(7),(8),(9),(10),(11),(12),
+                   (13),(14),(15),(16),(17),(18),(19),(20),(21),(22),(23),(24)) AS v(k)
+           ON v.k <= f3.age_obs
+    GROUP BY f3.l_source, f3.product_key, f3.cohort_start, f3.cohort_type, v.k
 )
-, g AS (            /* сетка когорта × возраст — после отбора наблюдаемых возрастов */
-    SELECT  coh.l_source, coh.product_key, coh.cohort_start, coh.cohort_type
-          , coh.cohort_cnt, coh.cohort_amount, coh.max_k, ages.k
-    FROM    coh
-    JOIN    ages ON ages.k <= coh.max_k
+, r AS (            /* размер когорты = наблюдённые на возрасте 1; max_k — по самому молодому месяцу */
+    SELECT  g.l_source, g.product_key, g.cohort_start, g.cohort_type, g.k
+          , g.ever_def_cnt, g.ever_def_amount, g.ever_od_cnt, g.ever_od_amount
+          , MAX(g.obs_cnt)     OVER (PARTITION BY g.l_source, g.product_key, g.cohort_start, g.cohort_type) AS cohort_cnt
+          , MAX(g.obs_amt)     OVER (PARTITION BY g.l_source, g.product_key, g.cohort_start, g.cohort_type) AS cohort_amount
+          , MIN(g.min_age_obs) OVER (PARTITION BY g.l_source, g.product_key, g.cohort_start, g.cohort_type) AS max_k
+    FROM    g
 )
-SELECT    g.cohort_start
-        , g.cohort_type
-        , CASE WHEN g.cohort_type = N'месяц'
-               THEN CONVERT(nvarchar(7), g.cohort_start, 120)
-               ELSE CONVERT(nvarchar(4), YEAR(g.cohort_start)) + N'-Q'
-                    + CONVERT(nvarchar(1), (MONTH(g.cohort_start) + 2) / 3) END         AS cohort_label
-        , g.l_source
-        , g.product_key
-        , g.k                                                                           AS age_k
-        , g.max_k
-        , g.cohort_cnt
-        , g.cohort_amount
-        , SUM(CASE WHEN f2.k_def <= g.k THEN 1      ELSE 0 END)                         AS ever_def_cnt
-        , SUM(CASE WHEN f2.k_def <= g.k THEN f2.amt ELSE 0 END)                         AS ever_def_amount
-        , SUM(CASE WHEN f2.k_od  <= g.k THEN 1      ELSE 0 END)                         AS ever_od_cnt
-        , SUM(CASE WHEN f2.k_od  <= g.k THEN f2.amt ELSE 0 END)                         AS ever_od_amount
-FROM      g
-JOIN      f2
-       ON  f2.l_source     = g.l_source
-       AND f2.product_key  = g.product_key
-       AND f2.cohort_start = g.cohort_start
-       AND f2.cohort_type  = g.cohort_type
-GROUP BY  g.cohort_start, g.cohort_type, g.l_source, g.product_key, g.k, g.max_k
-        , g.cohort_cnt, g.cohort_amount
+SELECT    r.cohort_start
+        , r.cohort_type
+        , CASE WHEN r.cohort_type = N'месяц'
+               THEN CONVERT(nvarchar(7), r.cohort_start, 120)
+               ELSE CONVERT(nvarchar(4), YEAR(r.cohort_start)) + N'-Q'
+                    + CONVERT(nvarchar(1), (MONTH(r.cohort_start) + 2) / 3) END         AS cohort_label
+        , r.l_source
+        , r.product_key
+        , r.k                                                                           AS age_k
+        , r.max_k
+        , r.cohort_cnt
+        , r.cohort_amount
+        , r.ever_def_cnt
+        , r.ever_def_amount
+        , r.ever_od_cnt
+        , r.ever_od_amount
+FROM      r
+WHERE     r.k <= r.max_k                                       /* за наблюдаемым возрастом — строки нет, а не ноль */
 OPTION (MAXDOP 1);
