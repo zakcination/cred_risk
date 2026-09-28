@@ -28,6 +28,22 @@
               на трёх срезах: есть ли вообще хвост 90+ и какого размера.
      блок 0 — поиск в витрине любых полей стадии, корзины, POCI, дефолта,
               обесценения. Нашлось — меняет план: стадия банка вместо конструкции.
+     блок 4 — Р-9: delinquency_bucket — корзина МСФО (стадия), 4 = POCI?
+              Подпись стадии: покрытие провизиями растёт скачком 1 → 2 → 3
+              (12-месячные ОКУ → за весь срок → обесценение, Прил. 4.6 Методики
+              МСФО); счета с дней > 90 почти все в корзине 3/4. Подпись «лестницы
+              просрочки без смысла» (README, отзыв 2): покрытие по корзинам
+              ровное, 90+ размазан по 1 и 2.
+     блок 5 — Р-9: переходы корзин между соседними срезами. Методика МСФО,
+              Прил. 4: оздоровление в два этапа, 3 → 2 → 1, по 6 месяцев без
+              просрочки. Стадия даёт тяжёлую диагональ и редкий прыжок 3 → 1;
+              лестница по текущим дням — частые 3 → 1 при погашении.
+     блок 6 — restructuring_v2.financial_deterioration_flag: домен и
+              заполненность по источнику. Реструктуризация из-за ухудшения
+              финансового состояния — второй из пяти признаков обесценения
+              (Прил. 4 п. 5 Методики МСФО); флаг никогда не проверялся.
+              Имена колонок — из вывода stage3_safezone_discovery.sql
+              (INFORMATION_SCHEMA, 07.2026); блок 0а перепроверяет.
 
    Имена: блок 0а перепроверяет каждое имя, на котором стоит скрипт.
    Поля дней берутся через TRY_CAST: в risk_dwh_layered_check.sql они
@@ -39,16 +55,20 @@ SET NOCOUNT ON;
 GO
 
 /* ─────────────────────────────────────────────────────────────────────────
-   0а. Живой аудит имён. Ожидается 8 строк.
+   0а. Живой аудит имён. Ожидается 16 строк: 12 loan_account, 4 restructuring_v2.
    ───────────────────────────────────────────────────────────────────────── */
 SELECT    c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE
 FROM      [Dictionaries].[INFORMATION_SCHEMA].[COLUMNS] AS c
 WHERE     c.TABLE_SCHEMA = 'risk_analytics'
-  AND     c.TABLE_NAME   = N'loan_account'
-  AND     c.COLUMN_NAME IN (N'la_gid', N'la_source', N'la_reporting_date', N'la_status',
-                            N'total_balance_debt', N'la_account_1424',
-                            N'days_past_due_principal', N'days_past_due')
-ORDER BY  c.ORDINAL_POSITION;
+  AND   ( (c.TABLE_NAME = N'loan_account'
+           AND c.COLUMN_NAME IN (N'la_gid', N'la_source', N'la_reporting_date', N'la_status',
+                                 N'total_balance_debt', N'la_account_1424',
+                                 N'days_past_due_principal', N'days_past_due', N'delinquency_bucket',
+                                 N'la_account_1428', N'la_account_1845', N'la_account_18771'))
+       OR (c.TABLE_NAME = N'restructuring_v2'
+           AND c.COLUMN_NAME IN (N'dlcr$source', N'restructuring_date',
+                                 N'financial_deterioration_flag', N'report_date')) )
+ORDER BY  c.TABLE_NAME, c.ORDINAL_POSITION;
 GO
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -177,5 +197,88 @@ GROUP BY  la_source, la_reporting_date
                WHEN dpd_p <= 360 THEN N'181–360'
                ELSE                   N'361+' END
 ORDER BY  la_source, la_reporting_date, dpd_bucket
+OPTION (MAXDOP 1);
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
+   4. Р-9: корзина × источник на трёх срезах — покрытие провизиями и глубина.
+   ───────────────────────────────────────────────────────────────────────── */
+;WITH a AS (
+    SELECT  la.la_source
+          , la.la_reporting_date
+          , ISNULL(CONVERT(nvarchar(10), la.delinquency_bucket), N'NULL')      AS bucket
+          , CAST(ISNULL(la.total_balance_debt, 0) AS decimal(38,2))            AS bal
+          , CAST(ISNULL(la.la_account_1428, 0) + ISNULL(la.la_account_1845, 0)
+                 + ISNULL(la.la_account_18771, 0) AS decimal(38,2))            AS prov
+          , CAST(ISNULL(la.la_account_1424, 0) AS decimal(38,2))               AS od
+          , TRY_CAST(la.days_past_due_principal AS int)                        AS dpd_p
+    FROM    [Dictionaries].[risk_analytics].[loan_account] AS la
+    WHERE   la.la_status = N'Открыт'
+      AND   la.la_reporting_date IN ('2025-01-01', '2025-10-01', '2026-09-01')
+)
+SELECT    la_source
+        , la_reporting_date
+        , bucket
+        , COUNT_BIG(*)                                                      AS accounts
+        , CAST(SUM(bal)  / 1000000 AS decimal(18,1))                        AS balance_mln
+        , CAST(SUM(prov) / 1000000 AS decimal(18,1))                        AS provisions_mln
+        , CAST(SUM(prov) / NULLIF(SUM(bal), 0) AS decimal(8,4))             AS coverage
+        , SUM(CASE WHEN od <> 0 THEN 1 ELSE 0 END)                          AS od_accounts
+        , SUM(CASE WHEN dpd_p > 90 THEN 1 ELSE 0 END)                       AS dpd_p_gt90
+        , SUM(CASE WHEN ISNULL(dpd_p, 0) <= 0 AND od = 0 THEN 1 ELSE 0 END) AS no_overdue_at_all
+FROM      a
+GROUP BY  la_source, la_reporting_date, bucket
+ORDER BY  la_source, la_reporting_date, bucket
+OPTION (MAXDOP 1);
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
+   5. Р-9: переходы корзин t → t+1, все пары соседних срезов, по источнику.
+      Счёт, пропавший на t+1, — отдельной строкой «нет»: не выздоровел,
+      а не наблюдён (в 02.2026 выпали строки S02, S03, S17 — FINDINGS.md).
+   ───────────────────────────────────────────────────────────────────────── */
+;WITH a AS (
+    SELECT  la.la_source
+          , la.la_gid
+          , la.la_reporting_date                                               AS d
+          , ISNULL(CONVERT(nvarchar(10), la.delinquency_bucket), N'NULL')      AS bucket
+    FROM    [Dictionaries].[risk_analytics].[loan_account] AS la
+    WHERE   la.la_status = N'Открыт'
+)
+, p AS (
+    SELECT  la_source
+          , d
+          , bucket
+          , LEAD(bucket) OVER (PARTITION BY la_source, la_gid ORDER BY d)      AS bucket_next
+          , LEAD(d)      OVER (PARTITION BY la_source, la_gid ORDER BY d)      AS d_next
+    FROM    a
+)
+SELECT    la_source
+        , bucket                                                                AS bucket_t
+        , CASE WHEN d_next IS NULL OR DATEDIFF(month, d, d_next) <> 1
+               THEN N'нет' ELSE bucket_next END                                 AS bucket_t1
+        , COUNT_BIG(*)                                                          AS pairs
+FROM      p
+WHERE     d < (SELECT MAX(x.la_reporting_date) FROM [Dictionaries].[risk_analytics].[loan_account] AS x)
+GROUP BY  la_source, bucket
+        , CASE WHEN d_next IS NULL OR DATEDIFF(month, d, d_next) <> 1
+               THEN N'нет' ELSE bucket_next END
+ORDER BY  la_source, bucket_t, bucket_t1
+OPTION (MAXDOP 1);
+GO
+
+/* ─────────────────────────────────────────────────────────────────────────
+   6. restructuring_v2: флаг ухудшения финансового состояния по источнику.
+      Только домен и счётчики; связь с договорами — не здесь.
+   ───────────────────────────────────────────────────────────────────────── */
+SELECT    r.[dlcr$source]                                                       AS source
+        , ISNULL(r.financial_deterioration_flag, N'NULL')                       AS fin_det_flag
+        , COUNT_BIG(*)                                                          AS events
+        , MIN(r.restructuring_date)                                             AS first_date
+        , MAX(r.restructuring_date)                                             AS last_date
+        , COUNT(DISTINCT r.report_date)                                         AS report_dates
+FROM      [Dictionaries].[risk_analytics].[restructuring_v2] AS r
+GROUP BY  r.[dlcr$source], ISNULL(r.financial_deterioration_flag, N'NULL')
+ORDER BY  source, fin_det_flag
 OPTION (MAXDOP 1);
 GO
