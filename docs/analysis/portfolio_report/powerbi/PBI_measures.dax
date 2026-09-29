@@ -1,0 +1,346 @@
+// PBI_measures.dax — СОБРАНО build_paste.py из PBI_model.dax. Руками не править.
+// 60 мер. Представление запросов DAX → новый запрос → вставить файл целиком →
+// «Выполнить» (F5): внизу две таблицы — сверить с ожидаемым в комментариях EVALUATE.
+// Сошлось → надпись над DEFINE «Обновить модель: добавить новые меры» → меры появятся в «Меры».
+// Затем мера «Значение» → Средства меры → Формат → Динамический → выражение:
+//     SELECTEDVALUE ( 'Показатель'[Формат], "#,0.0" )
+
+DEFINE
+    MEASURE 'Меры'[_Остаток (сумма)] =
+        SUM ( fact_stock[balance] )
+
+    MEASURE 'Меры'[Объём выдач, млрд ₸] =
+        CALCULATE ( DIVIDE ( SUM ( fact_flow[issued_amount] ), 1000000000 ),
+                    KEEPFILTERS ( fact_flow[l_source] <> "S02" ) )
+
+    MEASURE 'Меры'[Количество выдач] =
+        SUM ( fact_flow[issued_cnt] )
+
+    MEASURE 'Меры'[в т.ч. карт с лимитом] =
+        CALCULATE ( SUM ( fact_flow[card_limit_pos_cnt] ), KEEPFILTERS ( fact_flow[l_source] = "S02" ) )
+
+    MEASURE 'Меры'[Средняя сумма выдачи, млн ₸] =
+        DIVIDE ( SUM ( fact_flow[issued_amount] ), SUM ( fact_flow[issued_cnt_amount_pos] ) ) / 1000000
+
+    MEASURE 'Меры'[Срок по договору, мес] =
+        DIVIDE ( SUM ( fact_flow[term_sum] ), SUM ( fact_flow[term_cnt] ) )
+
+    MEASURE 'Меры'[Лимиты по картам, млн ₸] =
+        CALCULATE ( DIVIDE ( SUM ( fact_flow[card_limit_amount] ), 1000000 ),
+                    KEEPFILTERS ( fact_flow[l_source] = "S02" ) )
+
+    MEASURE 'Меры'[Полностью погашено] =
+        SUM ( fact_flow[closed_cnt] ) - SUM ( fact_flow[closed_overdue_cnt] )
+
+    MEASURE 'Меры'[в т.ч. досрочно] =
+        SUM ( fact_flow[closed_early_cnt] ) - SUM ( fact_flow[closed_overdue_early_cnt] )
+
+    MEASURE 'Меры'[Доля досрочных] =
+        DIVIDE (
+            [в т.ч. досрочно],
+            SUM ( fact_flow[closed_cnt_sched] ) - SUM ( fact_flow[closed_overdue_sched_cnt] )
+        )
+
+    MEASURE 'Меры'[Фактический срок, мес] =
+        DIVIDE (
+            SUM ( fact_flow[closed_days_sum] ) - SUM ( fact_flow[closed_overdue_days_sum] ),
+            SUM ( fact_flow[closed_days_cnt] ) - SUM ( fact_flow[closed_overdue_days_cnt] )
+        ) / 30.4375
+
+    MEASURE 'Меры'[Закрыто с просрочкой на начало месяца] =
+        SUM ( fact_flow[closed_overdue_cnt] )
+
+    MEASURE 'Меры'[S17 Т] =
+        SUM ( fact_flow[closed_t_cnt] )
+
+    MEASURE 'Меры'[Общий остаток, млрд ₸] =
+        CALCULATE ( [_Остаток (сумма)], LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Договоров с остатком] =
+        CALCULATE ( SUM ( fact_stock[contracts_with_balance] ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+    MEASURE 'Меры'[Заёмщиков с остатком] =
+        VAR _anchor = LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] )
+        RETURN
+            SWITCH (
+                TRUE (),
+                HASONEVALUE ( dim_product[product_key] ),
+                    CALCULATE ( SUM ( fact_stock[borrowers_with_balance] ), _anchor ),
+                HASONEVALUE ( dim_source[l_source] ) && NOT ISFILTERED ( dim_product ),
+                    CALCULATE ( SUM ( fact_borrowers[borrowers_with_balance] ), _anchor )
+            )
+
+    MEASURE 'Меры'[Остаток на заёмщика, млн ₸] =
+        DIVIDE (
+            CALCULATE ( [_Остаток (сумма)], LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+            [Заёмщиков с остатком]
+        ) / 1000000
+
+    MEASURE 'Меры'[Управленческий уровень просрочки] =
+        DIVIDE (
+            CALCULATE ( SUM ( fact_stock[balance_of_overdue] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+            CALCULATE ( [_Остаток (сумма)],                     LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+        )
+
+    MEASURE 'Меры'[Просроченная задолженность (1424), млрд ₸] =
+        CALCULATE ( SUM ( fact_stock[overdue_principal] ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Провизии (1428+1845+18771), млрд ₸] =
+        CALCULATE ( SUM ( fact_stock[provisions] ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Покрытие провизиями] =
+        DIVIDE (
+            CALCULATE ( SUM ( fact_stock[provisions] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+            CALCULATE ( [_Остаток (сумма)],             LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+        )
+
+    MEASURE 'Меры'[Счёт 1484, млрд ₸] =
+        CALCULATE ( SUM ( fact_stock[acc_1484] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Счёт 1485, млрд ₸] =
+        CALCULATE ( SUM ( fact_stock[acc_1485] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Карты: выдано] =
+        CALCULATE ( SUM ( fact_flow[issued_cnt] ), KEEPFILTERS ( fact_flow[l_source] = "S02" ) )
+
+    MEASURE 'Меры'[Карты: доля с лимитом] =
+        DIVIDE ( [в т.ч. карт с лимитом], [Карты: выдано] )
+
+    MEASURE 'Меры'[Карты: средний лимит, тыс ₸] =
+        CALCULATE (
+            DIVIDE ( SUM ( fact_flow[card_limit_amount] ), SUM ( fact_flow[card_limit_pos_cnt] ) ),
+            KEEPFILTERS ( fact_flow[l_source] = "S02" )
+        ) / 1000
+
+    MEASURE 'Меры'[Карты: закрыто] =
+        CALCULATE ( SUM ( fact_flow[closed_cnt] ), KEEPFILTERS ( fact_flow[l_source] = "S02" ) )
+
+    MEASURE 'Меры'[Карты: задолженность, млн ₸] =
+        CALCULATE ( [Общий остаток, млрд ₸], KEEPFILTERS ( fact_stock[l_source] = "S02" ) ) * 1000
+
+    MEASURE 'Меры'[Карты: с задолженностью] =
+        CALCULATE ( [Договоров с остатком], KEEPFILTERS ( fact_stock[l_source] = "S02" ) )
+
+    MEASURE 'Меры'[Карты: средняя задолженность, тыс ₸] =
+        DIVIDE ( [Карты: задолженность, млн ₸] * 1000, [Карты: с задолженностью] )
+
+    MEASURE 'Меры'[Карты: заёмщиков с задолженностью] =
+        CALCULATE ( SUM ( fact_stock[borrowers_with_balance] ),
+                    KEEPFILTERS ( fact_stock[l_source] = "S02" ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+    MEASURE 'Меры'[Карты: просрочка (1424), млн ₸] =
+        CALCULATE ( [Просроченная задолженность (1424), млрд ₸], KEEPFILTERS ( fact_stock[l_source] = "S02" ) ) * 1000
+
+    MEASURE 'Меры'[Карты: уровень просрочки] =
+        CALCULATE ( [Управленческий уровень просрочки], KEEPFILTERS ( fact_stock[l_source] = "S02" ) )
+
+    MEASURE 'Меры'[Карты: провизии, млн ₸] =
+        CALCULATE ( [Провизии (1428+1845+18771), млрд ₸], KEEPFILTERS ( fact_stock[l_source] = "S02" ) ) * 1000
+
+    MEASURE 'Меры'[Карты: покрытие провизиями] =
+        CALCULATE ( [Покрытие провизиями], KEEPFILTERS ( fact_stock[l_source] = "S02" ) )
+
+    MEASURE 'Меры'[Новые дефолты, шт] =
+        SUM ( fact_default[new_def_cnt] )
+
+    MEASURE 'Меры'[Новые дефолты, млрд ₸] =
+        DIVIDE ( SUM ( fact_default[new_def_balance] ), 1000000000 )
+
+    MEASURE 'Меры'[Уровень новых дефолтов (мес)] =
+        VAR _t =
+            ADDCOLUMNS (
+                VALUES ( dim_month[month_idx] ),
+                "@new", CALCULATE ( SUM ( fact_default[new_def_cnt] ) ),
+                "@perf",
+                    VAR _i = dim_month[month_idx]
+                    RETURN
+                        CALCULATE (
+                            SUM ( fact_stock[accounts_open] ) - SUM ( fact_default[in_def_cnt] ),
+                            FILTER ( ALL ( dim_month ), dim_month[month_idx] = _i - 1 ),
+                            KEEPFILTERS ( fact_stock[l_source] IN { "S01", "S03", "S17" } )
+                        )
+            )
+        RETURN
+            DIVIDE ( SUMX ( _t, [@new] ), SUMX ( _t, [@perf] ) )
+
+    MEASURE 'Меры'[В дефолте на конец месяца, шт] =
+        CALCULATE ( SUM ( fact_default[in_def_cnt] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+    MEASURE 'Меры'[В дефолте, млрд ₸] =
+        CALCULATE ( SUM ( fact_default[in_def_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Доля в дефолте (остаток)] =
+        DIVIDE (
+            CALCULATE ( SUM ( fact_default[in_def_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+            CALCULATE ( [_Остаток (сумма)], LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ),
+                        KEEPFILTERS ( fact_stock[l_source] IN { "S01", "S03", "S17" } ) )
+        )
+
+    MEASURE 'Меры'[Выздоровело, шт] =
+        SUM ( fact_default[cured_cnt] )
+
+    MEASURE 'Меры'[Stage 1, млрд ₸] =
+        CALCULATE ( SUM ( fact_stage[stage1_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Stage 2, млрд ₸] =
+        CALCULATE ( SUM ( fact_stage[stage2_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Доля Stage 2] =
+        DIVIDE (
+            CALCULATE ( SUM ( fact_stage[stage2_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+            CALCULATE ( [_Остаток (сумма)],                 LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+        )
+
+    MEASURE 'Меры'[Stage 3, млрд ₸] =
+        CALCULATE ( SUM ( fact_stage[stage3_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[POCI, млрд ₸] =
+        CALCULATE ( SUM ( fact_stage[poci_balance] ), LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ) / 1000000000
+
+    MEASURE 'Меры'[Stage 3 + 4, млрд ₸] =
+        [Stage 3, млрд ₸] + [POCI, млрд ₸]
+
+    MEASURE 'Меры'[Stage 3 + 4, шт] =
+        CALCULATE ( SUM ( fact_stage[stage3_cnt] ) + SUM ( fact_stage[poci_cnt] ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+    MEASURE 'Меры'[Доля Stage 3 + 4] =
+        DIVIDE (
+            CALCULATE ( SUM ( fact_stage[stage3_balance] ) + SUM ( fact_stage[poci_balance] ),
+                        LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+            CALCULATE ( [_Остаток (сумма)], LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+        )
+
+    MEASURE 'Меры'[Покрытие Stage 1] =
+        CALCULATE ( DIVIDE ( SUM ( fact_stage[stage1_prov] ), SUM ( fact_stage[stage1_balance] ) ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+    MEASURE 'Меры'[Покрытие Stage 2] =
+        CALCULATE ( DIVIDE ( SUM ( fact_stage[stage2_prov] ), SUM ( fact_stage[stage2_balance] ) ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+    MEASURE 'Меры'[Покрытие Stage 3 + 4] =
+        CALCULATE ( DIVIDE ( SUM ( fact_stage[stage3_prov] ) + SUM ( fact_stage[poci_prov] ),
+                             SUM ( fact_stage[stage3_balance] ) + SUM ( fact_stage[poci_balance] ) ),
+                    LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) )
+
+    MEASURE 'Меры'[Без стадии, млрд ₸] =
+        DIVIDE (
+            CALCULATE ( [_Остаток (сумма)]
+                        - SUM ( fact_stage[stage1_balance] ) - SUM ( fact_stage[stage2_balance] )
+                        - SUM ( fact_stage[stage3_balance] ) - SUM ( fact_stage[poci_balance] ),
+                        LASTNONBLANK ( dim_month[Date], [_Остаток (сумма)] ) ),
+            1000000000
+        )
+
+    MEASURE 'Меры'[Накопленный дефолт, % договоров] =
+        DIVIDE ( SUM ( fact_vintage[ever_def_cnt] ), SUM ( fact_vintage[cohort_cnt] ) )
+
+    MEASURE 'Меры'[Накопленный дефолт, % суммы] =
+        DIVIDE ( SUM ( fact_vintage[ever_def_amount] ), SUM ( fact_vintage[cohort_amount] ) )
+
+    MEASURE 'Меры'[Накопленная просрочка, % договоров] =
+        DIVIDE ( SUM ( fact_vintage[ever_od_cnt] ), SUM ( fact_vintage[cohort_cnt] ) )
+
+    MEASURE 'Меры'[Договоров в когорте] =
+        SUM ( fact_vintage[cohort_cnt] )
+
+    MEASURE 'Меры'[Значение] =
+        SWITCH (
+            SELECTEDVALUE ( 'Показатель'[Показатель] ),
+            "Объём выдач, млрд ₸",                       [Объём выдач, млрд ₸],
+            "Количество выдач",                          [Количество выдач],
+            "в т.ч. карт с лимитом",                     [в т.ч. карт с лимитом],
+            "Средняя сумма выдачи, млн ₸",               [Средняя сумма выдачи, млн ₸],
+            "Срок по договору, мес",                     [Срок по договору, мес],
+            "Лимиты по картам, млн ₸",                   [Лимиты по картам, млн ₸],
+            "Полностью погашено",                        [Полностью погашено],
+            "в т.ч. досрочно",                           [в т.ч. досрочно],
+            "Доля досрочных",                            [Доля досрочных],
+            "Фактический срок, мес",                     [Фактический срок, мес],
+            "Закрыто с просрочкой на начало месяца",     [Закрыто с просрочкой на начало месяца],
+            "Общий остаток, млрд ₸",                     [Общий остаток, млрд ₸],
+            "Договоров с остатком",                      [Договоров с остатком],
+            "Заёмщиков с остатком",                      [Заёмщиков с остатком],
+            "Остаток на заёмщика, млн ₸",                [Остаток на заёмщика, млн ₸],
+            "Управленческий уровень просрочки",          [Управленческий уровень просрочки],
+            "Просроченная задолженность (1424), млрд ₸", [Просроченная задолженность (1424), млрд ₸],
+            "Провизии (1428+1845+18771), млрд ₸",        [Провизии (1428+1845+18771), млрд ₸],
+            "Покрытие провизиями",                       [Покрытие провизиями],
+            "Счёт 1484, млрд ₸",                         [Счёт 1484, млрд ₸],
+            "Счёт 1485, млрд ₸",                         [Счёт 1485, млрд ₸],
+            "Карты: выдано",                             [Карты: выдано],
+            "Карты: в т.ч. с лимитом",                   [в т.ч. карт с лимитом],
+            "Карты: доля с лимитом",                     [Карты: доля с лимитом],
+            "Карты: установлено лимитов, млн ₸",         [Лимиты по картам, млн ₸],
+            "Карты: средний лимит, тыс ₸",               [Карты: средний лимит, тыс ₸],
+            "Карты: закрыто",                            [Карты: закрыто],
+            "Карты: задолженность, млн ₸",               [Карты: задолженность, млн ₸],
+            "Карты: с задолженностью",                   [Карты: с задолженностью],
+            "Карты: средняя задолженность, тыс ₸",       [Карты: средняя задолженность, тыс ₸],
+            "Карты: заёмщиков с задолженностью",         [Карты: заёмщиков с задолженностью],
+            "Карты: просрочка (1424), млн ₸",            [Карты: просрочка (1424), млн ₸],
+            "Карты: уровень просрочки",                  [Карты: уровень просрочки],
+            "Карты: провизии, млн ₸",                    [Карты: провизии, млн ₸],
+            "Карты: покрытие провизиями",                [Карты: покрытие провизиями],
+            "Новые дефолты, шт",                         [Новые дефолты, шт],
+            "Новые дефолты, млрд ₸",                     [Новые дефолты, млрд ₸],
+            "Уровень новых дефолтов (мес)",              [Уровень новых дефолтов (мес)],
+            "В дефолте на конец месяца, шт",             [В дефолте на конец месяца, шт],
+            "В дефолте, млрд ₸",                         [В дефолте, млрд ₸],
+            "Доля в дефолте (остаток)",                  [Доля в дефолте (остаток)],
+            "Выздоровело, шт",                           [Выздоровело, шт],
+            "Stage 1, млрд ₸",                           [Stage 1, млрд ₸],
+            "Stage 2, млрд ₸",                           [Stage 2, млрд ₸],
+            "Доля Stage 2",                              [Доля Stage 2],
+            "Stage 3, млрд ₸",                           [Stage 3, млрд ₸],
+            "POCI, млрд ₸",                              [POCI, млрд ₸],
+            "Stage 3 + 4, млрд ₸",                       [Stage 3 + 4, млрд ₸],
+            "Доля Stage 3 + 4",                          [Доля Stage 3 + 4],
+            "Stage 3 + 4, шт",                           [Stage 3 + 4, шт],
+            "Покрытие Stage 1",                          [Покрытие Stage 1],
+            "Покрытие Stage 2",                          [Покрытие Stage 2],
+            "Покрытие Stage 3 + 4",                      [Покрытие Stage 3 + 4],
+            "Без стадии, млрд ₸",                        [Без стадии, млрд ₸]
+        )
+
+    MEASURE 'Меры'[Значение (текст)] =
+        VAR _v = [Значение]
+        RETURN IF ( ISBLANK ( _v ), BLANK (), FORMAT ( _v, SELECTEDVALUE ( 'Показатель'[Формат], "#,0.0" ) ) )
+
+// Контроль 1 — месяц 2026-08 (прогоны 24–28.09.2026). Ожидается:
+//   остаток 1 521,6 | покрытие 0,074 | уровень просрочки 0,093 | объём выдач 50,5 | выдач 2 006
+//   карт выдано 228 | новых дефолтов 1 473 | в дефолте 64,4 | Stage 3 + 4 155,6 | доля 0,102
+EVALUATE
+CALCULATETABLE (
+    ROW (
+        "Общий остаток, млрд ₸",            [Общий остаток, млрд ₸],
+        "Покрытие провизиями",              [Покрытие провизиями],
+        "Управленческий уровень просрочки", [Управленческий уровень просрочки],
+        "Объём выдач, млрд ₸",              [Объём выдач, млрд ₸],
+        "Количество выдач",                 [Количество выдач],
+        "Карты: выдано",                    [Карты: выдано],
+        "Новые дефолты, шт",                [Новые дефолты, шт],
+        "В дефолте, млрд ₸",                [В дефолте, млрд ₸],
+        "Stage 3 + 4, млрд ₸",              [Stage 3 + 4, млрд ₸],
+        "Доля Stage 3 + 4",                 [Доля Stage 3 + 4]
+    ),
+    TREATAS ( { DATE ( 2026, 8, 1 ) }, dim_month[Date] )
+)
+
+// Контроль 2 — стадии, месяц 2026-07 (точно, повтор STG_0). Ожидается:
+//   Stage 1 1 359,4 | Stage 2 30,1 | Stage 3 150,7 | POCI 5,9
+EVALUATE
+CALCULATETABLE (
+    ROW (
+        "Stage 1, млрд ₸", [Stage 1, млрд ₸],
+        "Stage 2, млрд ₸", [Stage 2, млрд ₸],
+        "Stage 3, млрд ₸", [Stage 3, млрд ₸],
+        "POCI, млрд ₸",    [POCI, млрд ₸]
+    ),
+    TREATAS ( { DATE ( 2026, 7, 1 ) }, dim_month[Date] )
+)
