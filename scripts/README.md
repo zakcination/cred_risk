@@ -182,3 +182,20 @@ SQL_PASSWORD=...
 Both the chart and the CSV are for **exploration**; the authoritative
 count/balance/provisions numbers for the regulator conversation come from the
 dedicated SQL (`sql/stage3_cure_pool.sql` §B/§C, `sql/stage3_cure_funnel.sql`).
+
+## `zapiska_docx.py` — сборка документа для руководства (.docx)
+
+Исключение из вводного абзаца: к данным не подключается. Собирает Word-документ
+в формате записки v4 (`docs/STYLE_ZAPISKA.md`) из текстового источника с простой
+разметкой — титул в шапке `---`, заголовки `##`/`###`, `Таблица N.` над таблицей,
+`Примечание:`, формула строкой с `= `. Полная разметка — в docstring скрипта.
+
+```bash
+pip install python-docx
+python3 scripts/zapiska_docx.py <источник.md> <результат.docx>
+python3 scripts/zapiska_docx.py --selftest     # 14 проверок оформления
+```
+
+**Собранный .docx не коммитится.** Колонтитул «ВНУТРЕННЯЯ ИНФОРМАЦИЯ» помечает его
+как внутренний документ (§2 корневого `CLAUDE.md`); в репозитории — только
+источник. Источники документов KPI лежат в `final/` своих контуров.
