@@ -1,23 +1,36 @@
-# Реестр агентов
+# Реестр офиса агентов
 
-Снимок 07.10.2026 по `get_session` / `list_sessions`. Контекст и статус меняются каждый ход —
-живое состояние смотреть на доске («Доска агентов», закреплённое issue), здесь —
-реквизиты.
+Реквизиты, зависящие от аккаунта Claude (`PROTOCOL.md` §10). Живое состояние — на доске
+(issue #161), здесь — идентификаторы.
 
-| Агент | session_id | Ветка | Режим | Контекст | Статус на снимке |
-|---|---|---|---|---|---|
-| Оркестратор | `session_01LXH69gkK16RnDosggxSWWw` | `claude/determined-cerf-fljw05` | auto | — | входящий триггер `trig_015KKGyXj3ZiQK8knqicSGH8` |
-| Risk Agent 1 | `session_0114KTrN7DXPVMy55hfSdbmr` | `claude/cool-gates-bhjz01` | **default** → перевести в auto | 717 тыс. / 1 млн | готово: разбор оздоровления (DPD15/DPD30, Stage 3) |
-| Risk Agent 2 | `session_01PYDbRXBp3RFzVc3uUkRjjc` | `claude/database-table-analysis-wxxgtv` | auto | 683 тыс. / 1 млн | ждёт автора: пороги X, Y; источник резерва Stage 2; критерий снижения долга; источник НЗ/СП |
-| Risk Agent 3 | `session_01AXHoM5VUUuD8viQSvFTTEk` | `claude/cred-risk-topic-classifier-1cjbtk` | auto | 240 тыс. / 1 млн | готово: оздоровление, развилки Р-D1…Р-D6, шесть пробелов данных |
+## Routines (личный аккаунт, окружение `env_01VKKUaFe5SKrJYCdpjco7yc`)
 
-## Закрепление за контурами
+| Routine | id | Расписание | Что делает |
+|---|---|---|---|
+| Секретарь: утренняя доска | `trig_015vUatVLwuTHazGqbYvy2bX` | пн–пт 07:45, Алматы | тело #161 + комментарий «Ждёт решения Мираса» |
+| Пятница: Б4, Б7, метрики | `trig_01T13J2WT2WYLhYbydShLK6J` | пт 15:52, Алматы | недельная сводка в #161, сверка `HYPOTHESES.md` |
 
-**Не назначено — решение Мираса.** На снимке все три агента работают по одной теме —
-оздоровление / DPD15 / Stage 3, — что нарушает правило 2 протокола (один контур — один агент).
+Обе стартуют свежей сессией на каждый прогон (`PROTOCOL.md` §2, Г-2) и ничего не мёрджат.
 
-## Наблюдения
+## ПК-сессия
 
-- Agent 1 и Agent 2 — около 70 % окна: по правилу 6 протокола им пора писать `HANDOFF.md`.
-- Ветки Agent 2 и Agent 3 живут с июля; по Б2/Б3 их следует пересоздать от `main`
-  после посадки открытых PR.
+| Имя | session_id | Где | Как держится |
+|---|---|---|---|
+| `nst_model_pick` | `session_01KwkK15swH7PdXJcFZeUcLV` | рабочий ПК, `C:\project_mz`, Remote Control | локальный px (`127.0.0.1:3128`) → корпоративный прокси по NTLM; окно px и окно Claude не закрывать |
+
+Новая ПК-сессия на другую задачу: `claude remote-control --name "<задача>"` в нужной папке.
+
+## Выводятся из работы (редакция 1)
+
+Долгоживущие агенты редакции 1. Новых задач не получают; после дельты в `HANDOFF.md`
+своего контура — архивируются Мирасом. Решения, которых они ждут, переносятся в issue.
+
+| Агент | session_id | Ветка | Что ждёт решения на 09.10.2026 |
+|---|---|---|---|
+| Risk Agent 1 | `session_0114KTrN7DXPVMy55hfSdbmr` | `claude/cool-gates-bhjz01` | — |
+| Risk Agent 2 | `session_01PYDbRXBp3RFzVc3uUkRjjc` | `claude/database-table-analysis-wxxgtv` | пороги X, Y; источник резерва Stage 2; критерий снижения долга; источник НЗ/СП |
+| Risk Agent 3 | `session_01AXHoM5VUUuD8viQSvFTTEk` | `claude/cred-risk-topic-classifier-1cjbtk` | развилки Р-D1…Р-D6, шесть пробелов данных |
+| Оркестратор р.1 | `session_01LXH69gkK16RnDosggxSWWw` | `claude/determined-cerf-fljw05` | — |
+
+Входящий триггер редакции 1 `trig_015KKGyXj3ZiQK8knqicSGH8` удалён 09.10.2026: канал
+«агент → оркестратор» заменён протоколом хода в issue.
