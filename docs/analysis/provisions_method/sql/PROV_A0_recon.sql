@@ -23,7 +23,8 @@
      + §0  — полный список колонок CL_PORTFOLIO_2 (было и раньше) + §0b кандидаты
              в признак индивидуальной оценки / исключения; аудит колонок снимка KAN
              и счетов провизий loan_account;
-     + §2  — шаблон §2b разбивки эталона по признаку индивидуальной оценки (закомментирован);
+     + §2  — шаблоны (закомментированы): §2b — разбивка эталона по признаку индивидуальной
+             оценки; §2c — какую базу V применяла старая система (TRACK_A_PLAN §9.2);
      + §5  — ΔV на общих договорах: Σ(V_new − V_old) и Σ|V_new − V_old| по category,
              бакеты |ΔV| — без построчного вывода;
      ~ GO между разделами.
@@ -130,6 +131,31 @@ FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]
 WHERE [date] = @AsOf
 GROUP BY category, <IND_FLAG>
 ORDER BY category, ind_flag
+OPTION (MAXDOP 1);
+*/
+
+/* §2c. ШАБЛОН, запускать по решению Мираса (TRACK_A_PLAN §9.2).
+   Какую базу V умножала старая система: balance или balance_with_discount.
+   В корзине 1 провизия = ROUND(PD_12 × LGD, 4) × V (README §2.5), поэтому у
+   «правильной» базы отношение provisions_total / V даёт мало различных значений
+   (≈ число пар продукт × корзина), у «неправильной» — размазано.
+   Критерий до прогона: у какой базы distinct_ratio в категории 1 на порядок меньше.
+   Колонки — из списка «ожидаем» §0; выводятся только счётчики и суммы.
+SELECT category,
+       COUNT(*) AS rows_n,
+       SUM(CASE WHEN balance > 0 THEN 1 ELSE 0 END)               AS rows_bal_pos,
+       COUNT(DISTINCT CASE WHEN balance > 0
+             THEN ROUND(CAST(provisions_total AS decimal(38,6))
+                        / CAST(balance AS decimal(38,6)), 4) END)  AS distinct_ratio_bal,
+       SUM(CASE WHEN balance_with_discount > 0 THEN 1 ELSE 0 END) AS rows_disc_pos,
+       COUNT(DISTINCT CASE WHEN balance_with_discount > 0
+             THEN ROUND(CAST(provisions_total AS decimal(38,6))
+                        / CAST(balance_with_discount AS decimal(38,6)), 4) END) AS distinct_ratio_disc,
+       SUM(CASE WHEN balance <> balance_with_discount THEN 1 ELSE 0 END) AS rows_bal_ne_disc
+FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2]
+WHERE [date] = @AsOf AND ISNULL(tag, '') <> '11'
+GROUP BY category
+ORDER BY category
 OPTION (MAXDOP 1);
 */
 GO
