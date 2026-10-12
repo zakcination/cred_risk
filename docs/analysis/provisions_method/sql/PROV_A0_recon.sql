@@ -1,10 +1,16 @@
 /* =============================================================================
    PROV_A0_recon.sql — Track A, шаг 0: разведка. Ничего не считает, только проверяет,
-   хватает ли данных для расчёта провизий S03 на 01.10.2026 по старым параметрам.
-   План — docs/analysis/provisions_method/TRACK_A_PLAN.md (ред. 2), issue #164.
+   хватает ли данных для расчёта провизий S03 на 01.09.2026 по старым параметрам.
+   План — docs/analysis/provisions_method/TRACK_A_PLAN.md (ред. 2, §14), issue #164.
+
+   Р-10 (Мирас, 12.10.2026): отчётная дата перенесена с 01.10.2026 на 01.09.2026
+   (срез проекта ECL Сайлау). Логика и критерии не менялись; изменены @AsOf, месяцы
+   HISTORY в §3 и комментарии. Места, где прогон 01.10 опирался на свойство именно той
+   даты, помечены «[свойство 01.10]». Порядок запуска — PROV_A_0901_run.sql.
 
    Согласовано Мирасом 12.10.2026: PD/LGD — KAN; корзины — HISTORY_DEFAULT_ACCOUNT;
-   DPD — как есть; отчётная дата 01.10.2026; источник S03; эталон — CL_PORTFOLIO_2.
+   DPD — как есть; источник S03; эталон — CL_PORTFOLIO_2. Отчётная дата — 01.09.2026 (Р-10;
+   до 12.10.2026 была 01.10.2026).
 
    Правила (§4 корневого CLAUDE.md): только SELECT, #temp с префиксом A0_, MAXDOP 1,
    трёхчастные имена. PII не выводится: IIN не выбирается, номера договоров — только
@@ -37,7 +43,7 @@
                                 balance_with_discount, provisions_total — и ВСЕ прочие
                                 колонки (ищем признак индивидуальной оценки, §0b)
    CL_PORTFOLIO.HISTORY_DEFAULT_ACCOUNT: account_number, default_date, health_date,
-                                new_default_date, колонки ['01.08.2026'] ['01.09.2026'] ['01.10.2026']
+                                new_default_date, колонки ['01.07.2026'] ['01.08.2026'] ['01.09.2026']
    Dictionaries.loans: l_gid, l_source, l_loan_number
    Dictionaries.loan_account: la_gid, la_source, la_reporting_date, la_status,
                                 total_balance_debt, days_past_due,
@@ -81,8 +87,9 @@ ORDER BY ORDINAL_POSITION;
 GO
 
 /* §1. Параметры KAN.
-   1a. Снимки KAN_*_for_LGD_Fenix за 2026 год — какой брать на 01.10.2026.        */
-DECLARE @AsOf date = '2026-10-01';
+   1a. Снимки KAN_*_for_LGD_Fenix за 2026 год. На 01.09.2026 — KAN_20260901 (Р-10);
+       на 01.10 его брали как последний доступный [свойство 01.10], теперь дата совпадает. */
+DECLARE @AsOf date = '2026-09-01';
 
 SELECT name AS kan_table, create_date, modify_date
 FROM [IFRS9].sys.tables
@@ -106,8 +113,10 @@ WHERE [Date] = (SELECT MAX([Date]) FROM [IFRS9].[dbo].[KAN_PD_LGD_Product_Basket
 ORDER BY Product, Basket;
 GO
 
-/* §2. Эталон: старый результат на 01.10.2026.                                    */
-DECLARE @AsOf date = '2026-10-01';
+/* §2. Эталон: старый результат на 01.09.2026.
+   [свойство 01.10] строк tag = '11' на 01.10 не было (Д-A0-2). Если на 01.09 они есть —
+   до A13 нужно решение §9 п. 5 TRACK_A_PLAN: A13 списанные отдельно не выделяет.     */
+DECLARE @AsOf date = '2026-09-01';
 
 SELECT category, CASE WHEN tag = '11' THEN 'списан' ELSE 'на балансе' END AS tag_grp,
        COUNT(*)                                         AS rows_n,
@@ -161,11 +170,14 @@ OPTION (MAXDOP 1);
 */
 GO
 
-/* §3. HISTORY: корзины по DPD за три месяца на портфеле 01.10.2026.
+/* §3. HISTORY: корзины по DPD за три месяца на портфеле 01.09.2026 (07, 08, 09).
    DPD в сетке — nvarchar; кавычки входят в имя колонки (D15_E_defaultbase.sql).
-   Если §0 не показал ['01.10.2026'] — убрать эту колонку и прислать как есть.
+   Обход Р-2 (колонка отчётного месяца пуста — убрать её) снят: на 01.09 колонка
+   ['01.09.2026'] заполнена (NULL 1, нет в HISTORY 21 на портфеле 01.10, Д-A0-3).
+   [свойство 01.10] Д-A0-3 («отчётный месяц пуст») — свойство даты 01.10. На 01.09
+   критерий шага 0 тот же: «нет в HISTORY» + NULL + «не число» > 1 % — вопрос до шага 2.
    #A0_port создаётся здесь и используется в §4 и §5.                              */
-DECLARE @AsOf date = '2026-10-01';
+DECLARE @AsOf date = '2026-09-01';
 
 IF OBJECT_ID('tempdb..#A0_port') IS NOT NULL DROP TABLE #A0_port;
 SELECT DISTINCT contract_number, category
@@ -186,9 +198,9 @@ SELECT m.mon, p.category,
 FROM #A0_port p
 LEFT JOIN [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT] h
        ON h.account_number = p.contract_number
-CROSS APPLY (VALUES ('2026-08', h.['01.08.2026']),
-                    ('2026-09', h.['01.09.2026']),
-                    ('2026-10', h.['01.10.2026'])) m(mon, v)
+CROSS APPLY (VALUES ('2026-07', h.['01.07.2026']),
+                    ('2026-08', h.['01.08.2026']),
+                    ('2026-09', h.['01.09.2026'])) m(mon, v)
 GROUP BY m.mon, p.category,
        CASE WHEN h.account_number IS NULL            THEN '0 нет в HISTORY'
             WHEN m.v IS NULL                         THEN '1 NULL'
@@ -201,15 +213,14 @@ ORDER BY m.mon, p.category, dpd_bucket
 OPTION (MAXDOP 1);
 GO
 
-/* §4. Покрытие ключом на 01.10.2026: старая база ↔ KAN ↔ новая база S03.
+/* §4. Покрытие ключом на 01.09.2026: старая база ↔ KAN ↔ новая база S03.
    Ключ S03 old↔new: contract_number → loans.l_loan_number, затем
    loans (l_gid, l_source) → loan_account (la_gid, la_source) — FINDINGS.md §1.
    KAN: account_number = contract_number (DATA_LINEAGE.md dpd15_cure).
-   Снимок KAN: прогон 12.10.2026 (1a) показал последний KAN_20260901_for_LGD_Fenix
-   (создан 25.09.2026); KAN_20261001 ещё нет — §4 первого прогона упал на Msg 208.
-   Продукт по договору меняется редко, поэтому для покрытия берётся 20260901.
+   Снимок KAN: KAN_20260901_for_LGD_Fenix — дата совпадает с отчётной (Р-10).
+   История: на 01.10 его брали как последний доступный (KAN_20261001 нет — Msg 208).
    Если §3 упал, сначала создать #A0_port его первым запросом.                     */
-DECLARE @AsOf date = '2026-10-01';
+DECLARE @AsOf date = '2026-09-01';
 
 IF OBJECT_ID('tempdb..#A0_new') IS NOT NULL DROP TABLE #A0_new;
 SELECT DISTINCT l.l_loan_number AS contract_number, la.la_status
@@ -223,7 +234,7 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#A0_kan') IS NOT NULL DROP TABLE #A0_kan;
 SELECT DISTINCT account_number
 INTO #A0_kan
-FROM [IFRS9].[dbo].[KAN_20260901_for_LGD_Fenix]      -- последний на 12.10.2026, см. 1a
+FROM [IFRS9].[dbo].[KAN_20260901_for_LGD_Fenix]      -- снимок отчётной даты (Р-10)
 OPTION (MAXDOP 1);
 
 -- 4a. Дубли ключа в новой базе (один номер — несколько gid/статусов).
@@ -259,8 +270,10 @@ GO
    Сумма Σ ΔV мала ≠ ΔV мал: смотреть dV_abs_*, именно он ограничивает эффект на
    провизии (|ΔP| ≤ max(r) · Σ|ΔV|).
    Строк в новой базе на номер может быть больше одной (4a) — V_new суммируется,
-   число таких договоров выводится отдельно, чтобы дубль не прятался в ΔV.        */
-DECLARE @AsOf date = '2026-10-01';
+   число таких договоров выводится отдельно, чтобы дубль не прятался в ΔV.
+   Для моста база — bwd (Д-A0c-1), оценка ΔV для него — A0f §1, не этот раздел;
+   §5 сохранён для сопоставимости с прогоном 01.10 (Д-A0-8).                      */
+DECLARE @AsOf date = '2026-09-01';
 
 IF OBJECT_ID('tempdb..#A0_vold') IS NOT NULL DROP TABLE #A0_vold;
 SELECT contract_number,
