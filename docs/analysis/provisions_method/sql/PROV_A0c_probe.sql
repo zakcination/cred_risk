@@ -14,9 +14,10 @@
    §4 «Только new» (1 934): статус, Σ total_balance_debt, Σ провизий новой базы.
       Ожидание по FINDINGS §4 (01.07): остаток ≈ 0. Ненулевой остаток — находка.
    §5 Скрининг индивидуальной значимости без ИИН: договоры с balance > 50 млн ₸ —
-      нижняя граница порога индивидуальности (README §1: «не менее 50 млн ₸»).
+      нижняя граница порога индивидуальности (README §1: «не менее 50 млн ₸»)
       и 180 млн ₸ (README §3, «п. 14 методики»). Порог 0,2 % СК не применён: величина СК
       на 01.10 не подтверждена. Оценка снизу: порог — по заёмщику, не по договору.
+   §6 Покрытие old ↔ new × KAN_20260901 (вместо перепрогона §4 A0).
 
    Правила (§4 CLAUDE.md): только SELECT, #A0c_*, MAXDOP 1, трёхчастные имена, IIN не
    выбирается, номера договоров — только внутри JOIN/COUNT.
@@ -138,4 +139,41 @@ ORDER BY category, size_bucket
 OPTION (MAXDOP 1);
 GO
 
+/* §6. Покрытие old ↔ new × снимок KAN_20260901 (решение Мираса Р-3, 12.10.2026).
+   Заменяет перепрогон §4 A0, упавшего на Msg 208. Критерий из #164: «нет в KAN»
+   среди old+new > 1 % — продукт не назначить, вопрос до шага 3.
+   #A0c_new создан в батче §3–§4; если он упал — сначала выполнить его создание.   */
+DECLARE @AsOf date = '2026-10-01';
+
+IF OBJECT_ID('tempdb..#A0c_kan') IS NOT NULL DROP TABLE #A0c_kan;
+SELECT account_number, COUNT(*) AS rows_n, COUNT(DISTINCT subproduct) AS subproducts
+INTO #A0c_kan
+FROM [IFRS9].[dbo].[KAN_20260901_for_LGD_Fenix]
+GROUP BY account_number
+OPTION (MAXDOP 1);
+
+SELECT CASE WHEN o.contract_number IS NOT NULL AND n.contract_number IS NOT NULL THEN '1 old+new'
+            WHEN o.contract_number IS NOT NULL THEN '2 только old'
+            ELSE '3 только new' END                                   AS cover,
+       o.category,
+       CASE WHEN k.account_number IS NOT NULL THEN 'есть в KAN' ELSE 'нет в KAN' END AS kan,
+       COUNT(*)                                                       AS contracts,
+       SUM(CASE WHEN k.subproducts > 1 THEN 1 ELSE 0 END)             AS kan_multi_subproduct,
+       SUM(CAST(o.balance          AS decimal(38,2)))                 AS sum_balance_old,
+       SUM(CAST(o.provisions_total AS decimal(38,2)))                 AS sum_p_old,
+       SUM(n.v_new)                                                   AS sum_v_new
+FROM (SELECT contract_number, category, balance, provisions_total
+      FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] WHERE [date] = @AsOf) o
+FULL JOIN #A0c_new n ON n.contract_number = o.contract_number
+LEFT JOIN #A0c_kan k ON k.account_number = COALESCE(o.contract_number, n.contract_number)
+GROUP BY CASE WHEN o.contract_number IS NOT NULL AND n.contract_number IS NOT NULL THEN '1 old+new'
+              WHEN o.contract_number IS NOT NULL THEN '2 только old'
+              ELSE '3 только new' END,
+         o.category,
+         CASE WHEN k.account_number IS NOT NULL THEN 'есть в KAN' ELSE 'нет в KAN' END
+ORDER BY cover, o.category, kan
+OPTION (MAXDOP 1);
+GO
+
+IF OBJECT_ID('tempdb..#A0c_kan') IS NOT NULL DROP TABLE #A0c_kan;
 IF OBJECT_ID('tempdb..#A0c_new') IS NOT NULL DROP TABLE #A0c_new;
