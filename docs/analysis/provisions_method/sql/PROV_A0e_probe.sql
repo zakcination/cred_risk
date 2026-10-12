@@ -30,8 +30,9 @@ ORDER BY ORDINAL_POSITION;
 GO
 
 /* §1. Покрытие категорий старой базы двумя базами KAN.
-   account_number в restructura — ПРОВЕРИТЬ ПО §0; если ключ назван иначе — заменить
-   в одной строке ниже, остальное не трогать.                                       */
+   Ключ restructura — contract_number (§0 прогона 12.10.2026; первая редакция брала
+   account_number и упала на Msg 207). Переименован в account_number внутри #A0e_res,
+   остальное не менялось.                                                          */
 DECLARE @AsOf date = '2026-09-01';
 
 IF OBJECT_ID('tempdb..#A0e_def') IS NOT NULL DROP TABLE #A0e_def;
@@ -41,7 +42,7 @@ FROM [IFRS9].[dbo].[KAN_20260901_for_LGD_Fenix]
 OPTION (MAXDOP 1);
 
 IF OBJECT_ID('tempdb..#A0e_res') IS NOT NULL DROP TABLE #A0e_res;
-SELECT DISTINCT account_number                       -- ← проверить по §0
+SELECT DISTINCT contract_number AS account_number    -- ключ по §0: contract_number
 INTO #A0e_res
 FROM [IFRS9].[dbo].[KAN_20260901_restructura]
 OPTION (MAXDOP 1);
