@@ -89,7 +89,8 @@ FROM [IFRS9].sys.tables
 WHERE name LIKE 'KAN[_]2026%[_]for[_]LGD[_]Fenix%'
 ORDER BY name;
 
-/* 1b. Таблица параметров: сколько дат, продуктов, корзин; последняя дата ≤ @AsOf.  */
+/* 1b. Таблица параметров: сколько дат, продуктов, корзин; последняя дата ≤ @AsOf.
+   PD, LGD, [LGD+TV] — nvarchar (§0 прогона 12.10.2026): в расчётах только TRY_CAST.  */
 SELECT [Date], COUNT(*) AS rows_n, COUNT(DISTINCT Product) AS products,
        COUNT(DISTINCT Basket) AS baskets,
        SUM(CASE WHEN PD IS NULL OR LGD IS NULL THEN 1 ELSE 0 END) AS rows_pd_or_lgd_null
@@ -204,7 +205,9 @@ GO
    Ключ S03 old↔new: contract_number → loans.l_loan_number, затем
    loans (l_gid, l_source) → loan_account (la_gid, la_source) — FINDINGS.md §1.
    KAN: account_number = contract_number (DATA_LINEAGE.md dpd15_cure).
-   ВПИСАТЬ имя снимка KAN из 1a (последний ≤ 01.10.2026) вместо KAN_20261001_…
+   Снимок KAN: прогон 12.10.2026 (1a) показал последний KAN_20260901_for_LGD_Fenix
+   (создан 25.09.2026); KAN_20261001 ещё нет — §4 первого прогона упал на Msg 208.
+   Продукт по договору меняется редко, поэтому для покрытия берётся 20260901.
    Если §3 упал, сначала создать #A0_port его первым запросом.                     */
 DECLARE @AsOf date = '2026-10-01';
 
@@ -220,7 +223,7 @@ OPTION (MAXDOP 1);
 IF OBJECT_ID('tempdb..#A0_kan') IS NOT NULL DROP TABLE #A0_kan;
 SELECT DISTINCT account_number
 INTO #A0_kan
-FROM [IFRS9].[dbo].[KAN_20261001_for_LGD_Fenix]      -- ← заменить по 1a
+FROM [IFRS9].[dbo].[KAN_20260901_for_LGD_Fenix]      -- последний на 12.10.2026, см. 1a
 OPTION (MAXDOP 1);
 
 -- 4a. Дубли ключа в новой базе (один номер — несколько gid/статусов).
@@ -316,10 +319,10 @@ SELECT b.bucket,
        SUM(ABS(b.dv))                   AS dv_abs_bal
 FROM (SELECT n.v_new - o.v_old_bal AS dv,
              CASE WHEN n.v_new IS NULL OR o.v_old_bal IS NULL      THEN '0 NULL с одной из сторон'
-                  WHEN ABS(n.v_new - o.v_old_bal) <= 0.01          THEN '1 ≤ 0,01'
-                  WHEN ABS(n.v_new - o.v_old_bal) <= 1000          THEN '2 ≤ 1 тыс'
-                  WHEN ABS(n.v_new - o.v_old_bal) <= 100000        THEN '3 ≤ 100 тыс'
-                  WHEN ABS(n.v_new - o.v_old_bal) <= 10000000      THEN '4 ≤ 10 млн'
+                  WHEN ABS(n.v_new - o.v_old_bal) <= 0.01          THEN '1 <= 0,01'
+                  WHEN ABS(n.v_new - o.v_old_bal) <= 1000          THEN '2 <= 1 тыс'
+                  WHEN ABS(n.v_new - o.v_old_bal) <= 100000        THEN '3 <= 100 тыс'
+                  WHEN ABS(n.v_new - o.v_old_bal) <= 10000000      THEN '4 <= 10 млн'
                   ELSE                                                  '5 > 10 млн' END AS bucket
       FROM #A0_vold o
       JOIN #A0_vnew n ON n.contract_number = o.contract_number) b
