@@ -3,6 +3,8 @@
    Повод — A0c §1 (12.10.2026): старая система умножает ставку на
    balance_with_discount (категория 1: 97,2 % строк), а V_new = total_balance_debt
    совпадает с balance. Для моста нужна bwd и в новой базе (TRACK_A_PLAN §11.7).
+   Р-10: @AsOf = 01.09.2026 (было 01.10.2026); логика и критерии без изменений,
+   ожидания на 01.09 — TRACK_A_PLAN.md §14. Порядок запуска — PROV_A_0901_run.sql.
 
    Вопросы и критерии (до прогона):
    §1 Формула bwd в старой базе. Документ (SCHETA_DQ.md, из описания витрины):
@@ -17,7 +19,7 @@
    ============================================================================= */
 
 /* §1. Формула bwd в старой базе, по категориям.                                    */
-DECLARE @AsOf date = '2026-10-01';
+DECLARE @AsOf date = '2026-09-01';
 
 SELECT category,
        COUNT(*)                                                         AS rows_n,
@@ -64,7 +66,7 @@ GO
 /* §3. ШАБЛОН, НЕ ЗАПУСКАТЬ до §1–§2. ΔV на базе bwd на общих договорах.
    <BWD_NEW> — выражение из подтверждённых §2 колонок по формуле, победившей в §1,
    например: la.total_balance_debt - (la.la_account_1434 + <17xx…>) + la.la_account_1435
-DECLARE @AsOf date = '2026-10-01';
+DECLARE @AsOf date = '2026-09-01';
 SELECT o.category,
        COUNT(*)                                                          AS contracts,
        SUM(CAST(o.balance_with_discount AS decimal(38,2)))               AS sum_bwd_old,

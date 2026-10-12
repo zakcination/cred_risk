@@ -1,6 +1,8 @@
 /* =============================================================================
    PROV_A0f_bwd.sql — Track A, шаг 0f: ΔV на базе balance_with_discount.
    ПРЕДЛОЖЕНИЕ, запускать по решению Мираса. План — TRACK_A_PLAN.md §11.11.
+   Р-10: @AsOf = 01.09.2026 (было 01.10.2026); логика и критерии без изменений,
+   ожидания на 01.09 — TRACK_A_PLAN.md §14. Порядок запуска — PROV_A_0901_run.sql.
 
    Повод — A0d (12.10.2026): ни одна формула bwd из документа не сходится построчно
    (3–13 % строк), зато в loan_account нашлась готовая колонка
@@ -19,8 +21,10 @@
    выбирается, номера договоров — только внутри JOIN/COUNT. Имена — из §0 A0 и §2 A0d.
    ============================================================================= */
 
-/* §1. ΔV на bwd: discounted_balance_debt против balance_with_discount.             */
-DECLARE @AsOf date = '2026-10-01';
+/* §1. ΔV на bwd: discounted_balance_debt против balance_with_discount.
+   [свойство 01.10] Д-A0f-2 (Σ dp_abs_bound = 112 480,17 ₸) — число 01.10. На 01.09
+   граница пересчитывается этим же разделом; в A13 E1 она вычисляется той же формулой.   */
+DECLARE @AsOf date = '2026-09-01';
 
 IF OBJECT_ID('tempdb..#A0f_new') IS NOT NULL DROP TABLE #A0f_new;
 SELECT l.l_loan_number                                         AS contract_number,
@@ -76,7 +80,7 @@ OPTION (MAXDOP 1);
 GO
 
 /* §2. Субсчета дисконта в старой базе — суммы по категориям.                       */
-DECLARE @AsOf date = '2026-10-01';
+DECLARE @AsOf date = '2026-09-01';
 
 SELECT category,
        SUM(CAST(balance - balance_with_discount AS decimal(38,2)))  AS sum_gap,

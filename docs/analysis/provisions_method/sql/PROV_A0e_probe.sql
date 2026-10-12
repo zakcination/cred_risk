@@ -2,6 +2,8 @@
    PROV_A0e_probe.sql — Track A, шаг 0e. ПРЕДЛОЖЕНИЕ, запускать по решению Мираса.
    Повод — Мирас, 12.10.2026: KAN_20260901_for_LGD_Fenix — база дефолтов,
    KAN_20260901_restructura — база реструктуризаций (TRACK_A_PLAN §11.10).
+   Р-10: @AsOf = 01.09.2026 (было 01.10.2026); логика и критерии без изменений,
+   ожидания на 01.09 — TRACK_A_PLAN.md §14. Порядок запуска — PROV_A_0901_run.sql.
 
    Вопросы и критерии (до прогона):
    §0 Колонки KAN_20260901_restructura (только имена).
@@ -11,6 +13,10 @@
       категория 1 — почти вне обеих. Категория 3 вне обеих баз > 1 % —
       признак обесценения не из этих двух таблиц (смерть, банкротство и т. п.)
       либо иная логика посадки — вопрос ОПАиРоз.
+      DPD 91+ — по сетке HISTORY ['01.09.2026'] (согласованный источник корзин, #164);
+      CL_PORTFOLIO_2.dpd оставлен контрольной колонкой. До Р-10 источником текущего DPD
+      был CL_PORTFOLIO_2.dpd (обход Р-2: HISTORY за 01.10 пуст); на 01.09 обход не нужен.
+      Расхождение двух колонок — проверка тождества DATA_LINEAGE §2 на третьей дате.
 
    Правила (§4 CLAUDE.md): только SELECT, #A0e_*, MAXDOP 1, трёхчастные имена, IIN не
    выбирается, номера договоров — только внутри JOIN/COUNT.
@@ -26,7 +32,7 @@ GO
 /* §1. Покрытие категорий старой базы двумя базами KAN.
    account_number в restructura — ПРОВЕРИТЬ ПО §0; если ключ назван иначе — заменить
    в одной строке ниже, остальное не трогать.                                       */
-DECLARE @AsOf date = '2026-10-01';
+DECLARE @AsOf date = '2026-09-01';
 
 IF OBJECT_ID('tempdb..#A0e_def') IS NOT NULL DROP TABLE #A0e_def;
 SELECT DISTINCT account_number
@@ -48,10 +54,16 @@ SELECT o.category,
        COUNT(*)                                                  AS contracts,
        SUM(CAST(o.balance_with_discount AS decimal(38,2)))       AS sum_bwd,
        SUM(CAST(o.provisions_total      AS decimal(38,2)))       AS sum_p_old,
-       SUM(CASE WHEN o.dpd >= 91 THEN 1 ELSE 0 END)              AS contracts_dpd_91
+       SUM(CASE WHEN TRY_CAST(h.['01.09.2026'] AS int) >= 91
+                THEN 1 ELSE 0 END)                               AS contracts_hist_91,
+       SUM(CASE WHEN o.dpd >= 91 THEN 1 ELSE 0 END)              AS contracts_dpd_91,
+       SUM(CASE WHEN h.account_number IS NULL OR h.['01.09.2026'] IS NULL
+                THEN 1 ELSE 0 END)                               AS contracts_hist_missing
 FROM [CL_PORTFOLIO].[dbo].[CL_PORTFOLIO_2] o
 LEFT JOIN #A0e_def d ON d.account_number = o.contract_number
 LEFT JOIN #A0e_res r ON r.account_number = o.contract_number
+LEFT JOIN [CL_PORTFOLIO].[dbo].[HISTORY_DEFAULT_ACCOUNT] h
+       ON h.account_number = o.contract_number
 WHERE o.[date] = @AsOf
 GROUP BY o.category,
        CASE WHEN d.account_number IS NOT NULL AND r.account_number IS NOT NULL THEN '1 дефолт + рестр.'
